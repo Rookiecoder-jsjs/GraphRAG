@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Follow-up suggestions question. The user asks anything; we expect",
+    "the backend to ALSO return up to 3 follow-up question chips after",
+    "the answer. The LLM service is unit-tested separately for the",
+    "parsing/cleaning logic (see tests/test_followups.py); this gold case",
+    "verifies the end-to-end envelope: the response (or SSE event) must",
+    "carry a 'followups' field that's a list of 1-3 natural-language",
+    "questions related to the original query and answer.",
+    "",
+    "Use with with_followups=True (the default).",
+    "expected_keywords are NOT for the answer — they're for the",
+    "followups themselves: a couple of phrases that prove the LLM",
+    "understood the topic and is suggesting next-step questions rather",
+    "than rephrasing the original."
+  ],
+  "id": "followup-01",
+  "query": "Explain how QLoRA works.",
+  "with_followups": true,
+  "expected_keywords": [
+    "LoRA",
+    "memory"
+  ],
+  "min_followups": 1,
+  "difficulty": "easy",
+  "tags": ["ux", "followup"]
+}

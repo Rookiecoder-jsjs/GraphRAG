@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Cross-document comparison question. The user wants the LLM to",
+    "organize the answer to highlight agreements and disagreements",
+    "between at least two sources. Toggle Compare on (in the chat UI",
+    "or pass compare_mode=True to the API) so the prompt context is",
+    "augmented with '(from: Doc Title)' markers and the COMPARISON MODE",
+    "instruction.",
+    "expected_keywords: hand-pick 1-2 phrases that prove the LLM did",
+    "an actual cross-doc comparison (e.g. 'Doc A says ...', 'in",
+    "contrast', 'however', 'on the other hand')."
+  ],
+  "id": "compare-01",
+  "query": "Compare and contrast 硅基流动 with 阿里云百炼.",
+  "expected_chunk_ids": [
+    "REPLACE_WITH_REAL_CHUNK_UUID_FROM_DOC_A",
+    "REPLACE_WITH_REAL_CHUNK_UUID_FROM_DOC_B"
+  ],
+  "expected_keywords": [
+    "百炼",
+    "硅基流动"
+  ],
+  "difficulty": "medium",
+  "tags": ["comparison", "multi-doc"]
+}

@@ -1,0 +1,17 @@
+// Barrel export for the UI component library.
+// Use named imports:  import { Button, Card } from '@/components/ui'
+
+export { default as BackButton }     from './BackButton.vue'
+export { default as Button }         from './Button.vue'
+export { default as Card }           from './Card.vue'
+export { default as Dot }            from './Dot.vue'
+export { default as EmptyState }     from './EmptyState.vue'
+export { default as ListRow }        from './ListRow.vue'
+export { default as LoadingState }   from './LoadingState.vue'
+export { default as PageHeader }     from './PageHeader.vue'
+export { default as SkeletonBar }    from './SkeletonBar.vue'
+export { default as SkeletonText }   from './SkeletonText.vue'
+export { default as Spinner }        from './Spinner.vue'
+export { default as Stat }           from './Stat.vue'
+export { default as Switch }         from './Switch.vue'
+export { default as Tag }            from './Tag.vue'

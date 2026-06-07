@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Cross-chunk synthesis — the answer requires combining info from",
+    "multiple chunks. Good test for whether the reranker surfaces the",
+    "right context to the LLM (recall@k matters more than hit@k here)."
+  ],
+  "id": "cross-chunk-01",
+  "query": "How do A and B relate to each other according to the documentation?",
+  "expected_chunk_ids": [
+    "REPLACE_WITH_REAL_CHUNK_UUID_1",
+    "REPLACE_WITH_REAL_CHUNK_UUID_2"
+  ],
+  "expected_keywords": [],
+  "difficulty": "medium",
+  "tags": ["synthesis", "multi-chunk"]
+}

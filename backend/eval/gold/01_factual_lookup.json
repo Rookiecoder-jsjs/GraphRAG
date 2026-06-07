@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Single-document factual lookup. The model should retrieve the right",
+    "chunk and answer from it. Replace expected_chunk_ids with real IDs",
+    "from your knowledge base — see README 'How to add gold'.",
+    "expected_keywords is a cheap fallback: pass [] or omit if you have",
+    "chunk_ids filled in; the eval will use the more precise chunk metrics."
+  ],
+  "id": "factual-01",
+  "query": "What does the document say about the [main topic]?",
+  "expected_chunk_ids": [
+    "REPLACE_WITH_REAL_CHUNK_UUID_1"
+  ],
+  "expected_keywords": [],
+  "difficulty": "easy",
+  "tags": ["factual", "single-doc"]
+}

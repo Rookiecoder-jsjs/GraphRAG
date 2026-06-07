@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.14-community
+    container_name: neo4j_kg
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/12345678
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=2G
+    volumes:
+      - ./data/neo4j/data:/data
+      - ./data/neo4j/logs:/logs
+      - ./data/neo4j/plugins:/plugins
+    networks:
+      - kg_network
+    restart: unless-stopped
+
+  chromadb:
+    image: chromadb/chroma:0.4.18
+    container_name: chromadb_kg
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    volumes:
+      - ./data/chromadb:/chroma/chroma
+    networks:
+      - kg_network
+    restart: unless-stopped
+
+networks:
+  kg_network:
+    driver: bridge

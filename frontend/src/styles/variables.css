@@ -1,0 +1,518 @@
+/* ========================================================================
+   Glassmorphism 设计令牌 · Ethereal 柔梦 · 亮暗双主题
+   Glassmorphism design tokens · Ethereal pastel · Light & Dark
+   ======================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ---------- 亮主题（默认） ---------- */
+:root,
+[data-theme='light'] {
+  /* 背景层级 */
+  --bg-base:        #fdfcfb;   /* 暖白 page 底，body 渲染 */
+  --bg-primary:     #ffffff;   /* 纯白（极少量用，如纯白 CTA 区域） */
+  --bg-secondary:   var(--bg-base);  /* 兼容旧引用 — 与 base 同色 */
+  --bg-tertiary:    rgba(28, 25, 23, 0.04);  /* 微弱叠层，用于 hover */
+  --bg-elevated:    rgba(255, 255, 255, 0.72);  /* 玻璃感浮层 */
+
+  /* 文字 */
+  --text-primary:   #1c1917;
+  --text-secondary: #57534e;
+  --text-tertiary:  #a8a29e;
+
+  /* 边框（rgba 微边） */
+  --border:        rgba(28, 25, 23, 0.08);
+  --border-light:  rgba(28, 25, 23, 0.04);
+  --border-strong: rgba(28, 25, 23, 0.16);
+
+  /* 背景 blob 色 — Ethereal 调色板 */
+  --blob-1:         #fbcfe8;   /* 柔粉 */
+  --blob-2:         #bae6fd;   /* 柔蓝 */
+  --blob-3:         #bbf7d0;   /* 柔薄荷 */
+
+  /* 主强调：柔紫 */
+  --primary:        #a78bfa;   /* violet-400 */
+  --primary-dark:   #8b5cf6;   /* violet-500 */
+  --primary-light:  rgba(167, 139, 250, 0.16);
+  --primary-fg:     #ffffff;
+
+  /* 次强调：柔粉 */
+  --accent:         #f0abfc;   /* fuchsia-300 */
+  --accent-dark:    #e879f9;
+  --accent-light:   rgba(240, 171, 252, 0.18);
+
+  /* 状态 */
+  --success:        #34d399;
+  --success-light:  rgba(52, 211, 153, 0.16);
+  --warning:        #fbbf24;
+  --warning-light:  rgba(251, 191, 36, 0.16);
+  --error:          #f87171;
+  --error-light:    rgba(248, 113, 113, 0.16);
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.04);
+  --shadow:    0 4px 12px -2px rgba(28, 25, 23, 0.08);
+  --shadow-md: 0 8px 24px -4px rgba(28, 25, 23, 0.10);
+  --shadow-lg: 0 16px 40px -8px rgba(28, 25, 23, 0.16);
+
+  /* 玻璃系统 */
+  --glass-bg:         rgba(255, 255, 255, 0.55);
+  --glass-bg-strong:  rgba(255, 255, 255, 0.72);
+  --glass-border:     rgba(255, 255, 255, 0.70);
+  --glass-blur:       20px;
+  --glass-blur-lg:    32px;
+  --glass-shadow:     0 8px 32px rgba(28, 25, 23, 0.08);
+  --glass-highlight:  inset 0 1px 0 rgba(255, 255, 255, 0.55);
+
+  /* 图谱节点配色（保持 d3 调色板，避免改 d3 代码） */
+  --graph-doc:     #a78bfa;   /* 柔紫 Document */
+  --graph-default: #f0abfc;   /* 柔粉 默认 Entity */
+  --graph-person:  #86efac;   /* 柔绿 人物 */
+  --graph-place:   #fdba74;   /* 柔橙 地点 */
+  --graph-concept: #c4b5fd;   /* 浅紫 概念（保留兼容） */
+  --graph-concept-strong: #7dd3fc;   /* 天空蓝 概念主色（与 org 紫区分） */
+  --graph-other:   #d6d3d1;   /* 浅暖灰 其他（亮主题：浅色 + 深字对比 ~7.5） */
+  --graph-chunk:   #e7e5e4;   /* 灰白 Chunk */
+  --graph-edge:    rgba(28, 25, 23, 0.12);
+  --graph-center:  #f87171;   /* 柔红 中心高亮 */
+  --graph-related: #f0abfc;   /* 相关高亮 */
+  --graph-grid:    rgba(28, 25, 23, 0.04);
+  --graph-bg:      var(--bg-base);
+}
+
+/* ---------- 暗主题 ---------- */
+[data-theme='dark'] {
+  --bg-base:        #0c0a09;   /* 暖近黑 */
+  --bg-primary:     #1c1917;
+  --bg-secondary:   var(--bg-base);
+  --bg-tertiary:    rgba(255, 255, 255, 0.04);
+  --bg-elevated:    rgba(255, 255, 255, 0.10);
+
+  --text-primary:   #fafaf9;
+  --text-secondary: #d6d3d1;
+  --text-tertiary:  #78716c;
+
+  --border:        rgba(255, 255, 255, 0.08);
+  --border-light:  rgba(255, 255, 255, 0.04);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --blob-1:         #f9a8d4;   /* 提亮粉 */
+  --blob-2:         #7dd3fc;   /* 提亮蓝 */
+  --blob-3:         #86efac;   /* 提亮薄荷 */
+
+  --primary:        #c4b5fd;   /* violet-300 */
+  --primary-dark:   #a78bfa;
+  --primary-light:  rgba(196, 181, 253, 0.18);
+  --primary-fg:     #1c1917;
+
+  --accent:         #f0abfc;
+  --accent-dark:    #e879f9;
+  --accent-light:   rgba(240, 171, 252, 0.18);
+
+  --success:        #6ee7b7;
+  --success-light:  rgba(110, 231, 183, 0.18);
+  --warning:        #fcd34d;
+  --warning-light:  rgba(252, 211, 77, 0.18);
+  --error:          #fca5a5;
+  --error-light:    rgba(252, 165, 165, 0.18);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow:    0 4px 12px -2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 8px 24px -4px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 16px 40px -8px rgba(0, 0, 0, 0.60);
+
+  /* 暗色 glass — 用低 alpha 白（frosted 物理） */
+  --glass-bg:         rgba(255, 255, 255, 0.06);
+  --glass-bg-strong:  rgba(255, 255, 255, 0.10);
+  --glass-border:     rgba(255, 255, 255, 0.12);
+  --glass-shadow:     0 8px 32px rgba(0, 0, 0, 0.40);
+  --glass-highlight:  inset 0 1px 0 rgba(255, 255, 255, 0.10);
+
+  --graph-doc:     #c4b5fd;
+  --graph-default: #f0abfc;
+  --graph-person:  #86efac;
+  --graph-place:   #fdba74;
+  --graph-concept: #c4b5fd;
+  --graph-concept-strong: #38bdf8;
+  --graph-other:   #44403c;   /* 暗主题：深色 + 浅字（--text-primary）对比 ~9） */
+  --graph-chunk:   #44403c;
+  --graph-edge:    rgba(255, 255, 255, 0.12);
+  --graph-center:  #fca5a5;
+  --graph-related: #f0abfc;
+  --graph-grid:    rgba(255, 255, 255, 0.04);
+  --graph-bg:      var(--bg-base);
+}
+
+/* ---------- 字体 / 圆角 / 过渡 / 布局 ---------- */
+:root {
+  /* 字体：去 Fraunces，display 用 sans 600/700 */
+  --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans:    'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* 圆角：玻璃感偏大 */
+  --radius-sm:  8px;
+  --radius:     12px;
+  --radius-lg:  16px;
+  --radius-xl:  24px;
+  --radius-2xl: 32px;
+
+  /* 过渡 */
+  --transition-fast: 120ms ease;
+  --transition:      180ms ease;
+  --transition-slow: 280ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* 布局 */
+  --sidebar-width: 264px;
+  --header-height: 76px;
+}
+
+/* ========================================================================
+   Reset & Base
+   ======================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  background-color: var(--bg-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color var(--transition), color var(--transition);
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+}
+
+/* ========================================================================
+   Typography — display 用 sans 700
+   ======================================================================== */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+h1 { font-size: 2.25rem; font-weight: 700; }
+h2 { font-size: 1.625rem; font-weight: 700; }
+h3 { font-size: 1.25rem;  font-weight: 600; }
+h4 { font-size: 1.0625rem; font-weight: 600; }
+h5 { font-size: 0.9375rem; font-weight: 600; }
+h6 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--font-sans);
+}
+
+/* 等宽元素 */
+code,
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* ========================================================================
+   Scrollbar — 透明细条
+   ======================================================================== */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* ========================================================================
+   Form Elements
+   ======================================================================== */
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+a:hover { color: var(--primary-dark); }
+
+/* ========================================================================
+   Utility Classes
+   ======================================================================== */
+
+.text-primary    { color: var(--text-primary); }
+.text-secondary  { color: var(--text-secondary); }
+.text-tertiary   { color: var(--text-tertiary); }
+.text-accent     { color: var(--accent); }
+.text-ink        { color: var(--primary); }
+
+.bg-primary      { background-color: var(--bg-primary); }
+.bg-secondary    { background-color: var(--bg-secondary); }
+.bg-tertiary     { background-color: var(--bg-tertiary); }
+
+.font-display    { font-family: var(--font-display); }
+.font-sans       { font-family: var(--font-sans); }
+.font-mono       { font-family: var(--font-mono); }
+
+/* ========================================================================
+   Glass Utilities — 玻璃拟态核心
+   ======================================================================== */
+
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+          backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+
+.glass-strong {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur-lg)) saturate(180%);
+          backdrop-filter: blur(var(--glass-blur-lg)) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+
+/* 兼容旧 .glass-card / .paper-card — 都走 glass 行为 */
+.glass-card,
+.paper-card {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+          backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+  transition:
+    transform var(--transition),
+    box-shadow var(--transition);
+}
+.glass-card:hover,
+.paper-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 12px 40px -8px rgba(28, 25, 23, 0.16),
+    var(--glass-highlight);
+}
+[data-theme='dark'] .glass-card:hover,
+[data-theme='dark'] .paper-card:hover {
+  box-shadow:
+    0 12px 40px -8px rgba(0, 0, 0, 0.60),
+    var(--glass-highlight);
+}
+
+/* ========================================================================
+   Animations — drift / fade / slide / spin
+   ======================================================================== */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 背景 blob 飘动 — 30/35/40s 错开 */
+@keyframes drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(8vw, 4vh) scale(1.08); }
+  66%      { transform: translate(-4vw, 6vh) scale(0.95); }
+}
+@keyframes drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(-6vw, 5vh) scale(1.05); }
+  66%      { transform: translate(4vw, -3vh) scale(0.92); }
+}
+@keyframes drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(5vw, -5vh) scale(1.06); }
+  66%      { transform: translate(-6vw, 3vh) scale(0.94); }
+}
+
+/* 页面级 enter/leave — 路由切换 */
+.page-enter-from,
+.page-leave-to { opacity: 0; }
+.page-enter-from { transform: translateY(6px); }
+.page-leave-to   { transform: translateY(-4px); }
+.page-enter-to,
+.page-leave-from {
+  opacity: 1;
+  transform: translateY(0);
+}
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity var(--transition-slow),
+    transform var(--transition-slow);
+}
+
+/* 列表 stagger */
+.stagger-item {
+  opacity: 0;
+  animation: slideUp 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+}
+
+.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+.animate-spin    { animation: spin 1s linear infinite; }
+
+/* 无障碍 */
+@media (prefers-reduced-motion: reduce) {
+  .stagger-item,
+  .animate-fade-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .page-enter-from,
+  .page-enter-to,
+  .page-leave-from,
+  .page-leave-to,
+  .page-enter-active,
+  .page-leave-active {
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}
+
+/* ========================================================================
+   Editorial Primitives — 学术排版原语（保留供 EntityDetail / DocumentDetail）
+   kicker / pull-quote / figure-caption / byline · 字体跟随 --font-display (sans)
+   ======================================================================== */
+
+.font-display,
+.kicker-num {
+  font-variant-numeric: oldstyle-nums proportional-nums;
+}
+
+.kicker {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-tertiary);
+  margin-bottom: 0.5rem;
+}
+.kicker.tone-accent  { color: var(--accent-dark); }
+.kicker.tone-primary { color: var(--primary); }
+
+.pull-quote {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 1.125rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+  border-left: 2px solid var(--accent);
+  padding: 0.25rem 0 0.25rem 1rem;
+  margin: 1rem 0;
+}
+.pull-quote p { margin: 0 0 0.5rem; }
+.pull-quote p:last-child { margin-bottom: 0; }
+.pull-quote cite {
+  display: block;
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin-top: 0.5rem;
+}
+.pull-quote cite::before { content: '— '; }
+
+.figure-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-style: italic;
+  color: var(--text-secondary);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-light);
+}
+.figure-caption .fig-num {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+.byline > * + *::before {
+  content: '·';
+  margin-right: 0.5rem;
+  color: var(--border-strong);
+}
+.byline a { color: inherit; }
+.byline a:hover { color: var(--primary); }
+
+/* 文字选择 */
+::selection {
+  background: var(--accent-light);
+  color: var(--text-primary);
+}

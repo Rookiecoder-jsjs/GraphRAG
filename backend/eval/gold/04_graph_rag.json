@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Entity-anchored question designed to benefit from the graph-RAG path.",
+    "The user is asking about a specific entity (e.g. 硅基流动) — the",
+    "graph should MENTION this entity, and the chunks that MENTION it are",
+    "the right answers. Use --use-graph-rag to see if this case's hit@5",
+    "improves vs the baseline (no graph).",
+    "Replace expected_chunk_ids with chunk IDs that actually contain",
+    "information about the entity you care about."
+  ],
+  "id": "graph-rag-01",
+  "query": "Tell me about 硅基流动 (SiliconFlow).",
+  "expected_chunk_ids": [
+    "REPLACE_WITH_REAL_CHUNK_UUID_1"
+  ],
+  "expected_keywords": [],
+  "difficulty": "medium",
+  "tags": ["entity-anchored", "graph-rag"]
+}

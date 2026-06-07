@@ -1,0 +1,24 @@
+fastapi==0.115.0
+uvicorn==0.32.0
+python-jose[cryptography]==3.3.0
+bcrypt==3.2.2
+python-multipart==0.0.17
+neo4j==6.1.0
+chromadb==0.4.18
+numpy==1.26.4
+httpx==0.27.0
+aiofiles==24.1.0
+markitdown==0.0.1a3
+markdown-it-py==3.0.0
+jieba==0.42.1
+spacy==3.7.5
+python-dotenv==1.0.0
+pydantic==2.9.2
+pydantic-settings==2.6.0
+sqlalchemy==2.0.36
+aiosqlite==0.20.0
+rank-bm25==0.2.2
+
+# --- dev / test only (install with: pip install -r requirements-dev.txt or pip install pytest pytest-asyncio) ---
+pytest==8.3.3
+pytest-asyncio==0.24.0
