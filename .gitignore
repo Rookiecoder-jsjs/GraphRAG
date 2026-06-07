@@ -45,7 +45,6 @@ lerna-debug.log*
 
 # Project notes (private working docs)
 RAG_检索优化指南.md
-Neo4j+Chorma依赖.md
 
 # Local IDE / agent config
 .claude/
