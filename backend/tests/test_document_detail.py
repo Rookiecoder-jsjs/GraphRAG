@@ -334,6 +334,7 @@ def test_detail_endpoint_returns_combined_payload():
     doc_row = _FakeRow({
         "id": "d-1", "title": "Hello", "original_filename": "hello.pdf",
         "file_type": "pdf", "file_size": 1024, "created_at": "2026-01-01",
+        "status": "ready", "error_message": None,
     })
     tags_rows = [
         _FakeRow({"tag": "research"}),
@@ -424,6 +425,7 @@ def test_detail_endpoint_user_scoped():
     doc_row = _FakeRow({
         "id": "d-1", "title": "Private", "original_filename": "p.pdf",
         "file_type": "pdf", "file_size": 100, "created_at": "2026-01-01",
+        "status": "ready", "error_message": None,
     })
     # Doc is owned by user 1, but we'll authenticate as user 999.
     # The fake mimics the WHERE user_id=? filter: anyone else's id

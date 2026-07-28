@@ -697,7 +697,7 @@ const viewProgress = async (doc) => {
       }
     }
   } catch (err) {
-    console.log('No history found, connecting to live stream', err)
+    console.debug('No history found, connecting to live stream', err)
   }
 
   if (alreadyTerminal) return

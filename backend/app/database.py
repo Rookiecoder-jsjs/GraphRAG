@@ -7,6 +7,32 @@ from typing import AsyncGenerator
 from app.config import get_settings
 
 
+async def _ensure_document_status_columns(db) -> None:
+    """Idempotently add the state-machine columns to an existing documents table.
+
+    ``CREATE TABLE IF NOT EXISTS`` never alters a table that already exists, so
+    databases created before the processing state machine was introduced lack
+    these columns. We add them and backfill legacy rows as ``ready`` — those
+    documents were processed under the old system and already live in the
+    stores, so they must not surface as stuck-in-``pending``.
+    """
+    async with db.execute("PRAGMA table_info(documents)") as cursor:
+        existing = {row[1] for row in await cursor.fetchall()}
+
+    if "status" not in existing:
+        await db.execute("ALTER TABLE documents ADD COLUMN status TEXT")
+        await db.execute(
+            "UPDATE documents SET status = 'ready' WHERE status IS NULL"
+        )
+    if "error_message" not in existing:
+        await db.execute("ALTER TABLE documents ADD COLUMN error_message TEXT")
+    if "updated_at" not in existing:
+        await db.execute("ALTER TABLE documents ADD COLUMN updated_at TIMESTAMP")
+        await db.execute(
+            "UPDATE documents SET updated_at = created_at WHERE updated_at IS NULL"
+        )
+
+
 async def init_db():
     """Initialize SQLite database with required tables."""
     settings = get_settings()
@@ -15,6 +41,9 @@ async def init_db():
     os.makedirs(os.path.dirname(settings.SQLITE_PATH), exist_ok=True)
 
     async with aiosqlite.connect(settings.SQLITE_PATH) as db:
+        # Enforce foreign keys (SQLite keeps them OFF by default) so the
+        # ON DELETE CASCADE rules declared below actually take effect.
+        await db.execute("PRAGMA foreign_keys = ON")
         # Create users table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -25,7 +54,12 @@ async def init_db():
             )
         """)
 
-        # Create documents table
+        # Create documents table.
+        # `status` is the processing state machine (see services/doc_status.py):
+        # pending -> document_created -> indexed -> graphed -> ready, with
+        # `failed` reachable from any non-terminal state. Defaults to 'pending'
+        # so a row that never gets processed is visibly unprocessed rather than
+        # silently treated as done.
         await db.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY,
@@ -34,10 +68,15 @@ async def init_db():
                 file_path TEXT,
                 original_filename TEXT,
                 file_type TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error_message TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
+        # Migrate databases created before the state machine existed.
+        await _ensure_document_status_columns(db)
 
         # Create chunks table for tracking
         await db.execute("""
@@ -162,4 +201,7 @@ async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
     settings = get_settings()
     async with aiosqlite.connect(settings.SQLITE_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # PRAGMA is per-connection; enable FK enforcement on every connection
+        # so cascade deletes (messages, tags, feedback) work app-wide.
+        await db.execute("PRAGMA foreign_keys = ON")
         yield db

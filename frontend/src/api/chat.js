@@ -1,18 +1,17 @@
 import service from './index'
 
 export const chatApi = {
-  send: (message, conversationId, includeContext = true, useGraphRag = false, compareMode = false, withFollowups = true) => {
+  send: (message, conversationId, includeContext = true, useGraphRag = false, compareMode = false) => {
     return service.post('/chat', {
       message,
       conversation_id: conversationId,
       include_context: includeContext,
       use_graph_rag: useGraphRag,
-      compare_mode: compareMode,
-      with_followups: withFollowups
+      compare_mode: compareMode
     })
   },
 
-  stream: (message, conversationId, useGraphRag = false, compareMode = false) => {
+  stream: (message, conversationId, useGraphRag = false, compareMode = false, enableThinking = false) => {
     const token = localStorage.getItem('token')
     return fetch('/api/chat/stream', {
       method: 'POST',
@@ -25,7 +24,8 @@ export const chatApi = {
         conversation_id: conversationId,
         include_context: true,
         use_graph_rag: useGraphRag,
-        compare_mode: compareMode
+        compare_mode: compareMode,
+        enable_thinking: enableThinking
       })
     })
   },

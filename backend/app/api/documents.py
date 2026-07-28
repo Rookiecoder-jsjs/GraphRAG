@@ -20,6 +20,7 @@ from app.services.chroma_client import get_chroma_client
 from app.services.bm25 import get_bm25_service
 from app.services.entity_extractor import get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
+from app.services.doc_status import DocStatus, set_document_status
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,29 @@ def is_allowed_file(filename: str) -> bool:
     return get_file_extension(filename) in ALLOWED_EXTENSIONS
 
 
+def _content_matches_extension(content: bytes, ext: str) -> bool:
+    """Conservative magic-byte check rejecting grossly mislabelled uploads.
+
+    Only formats with strong, unambiguous signatures are enforced (pdf/docx/
+    doc); text formats (txt/md/markdown) and anything uncertain pass through to
+    the parser. This narrows the attack surface — e.g. a zip bomb handed to the
+    docx unzip path, or an arbitrary binary renamed to .pdf — without rejecting
+    legitimate files.
+    """
+    ext = (ext or "").lstrip(".").lower()
+    head = content[:8]
+    if ext == "pdf":
+        return b"%PDF" in content[:1024]
+    if ext in ("docx", "doc"):
+        # Modern .docx is a ZIP container; legacy .doc is an OLE2 compound doc.
+        # Accept either signature for both to stay lenient about misnaming.
+        return (
+            head[:4] in (b"PK\x03\x04", b"PK\x05\x06")
+            or head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+        )
+    return True
+
+
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
     background_tasks: BackgroundTasks,
@@ -95,12 +119,31 @@ async def upload_document(
             detail=f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
         )
 
-    # Check file size
-    file_content = await file.read()
-    if len(file_content) > settings.MAX_FILE_SIZE:
+    # Read in bounded chunks and enforce the size limit AS we read. Reading the
+    # whole body first (`await file.read()`) let an attacker buffer a multi-GB
+    # upload into memory before the check ran — a trivial DoS given open
+    # registration. Now memory is capped at MAX_FILE_SIZE.
+    _chunk_size = 1024 * 1024  # 1 MiB
+    _buffers = []
+    _total = 0
+    while True:
+        _piece = await file.read(_chunk_size)
+        if not _piece:
+            break
+        _total += len(_piece)
+        if _total > settings.MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File too large. Max size: {settings.MAX_FILE_SIZE / 1024 / 1024:.1f}MB"
+            )
+        _buffers.append(_piece)
+    file_content = b"".join(_buffers)
+
+    # Reject content that clearly doesn't match its declared extension.
+    if not _content_matches_extension(file_content, get_file_extension(file.filename)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File too large. Max size: {settings.MAX_FILE_SIZE / 1024 / 1024:.1f}MB"
+            detail="File content does not match its extension"
         )
 
     # Generate document ID
@@ -120,11 +163,13 @@ async def upload_document(
         markdown_content, extracted_title = convert_document_to_markdown(file_path, file_ext[1:])
         markdown_content = clean_markdown(markdown_content)
     except Exception as e:
-        # Clean up file on error
+        # Clean up file on error. Log the detail server-side; return a generic
+        # message so internal parser errors don't leak to the client.
+        logger.error("Document conversion failed for %s: %s", file_path, e, exc_info=True)
         os.remove(file_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to convert document: {str(e)}"
+            detail="Failed to convert document"
         )
 
     if not markdown_content.strip():
@@ -137,19 +182,23 @@ async def upload_document(
     # Extract title
     title = extracted_title or extract_title_from_markdown(markdown_content) or file.filename
 
-    # Save to database
+    # Save to database. The document starts in 'pending'; the background
+    # pipeline advances it through the state machine (services/doc_status.py)
+    # as each durable checkpoint completes.
     async with get_db() as db:
         await db.execute(
             """INSERT INTO documents
-               (id, user_id, title, file_path, original_filename, file_type)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (doc_id, user_id, title, file_path, file.filename, file_ext[1:])
+               (id, user_id, title, file_path, original_filename, file_type, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (doc_id, user_id, title, file_path, file.filename, file_ext[1:],
+             DocStatus.PENDING.value)
         )
         await db.commit()
 
         # Get created document with timestamp
         async with db.execute(
-            "SELECT id, title, original_filename, file_type, created_at FROM documents WHERE id = ?",
+            "SELECT id, title, original_filename, file_type, created_at, status "
+            "FROM documents WHERE id = ?",
             (doc_id,)
         ) as cursor:
             doc = await cursor.fetchone()
@@ -182,6 +231,7 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         neo4j = await get_neo4j_client()
         await neo4j.create_document_node(doc_id, user_id, title)
         logger.info("Created document node in Neo4j for %s", doc_id)
+        await set_document_status(doc_id, DocStatus.DOCUMENT_CREATED)
         await progress.emit_and_save(doc_id, user_id, "document_created", "Document created", {"stage": "document_created"})
 
         # Chunk the document
@@ -192,6 +242,10 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
 
         if not chunks:
             logger.warning("No chunks created for doc %s", doc_id)
+            await set_document_status(
+                doc_id, DocStatus.FAILED,
+                error_message="No content could be extracted from the document",
+            )
             await progress.emit_and_save(doc_id, user_id, "error", "No content could be extracted from the document", {"stage": "error"})
             return
 
@@ -211,6 +265,10 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
             embeddings = await embedding_service.embed_batch(chunk_contents)
         except EmbeddingServiceError as embed_err:
             logger.error("Embedding failed for doc %s: %s", doc_id, embed_err, exc_info=True)
+            await set_document_status(
+                doc_id, DocStatus.FAILED,
+                error_message=f"Embedding failed: {embed_err}",
+            )
             await progress.emit_and_save(
                 doc_id, user_id, "error",
                 f"Embedding failed: {embed_err}",
@@ -246,12 +304,14 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         bm25 = get_bm25_service()
         bm25.add_to_index(user_id, chunk_contents, chunk_ids)
 
-        # Store chunks in SQLite
+        # Store chunks in SQLite. INSERT OR IGNORE keeps a re-run idempotent:
+        # chunk_ids are deterministic (derived from doc_id + position), so a
+        # resumed pipeline re-derives the same ids and must not crash on the PK.
         async with get_db() as db:
             for chunk in chunks:
                 hierarchy_path_str = ",".join(chunk.hierarchy.path) if chunk.hierarchy.path else ""
                 await db.execute(
-                    """INSERT INTO chunks
+                    """INSERT OR IGNORE INTO chunks
                        (chunk_id, document_id, user_id, content, hierarchy_path, level,
                         prev_chunk_id, next_chunk_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -262,21 +322,49 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
             await db.commit()
         logger.info("Stored %d chunks in SQLite for doc %s", len(chunks), doc_id)
 
-        # Create chunk nodes in Neo4j and link them
+        # Durable checkpoint: vectors (Chroma), chunks (SQLite) and the BM25
+        # index are all written now. A crash past this point can resume from
+        # 'indexed' without redoing embedding.
+        await set_document_status(doc_id, DocStatus.INDEXED)
+
+        # Create chunk nodes + NEXT links in Neo4j in TWO UNWIND batches
+        # (one round-trip each) instead of the old per-chunk loop, which
+        # paid 2N+ serial round-trips (~5–15ms apiece) — for a 100-chunk
+        # doc that was ~2–3s of pure network latency, now ~20ms total.
         await progress.emit_and_save(doc_id, user_id, "graph", "Building knowledge graph...", {"stage": "graph", "current": 0, "total": len(chunks)})
-        for i, chunk in enumerate(chunks):
-            await neo4j.create_chunk_node(
-                chunk.chunk_id, doc_id, user_id, chunk.content,
-                chunk.hierarchy.path, chunk.position.start_line
-            )
-            await neo4j.create_chunk_links(
-                chunk.chunk_id,
-                chunk.position.prev_chunk_id,
-                chunk.position.next_chunk_id
-            )
-            if i % 5 == 0:  # Emit progress every 5 chunks
-                await progress.emit_and_save(doc_id, user_id, "graph", f"Processing chunk {i+1}/{len(chunks)}", {"stage": "graph", "current": i+1, "total": len(chunks), "percent": int((i+1)/len(chunks)*30) + 50})
+        t_graph = time.time()
+        chunk_payloads = [
+            {
+                "chunk_id": chunk.chunk_id,
+                "content": chunk.content,
+                "hierarchy_path": chunk.hierarchy.path,
+                "position": chunk.position.start_line,
+            }
+            for chunk in chunks
+        ]
+        created_chunks = await neo4j.create_chunk_nodes_batch(doc_id, user_id, chunk_payloads)
+
+        # prev/next pointers are symmetric (chunker sets both directions),
+        # so dedupe pairs here — MERGE would dedupe server-side too, but
+        # sending unique pairs halves the transmitted work.
+        link_pairs: set = set()
+        for chunk in chunks:
+            if chunk.position.prev_chunk_id:
+                link_pairs.add((chunk.position.prev_chunk_id, chunk.chunk_id))
+            if chunk.position.next_chunk_id:
+                link_pairs.add((chunk.chunk_id, chunk.position.next_chunk_id))
+        link_payloads = [{"from_id": a, "to_id": b} for a, b in link_pairs]
+        linked = await neo4j.create_chunk_links_batch(link_payloads)
+        logger.info(
+            "Graph writes for doc %s: %d chunk nodes, %d NEXT links in %.2fs",
+            doc_id, created_chunks, linked, time.time() - t_graph,
+        )
         await progress.emit_and_save(doc_id, user_id, "graph", "Knowledge graph building complete", {"stage": "graph", "current": len(chunks), "total": len(chunks), "percent": 80})
+
+        # Durable checkpoint: chunk nodes/links are in Neo4j. The (expensive)
+        # LLM entity extraction that follows has not run yet — a crash here
+        # resumes from 'graphed' and skips straight to extraction.
+        await set_document_status(doc_id, DocStatus.GRAPHED)
 
         # Extract entities and relations
         logger.info("Starting entity extraction with LLM for doc %s", doc_id)
@@ -422,6 +510,8 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
             "percent": 95
         })
 
+        # Terminal success checkpoint: every store is fully written.
+        await set_document_status(doc_id, DocStatus.READY)
         logger.info("Document %s background processing completed", doc_id)
 
         # Calculate duration
@@ -440,6 +530,13 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         # Log error but don't fail the upload
         import traceback
         logger.error("Background processing error for doc %s: %s", doc_id, e, exc_info=True)
+        # Mark the document failed so it doesn't linger in an in-progress
+        # checkpoint forever. Wrapped so a status-write failure can't mask the
+        # original error or prevent the SSE error event below.
+        try:
+            await set_document_status(doc_id, DocStatus.FAILED, error_message=str(e))
+        except Exception as status_error:
+            logger.warning("Failed to mark doc %s as failed: %s", doc_id, status_error)
         # Emit error event
         try:
             progress = get_progress_emitter()
@@ -474,7 +571,10 @@ async def list_documents(
     if tag:
         # Filter at the SQL layer so we don't pull tags for docs we'd
         # discard. Inner join keeps only docs that actually have the tag.
-        sql = """SELECT d.id, d.title, d.original_filename, d.file_type, d.created_at
+        sql = """SELECT d.id, d.title, d.original_filename, d.file_type,
+                        d.created_at,
+                        COALESCE(d.status, 'pending') AS status,
+                        d.error_message
                  FROM documents d
                  INNER JOIN document_tags t
                    ON t.document_id = d.id AND t.user_id = d.user_id
@@ -482,7 +582,8 @@ async def list_documents(
                  ORDER BY d.created_at DESC LIMIT ? OFFSET ?"""
         params = (user_id, tag, limit, skip)
     else:
-        sql = """SELECT id, title, original_filename, file_type, created_at
+        sql = """SELECT id, title, original_filename, file_type, created_at,
+                        COALESCE(status, 'pending') AS status, error_message
                  FROM documents WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"""
         params = (user_id, limit, skip)
 
@@ -532,7 +633,8 @@ async def get_document_detail(
 
     async with get_db() as db:
         async with db.execute(
-            "SELECT id, title, original_filename, file_type, created_at "
+            "SELECT id, title, original_filename, file_type, created_at, "
+            "COALESCE(status, 'pending') AS status, error_message "
             "FROM documents WHERE id = ? AND user_id = ?",
             (doc_id, user_id),
         ) as cursor:
@@ -582,6 +684,8 @@ async def get_document_detail(
             "original_filename": doc_row["original_filename"],
             "file_type": doc_row["file_type"],
             "created_at": doc_row["created_at"],
+            "status": doc_row["status"],
+            "error_message": doc_row["error_message"],
             "tags": tags,
         },
         "stats": {
@@ -869,7 +973,7 @@ async def get_document_chunks(
         logger.error("Error getting chunks for doc %s: %s", doc_id, e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get chunks: {str(e)}"
+            detail="Failed to get chunks"
         )
 
 

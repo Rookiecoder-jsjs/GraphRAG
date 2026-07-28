@@ -54,7 +54,10 @@ class ChromaClient:
                     cleaned[key] = value
             cleaned_metadatas.append(cleaned)
 
-        self._collection.add(
+        # upsert (not add) so a resumed/re-run ingestion is idempotent: chunk
+        # ids are deterministic, and `add` on an existing id only warns and
+        # skips, whereas upsert guarantees the stored vector matches the run.
+        self._collection.upsert(
             ids=chunk_ids,
             documents=documents,
             embeddings=embeddings,

@@ -43,6 +43,14 @@ async def lifespan(app: FastAPI):
     chroma = get_chroma_client()
     chroma.close()
 
+    # Close lazily-initialized LLM/rerank HTTP clients (no-op if never used).
+    from app.services.llm import close_llm_service
+    from app.services.reranker import close_rerank_service
+    from app.services.embedding import close_embedding_service
+    await close_llm_service()
+    await close_rerank_service()
+    await close_embedding_service()
+
     logger.info("Knowledge Graph System Stopped")
 
 
@@ -79,8 +87,6 @@ def create_app() -> FastAPI:
     app.include_router(tags.router)
     app.include_router(timeline.router)
     app.include_router(dashboard.router)
-    app.include_router(timeline.router)
-    app.include_router(tags.router)
 
     @app.get("/")
     async def root():

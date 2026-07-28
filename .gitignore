@@ -49,3 +49,6 @@ RAG_检索优化指南.md
 # Local IDE / agent config
 .claude/
 .trae/
+
+# CodeGraph index (regenerable tool artifact)
+.codegraph/

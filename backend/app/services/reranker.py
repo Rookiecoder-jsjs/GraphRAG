@@ -89,3 +89,11 @@ async def get_rerank_service() -> RerankService:
     if _rerank_service is None:
         _rerank_service = RerankService()
     return _rerank_service
+
+
+async def close_rerank_service() -> None:
+    """Close the shared rerank HTTP client at shutdown (no-op if never created)."""
+    global _rerank_service
+    if _rerank_service is not None:
+        await _rerank_service.close()
+        _rerank_service = None

@@ -67,7 +67,9 @@ class EmbeddingService:
 
     Reliability features:
       - Exponential backoff on transport / 5xx errors (5 attempts: 1,2,4,8,16s).
-      - Fresh httpx.AsyncClient per attempt (avoids keep-alive stale-connection reuse).
+      - Shared keep-alive httpx.AsyncClient (one TLS handshake, reused across
+        calls; a stale connection surfaces as RemoteProtocolError, which the
+        retry policy handles).
       - 4xx errors are NOT retried — they are surfaced immediately.
       - Self-healing cache: rows whose bytes do not look like JSON are deleted
         on read, so legacy pickle data cannot poison the cache forever.
@@ -81,6 +83,29 @@ class EmbeddingService:
         self.api_key = self.settings.SILICON_FLOW_API_KEY
         self.model = self.settings.EMBEDDING_MODEL
         self._semaphore = asyncio.Semaphore(5)
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create the shared HTTP client.
+
+        Reusing one client keeps the TLS connection to SiliconFlow warm
+        across calls — the old per-attempt client paid a fresh TCP+TLS
+        handshake (~100–300ms) on EVERY embedding request, which dominated
+        latency for single-text query embeddings and serialized batch
+        uploads alike.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Close the shared HTTP client (no-op if never created)."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def _delete_corrupt_cache_row(self, db, text_hash: str, reason: str) -> None:
         """Remove a single corrupt cache row."""
@@ -144,51 +169,51 @@ class EmbeddingService:
         last_error: Optional[BaseException] = None
         url = f"{self.base_url}/embeddings"
         headers = {"Authorization": f"Bearer {self.api_key}"}
+        client = await self._get_client()
 
         for attempt in range(MAX_ATTEMPTS):
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-                try:
-                    response = await client.post(url, headers=headers, json=payload)
-                except RETRYABLE_EXCEPTIONS as e:
-                    last_error = e
-                    if attempt < MAX_ATTEMPTS - 1:
-                        delay = RETRY_DELAYS_SECONDS[attempt]
-                        logger.warning(
-                            "Embedding call %d/%d transport error: %s — retrying in %ds",
-                            attempt + 1, MAX_ATTEMPTS, e, delay,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    logger.error("Embedding call failed after %d attempts: %s", MAX_ATTEMPTS, e)
-                    raise EmbeddingServiceError(
-                        f"SiliconFlow unreachable after {MAX_ATTEMPTS} attempts: {e}"
-                    ) from e
-
-                if response.status_code in RETRYABLE_STATUS_CODES:
-                    last_error = httpx.HTTPStatusError(
-                        f"status {response.status_code}",
-                        request=response.request,
-                        response=response,
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+            except RETRYABLE_EXCEPTIONS as e:
+                last_error = e
+                if attempt < MAX_ATTEMPTS - 1:
+                    delay = RETRY_DELAYS_SECONDS[attempt]
+                    logger.warning(
+                        "Embedding call %d/%d transport error: %s — retrying in %ds",
+                        attempt + 1, MAX_ATTEMPTS, e, delay,
                     )
-                    if attempt < MAX_ATTEMPTS - 1:
-                        delay = RETRY_DELAYS_SECONDS[attempt]
-                        logger.warning(
-                            "Embedding call %d/%d got HTTP %d — retrying in %ds",
-                            attempt + 1, MAX_ATTEMPTS, response.status_code, delay,
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    raise EmbeddingServiceError(
-                        f"SiliconFlow returned {response.status_code} after {MAX_ATTEMPTS} attempts"
-                    ) from last_error
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("Embedding call failed after %d attempts: %s", MAX_ATTEMPTS, e)
+                raise EmbeddingServiceError(
+                    f"SiliconFlow unreachable after {MAX_ATTEMPTS} attempts: {e}"
+                ) from e
 
-                if response.status_code >= 400:
-                    body_preview = response.text[:300] if response.text else ""
-                    raise EmbeddingServiceError(
-                        f"SiliconFlow rejected request (HTTP {response.status_code}): {body_preview}"
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                last_error = httpx.HTTPStatusError(
+                    f"status {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+                if attempt < MAX_ATTEMPTS - 1:
+                    delay = RETRY_DELAYS_SECONDS[attempt]
+                    logger.warning(
+                        "Embedding call %d/%d got HTTP %d — retrying in %ds",
+                        attempt + 1, MAX_ATTEMPTS, response.status_code, delay,
                     )
+                    await asyncio.sleep(delay)
+                    continue
+                raise EmbeddingServiceError(
+                    f"SiliconFlow returned {response.status_code} after {MAX_ATTEMPTS} attempts"
+                ) from last_error
 
-                return response.json()
+            if response.status_code >= 400:
+                body_preview = response.text[:300] if response.text else ""
+                raise EmbeddingServiceError(
+                    f"SiliconFlow rejected request (HTTP {response.status_code}): {body_preview}"
+                )
+
+            return response.json()
 
         raise EmbeddingServiceError(
             f"Embedding call failed after {MAX_ATTEMPTS} attempts: {last_error}"
@@ -305,3 +330,11 @@ async def get_embedding_service() -> EmbeddingService:
     if _embedding_service is None:
         _embedding_service = EmbeddingService()
     return _embedding_service
+
+
+async def close_embedding_service() -> None:
+    """Close the shared embedding HTTP client at shutdown (no-op if never created)."""
+    global _embedding_service
+    if _embedding_service is not None:
+        await _embedding_service.close()
+        _embedding_service = None

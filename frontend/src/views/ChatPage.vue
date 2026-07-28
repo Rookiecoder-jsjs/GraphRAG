@@ -2,8 +2,8 @@
   <div class="chat-page">
     <PageHeader
       :icon="MessageIcon"
-      title="AI Chat"
-      subtitle="Ask questions about your knowledge graph"
+      title="AI 对话"
+      subtitle="针对你的知识图谱提问"
     >
       <template #actions>
         <div class="conversation-dropdown">
@@ -14,7 +14,7 @@
             icon-position="left"
             @click="toggleDropdown"
           >
-            {{ currentConversationId ? 'History' : 'New Chat' }}
+            {{ currentConversationId ? '历史会话' : '新对话' }}
             <ChevronIcon class="chevron" />
           </Button>
           <div v-if="showDropdown" class="dropdown-menu">
@@ -27,7 +27,7 @@
               class="dropdown-new-chat"
               @click="startNewChat"
             >
-              New Chat
+              新对话
             </Button>
             <div v-if="conversations.length > 0" class="dropdown-divider" />
             <Button
@@ -41,10 +41,10 @@
               :class="{ 'dropdown-active': conv.id === currentConversationId }"
               @click="loadConversation(conv.id)"
             >
-              <span class="conv-title">{{ conv.title || 'Untitled' }}</span>
+              <span class="conv-title">{{ conv.title || '未命名会话' }}</span>
             </Button>
             <div v-if="conversations.length === 0" class="dropdown-empty">
-              No conversation history
+              暂无会话历史
             </div>
           </div>
         </div>
@@ -56,72 +56,92 @@
         <EmptyState
           v-if="messages.length === 0"
           :icon="MessageIcon"
-          title="Start a Conversation"
-          description="Ask questions about your documents and knowledge graph"
+          title="开始对话"
+          description="就你的文档与知识图谱提问"
         />
 
         <div v-else class="messages-list">
           <div
-            class="messages-virtual"
-            :style="{ height: `${totalSize}px`, position: 'relative', width: '100%' }"
+            v-for="(msg, idx) in messages"
+            :key="idx"
+            class="message-item"
           >
-            <div
-              v-for="vRow in virtualItems"
-              :key="vRow.key"
-              :ref="measureElement"
-              :data-index="vRow.index"
-              class="message-virtual-item"
-              :style="{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                transform: `translateY(${vRow.start}px)`,
-                paddingBottom: '1.25rem'
-              }"
-            >
               <div
                 class="message"
-                :class="messages[vRow.index].role"
+                :class="msg.role"
               >
                 <div class="message-avatar">
-                  <UserIcon v-if="messages[vRow.index].role === 'user'" />
+                  <UserIcon v-if="msg.role === 'user'" />
                   <BoltIcon v-else />
                 </div>
                 <div class="message-content">
-                  <div class="message-text" v-html="messages[vRow.index].formattedHtml" />
+                  <div v-if="msg.role === 'assistant' && msg.thinking" class="thinking-block">
+                    <button
+                      type="button"
+                      class="thinking-toggle"
+                      @click="msg.thinkingExpanded = !msg.thinkingExpanded"
+                    >
+                      <ChevronIcon class="thinking-chevron" :class="{ open: msg.thinkingExpanded }" />
+                      <BoltIcon class="thinking-bolt" />
+                      <span v-if="msg.streaming && !msg.content" class="thinking-status">思考中…</span>
+                      <span v-else-if="msg.thinkingMs != null" class="thinking-status">
+                        思考了 {{ formatSeconds(msg.thinkingMs) }}
+                      </span>
+                      <span v-else class="thinking-status">推理过程</span>
+                    </button>
+                    <pre v-show="msg.thinkingExpanded" class="thinking-content">{{ msg.thinking }}</pre>
+                  </div>
+                  <div class="message-text" v-html="msg.formattedHtml" />
                   <div
-                    v-if="messages[vRow.index].role === 'assistant' && messages[vRow.index].sources && messages[vRow.index].sources.length"
+                    v-if="msg.role === 'assistant' && msg.timing"
+                    class="timing-meta"
+                    :class="{ 'timing-error': !msg.timing.running && msg.timing.error }"
+                  >
+                    <template v-if="msg.timing.running">
+                      <span class="timing-dot" />
+                      <span class="timing-live">{{ formatSeconds(msg.timing.elapsedMs) }}</span>
+                    </template>
+                    <template v-else>
+                      <ClockIcon class="timing-icon" />
+                      <template v-if="msg.timing.ttftMs != null">
+                        <span>首字 {{ formatSeconds(msg.timing.ttftMs) }}</span>
+                        <span class="timing-sep">·</span>
+                      </template>
+                      <span class="timing-total">总耗时 {{ formatSeconds(msg.timing.totalMs ?? msg.timing.elapsedMs) }}</span>
+                    </template>
+                  </div>
+                  <div
+                    v-if="msg.role === 'assistant' && msg.sources && msg.sources.length"
                     class="sources-panel"
                   >
                     <div class="sources-header">
-                      <span class="sources-label">SOURCES</span>
+                      <span class="sources-label">参考来源</span>
                       <span
-                        v-if="messages[vRow.index].citation_coverage !== undefined && messages[vRow.index].citation_coverage !== null"
+                        v-if="msg.citation_coverage !== undefined && msg.citation_coverage !== null"
                         class="coverage-indicator"
-                        :class="coverageTone(messages[vRow.index].citation_coverage)"
-                        :title="`${Math.round((messages[vRow.index].citation_coverage || 0) * 100)}% of available sources are cited in the answer`"
+                        :class="coverageTone(msg.citation_coverage)"
+                        :title="`回答引用了 ${Math.round((msg.citation_coverage || 0) * 100)}% 的可用来源`"
                       >
                         <span class="coverage-bar">
                           <span
                             class="coverage-bar-fill"
-                            :style="{ width: ((messages[vRow.index].citation_coverage || 0) * 100) + '%' }"
+                            :style="{ width: ((msg.citation_coverage || 0) * 100) + '%' }"
                           />
                         </span>
                         <span class="coverage-label">
-                          {{ Math.round((messages[vRow.index].citation_coverage || 0) * 100) }}% cited
+                          引用 {{ Math.round((msg.citation_coverage || 0) * 100) }}%
                         </span>
                       </span>
                     </div>
                     <div class="sources-chips">
                       <Tag
-                        v-for="src in messages[vRow.index].sources"
+                        v-for="src in msg.sources"
                         :key="src.index"
                         shape="pill"
                         clickable
-                        :active="messages[vRow.index].expandedSourceIndex === src.index"
-                        :title="`${src.title} — click to ${messages[vRow.index].expandedSourceIndex === src.index ? 'collapse' : 'expand'}`"
-                        @click="toggleSource(messages[vRow.index], src)"
+                        :active="msg.expandedSourceIndex === src.index"
+                        :title="`${src.title}——点击${msg.expandedSourceIndex === src.index ? '收起' : '展开'}`"
+                        @click="toggleSource(msg, src)"
                       >
                         <template #dot>
                           <Dot
@@ -129,13 +149,13 @@
                             class="quality-dot-inline"
                           />
                         </template>
-                        [{{ src.index }}] {{ src.title || 'Document ' + src.document_id?.slice(0, 8) }}
+                        [{{ src.index }}] {{ src.title || '文档 ' + src.document_id?.slice(0, 8) }}
                       </Tag>
                     </div>
 
                     <div
-                      v-for="src in messages[vRow.index].sources"
-                      v-show="messages[vRow.index].expandedSourceIndex === src.index"
+                      v-for="src in msg.sources"
+                      v-show="msg.expandedSourceIndex === src.index"
                       :key="`card-${src.index}`"
                       class="source-card"
                     >
@@ -152,7 +172,7 @@
                             <Dot
                               :tone="src.quality === 'high' ? 'success' : src.quality === 'medium' ? 'warning' : 'error'"
                             />
-                            {{ src.quality }}
+                            {{ qualityLabel(src.quality) }}
                             <span v-if="src.relevance_score != null" class="quality-score">
                               {{ Math.round((src.relevance_score || 0) * 100) }}%
                             </span>
@@ -162,8 +182,8 @@
                           variant="ghost"
                           size="sm"
                           icon-position="only"
-                          @click="toggleSource(messages[vRow.index], src)"
-                          title="Close"
+                          @click="toggleSource(msg, src)"
+                          title="关闭"
                           class="source-card-close-btn"
                         >
                           &times;
@@ -177,33 +197,13 @@
                       </div>
                       <pre class="source-card-content">{{ src.content }}</pre>
                       <div v-if="src.truncated" class="source-card-footnote">
-                        Excerpt truncated — the full chunk is longer.
+                        摘录已截断——原文片段更长。
                       </div>
                     </div>
                   </div>
 
                   <div
-                    v-if="messages[vRow.index].role === 'assistant' && messages[vRow.index].followups && messages[vRow.index].followups.length"
-                    class="followups-chips"
-                  >
-                    <span class="followups-label">FOLLOW UP</span>
-                    <Button
-                      v-for="(q, qi) in messages[vRow.index].followups"
-                      :key="qi"
-                      variant="secondary"
-                      size="sm"
-                      :icon="ArrowRightIcon"
-                      icon-position="left"
-                      class="followup-chip-btn"
-                      :title="q"
-                      @click="applyFollowup(q)"
-                    >
-                      {{ q }}
-                    </Button>
-                  </div>
-
-                  <div
-                    v-if="messages[vRow.index].role === 'assistant' && messages[vRow.index].id"
+                    v-if="msg.role === 'assistant' && msg.id"
                     class="feedback-bar"
                   >
                     <Button
@@ -211,30 +211,29 @@
                       size="sm"
                       :icon="ThumbsUpIcon"
                       icon-position="only"
-                      :class="{ 'feedback-active': messages[vRow.index].rating === 'up' }"
-                      :title="messages[vRow.index].rating === 'up' ? 'Remove like' : 'Helpful response'"
-                      @click="onFeedback(messages[vRow.index], 'up')"
+                      :class="{ 'feedback-active': msg.rating === 'up' }"
+                      :title="msg.rating === 'up' ? '取消点赞' : '回答有帮助'"
+                      @click="onFeedback(msg, 'up')"
                     />
                     <Button
                       variant="ghost"
                       size="sm"
                       :icon="ThumbsDownIcon"
                       icon-position="only"
-                      :class="{ 'feedback-active': messages[vRow.index].rating === 'down' }"
-                      :title="messages[vRow.index].rating === 'down' ? 'Remove dislike' : 'Unhelpful response'"
-                      @click="onFeedback(messages[vRow.index], 'down')"
+                      :class="{ 'feedback-active': msg.rating === 'down' }"
+                      :title="msg.rating === 'down' ? '取消踩' : '回答无帮助'"
+                      @click="onFeedback(msg, 'down')"
                     />
-                    <span v-if="messages[vRow.index].feedbackSaving" class="feedback-status">Saving…</span>
-                    <span v-else-if="messages[vRow.index].rating" class="feedback-status">
-                      {{ messages[vRow.index].rating === 'up' ? 'Thanks for the feedback' : 'Marked as unhelpful' }}
+                    <span v-if="msg.feedbackSaving" class="feedback-status">保存中…</span>
+                    <span v-else-if="msg.rating" class="feedback-status">
+                      {{ msg.rating === 'up' ? '感谢反馈' : '已标记为无帮助' }}
                     </span>
                   </div>
                 </div>
               </div>
-            </div>
           </div>
 
-          <div v-if="loading" class="message assistant">
+          <div v-if="loading && !(messages.length && messages[messages.length - 1].streaming)" class="message assistant">
             <div class="message-avatar">
               <BoltIcon />
             </div>
@@ -254,7 +253,7 @@
           <textarea
             v-model="inputMessage"
             class="message-input"
-            placeholder="Type your message..."
+            placeholder="输入你的问题……"
             @keydown.enter.exact.prevent="sendMessage"
             :disabled="loading"
             rows="1"
@@ -270,8 +269,12 @@
           />
         </div>
         <div class="input-toolbar">
-          <Switch v-model="useGraphRag" label="Graph" />
-          <Switch v-model="useCompare" label="Compare" />
+          <Switch v-model="useGraphRag" label="图谱" />
+          <Switch v-model="useCompare" label="对比" />
+          <Switch v-model="useThinking" label="深度思考" />
+          <span v-if="useThinking" class="thinking-mode-hint">
+            思考模式已开启——首字等待会明显变长
+          </span>
         </div>
       </div>
     </div>
@@ -279,9 +282,9 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onActivated, onUnmounted, h } from 'vue'
-import { useVirtualizer } from '@tanstack/vue-virtual'
+import { ref, watch, nextTick, onMounted, onActivated, onUnmounted, h } from 'vue'
 import { chatApi } from '../api/chat'
+import { createSseParser } from '../utils/sse'
 import { PageHeader, Button, Tag, Dot, Switch, EmptyState } from '../components/ui'
 
 const MessageIcon = {
@@ -322,11 +325,6 @@ const SendIcon = {
     h('polygon', { points: '22 2 15 22 11 13 2 9 22 2' })
   ])
 }
-const ArrowRightIcon = {
-  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
-    h('polyline', { points: '9 18 15 12 9 6' })
-  ])
-}
 const ThumbsUpIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
     h('path', { d: 'M7 10v12' }),
@@ -360,6 +358,10 @@ onActivated(() => {
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   messagesContainer.value?.removeEventListener('click', onCitationClick)
+  if (activeResponseTimer) {
+    clearInterval(activeResponseTimer)
+    activeResponseTimer = null
+  }
 })
 
 const messages = ref([])
@@ -367,24 +369,15 @@ const inputMessage = ref('')
 const loading = ref(false)
 const useGraphRag = ref(false)
 const useCompare = ref(false)
+// Deep-thinking toggle: persisted so a returning user keeps their choice.
+// Off by default — thinking mode trades a much slower first token for
+// occasionally better answers.
+const useThinking = ref(localStorage.getItem('chat.useThinking') === '1')
+watch(useThinking, (v) => localStorage.setItem('chat.useThinking', v ? '1' : '0'))
 const messagesContainer = ref(null)
 const currentConversationId = ref(null)
 const conversations = ref([])
 const showDropdown = ref(false)
-
-const rowVirtualizer = useVirtualizer({
-  count: computed(() => messages.value.length),
-  getScrollElement: () => messagesContainer.value,
-  estimateSize: () => 120,
-  overscan: 6
-})
-
-const virtualItems = computed(() => rowVirtualizer.value.getVirtualItems())
-const totalSize = computed(() => rowVirtualizer.value.getTotalSize())
-
-const measureElement = (el) => {
-  if (el) rowVirtualizer.value.measureElement(el)
-}
 
 const loadConversations = async () => {
   try {
@@ -407,7 +400,6 @@ const loadConversation = async (conversationId) => {
       rating: null,
       feedbackSaving: false,
       sources: [],
-      followups: [],
       expandedSourceIndex: null,
     }))
     messages.value = hydrated
@@ -460,18 +452,6 @@ const startNewChat = () => {
   showDropdown.value = false
 }
 
-const applyFollowup = (question) => {
-  if (!question) return
-  inputMessage.value = question
-  nextTick(() => {
-    const ta = document.querySelector('.message-input')
-    if (ta) {
-      ta.focus()
-      const len = ta.value.length
-      ta.setSelectionRange(len, len)
-    }
-  })
-}
 
 const coverageTone = (ratio) => {
   const r = Number(ratio) || 0
@@ -480,13 +460,16 @@ const coverageTone = (ratio) => {
   return 'coverage-low'
 }
 
+const QUALITY_LABELS = { high: '高', medium: '中', low: '低' }
+const qualityLabel = (q) => QUALITY_LABELS[q] || q
 const qualityTitle = (src) => {
   if (!src || !src.quality) return ''
+  const label = QUALITY_LABELS[src.quality] || src.quality
   const score = src.relevance_score
   if (score === null || score === undefined) {
-    return `Quality: ${src.quality} (no score available)`
+    return `质量：${label}（无相关度评分）`
   }
-  return `Quality: ${src.quality} (relevance ${Math.round(score * 100)}%)`
+  return `质量：${label}（相关度 ${Math.round(score * 100)}%）`
 }
 
 const toggleDropdown = () => {
@@ -498,15 +481,68 @@ const toggleDropdown = () => {
 
 const scrollToBottom = async () => {
   await nextTick()
-  if (rowVirtualizer.value && messages.value.length > 0) {
-    rowVirtualizer.value.scrollToIndex(messages.value.length - 1, { align: 'end' })
-  } else if (messagesContainer.value) {
-    const container = messagesContainer.value.querySelector('.messages-container')
-    if (container) {
-      container.scrollTop = container.scrollHeight
-    }
-  }
+  const el = messagesContainer.value
+  if (el) el.scrollTop = el.scrollHeight
 }
+
+// Blinking caret appended to the assistant bubble while tokens stream in.
+const CURSOR_HTML = '<span class="stream-cursor"></span>'
+
+// Parse the SSE byte stream from /api/chat/stream into typed callbacks.
+// Protocol (see backend app/api/chat.py):
+//   event: sources   -> data: {"sources": [...]}   (sent FIRST, before text)
+//   event: thinking  -> data: {"text": "..."}       (reasoning, Deep Think on)
+//   (message)        -> data: {"chunk": "..."}      (streamed body tokens)
+//   event: done      -> data: {"conversation_id","sources","citation_coverage"}
+const streamChat = async (body, handlers) => {
+  const response = await chatApi.stream(
+    body.message, body.conversationId, body.useGraphRag, body.compareMode, body.enableThinking
+  )
+  if (!response.ok || !response.body) {
+    throw new Error(`Stream request failed with status ${response.status}`)
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+
+  // Frame parsing lives in utils/sse.js (unit-tested); here we just route the
+  // typed events to their handlers.
+  const parser = createSseParser((event, payload) => {
+    if (event === 'sources') handlers.onSources(payload?.sources)
+    else if (event === 'thinking') handlers.onThinking?.(payload?.text)
+    else if (event === 'done') handlers.onDone(payload)
+    else if (payload && typeof payload.chunk === 'string') handlers.onChunk(payload.chunk)
+  })
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    parser.feed(decoder.decode(value, { stream: true }))
+  }
+  parser.flush()
+}
+
+// Coalesce per-token scrolls into one per animation frame so fast streams
+// don't thrash the virtualizer.
+let scrollScheduled = false
+const scheduleScroll = () => {
+  if (scrollScheduled) return
+  scrollScheduled = true
+  requestAnimationFrame(() => {
+    scrollScheduled = false
+    scrollToBottom()
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Response timing chip: a client-side stopwatch attached to the assistant
+// bubble. Starts the moment the message is sent, marks time-to-first-token on
+// the first streamed chunk, and freezes the instant the answer completes
+// (the `done` event — trailing follow-up chips don't count toward it).
+// Measured with performance.now(); purely presentational, never persisted.
+// ---------------------------------------------------------------------------
+let activeResponseTimer = null
+
+const formatSeconds = (ms) => `${((ms ?? 0) / 1000).toFixed(2)}s`
 
 const sendMessage = async () => {
   const message = inputMessage.value.trim()
@@ -523,33 +559,134 @@ const sendMessage = async () => {
   loading.value = true
   await scrollToBottom()
 
+  // Placeholder assistant bubble filled token-by-token. Grab the reactive
+  // proxy from the array (not the raw literal) so in-place mutation re-renders.
+  messages.value.push({
+    role: 'assistant',
+    content: '',
+    formattedHtml: CURSOR_HTML,
+    sources: [],
+    citation_coverage: 0,
+    expandedSourceIndex: null,
+    streaming: true,
+    // Deep-thinking trace (empty unless Deep Think is on and the model
+    // actually produced reasoning). thinkingMs freezes when the answer
+    // body starts; expanded auto-opens while thinking, auto-collapses after.
+    thinking: '',
+    thinkingMs: null,
+    thinkingExpanded: false,
+    timing: { running: true, elapsedMs: 0, ttftMs: null, totalMs: null, error: false },
+  })
+  const assistantMsg = messages.value[messages.value.length - 1]
+  await scrollToBottom()
+
+  // Live stopwatch: tick every 100ms so the chip visibly counts up.
+  const t0 = performance.now()
+  const timer = setInterval(() => {
+    assistantMsg.timing.elapsedMs = performance.now() - t0
+  }, 100)
+  activeResponseTimer = timer
+
+  // Freeze the chip the moment the turn is logically done. Idempotent —
+  // onDone calls it first; the finally block calls it again as a safety
+  // net for error paths, and no-ops if already settled.
+  const settleTimer = (errored) => {
+    if (!assistantMsg.timing.running) return
+    clearInterval(timer)
+    if (activeResponseTimer === timer) activeResponseTimer = null
+    assistantMsg.timing.running = false
+    assistantMsg.timing.totalMs = performance.now() - t0
+    assistantMsg.timing.error = Boolean(errored)
+  }
+
+  const render = () => {
+    assistantMsg.formattedHtml =
+      formatMessage(assistantMsg.content) + (assistantMsg.streaming ? CURSOR_HTML : '')
+    scheduleScroll()
+  }
+
+  let gotChunk = false
+  let hadError = false
   try {
-    const { data } = await chatApi.send(message, currentConversationId.value, true, useGraphRag.value, useCompare.value)
-    if (data.conversation_id && !currentConversationId.value) {
-      currentConversationId.value = data.conversation_id
-    }
-    messages.value.push({
-      role: 'assistant',
-      content: data.message || 'No response',
-      formattedHtml: formatMessage(data.message || 'No response'),
-      sources: data.sources || [],
-      followups: Array.isArray(data.followups) ? data.followups : [],
-      citation_coverage: typeof data.citation_coverage === 'number'
-        ? data.citation_coverage : 0,
-      expandedSourceIndex: null,
-    })
+    await streamChat(
+      {
+        message,
+        conversationId: currentConversationId.value,
+        useGraphRag: useGraphRag.value,
+        compareMode: useCompare.value,
+        enableThinking: useThinking.value,
+      },
+      {
+        onSources: (sources) => { assistantMsg.sources = sources || [] },
+        onThinking: (text) => {
+          if (typeof text !== 'string' || !text) return
+          // Auto-expand while the model is reasoning so the user can watch
+          // it work; the first answer chunk collapses it again (below).
+          if (!assistantMsg.thinking) assistantMsg.thinkingExpanded = true
+          assistantMsg.thinking += text
+          scheduleScroll()
+        },
+        onChunk: (chunk) => {
+          if (!gotChunk) {
+            gotChunk = true
+            // Time-to-first-token: how long the send→retrieval→first-byte
+            // path took. Anchored to the first ANSWER chunk (not reasoning)
+            // so Deep Think on/off numbers are directly comparable. Pairs
+            // with the backend's build_rag_context timing log for A/Bs.
+            assistantMsg.timing.ttftMs = performance.now() - t0
+            if (assistantMsg.thinking) {
+              assistantMsg.thinkingMs = performance.now() - t0
+              assistantMsg.thinkingExpanded = false
+            }
+          }
+          assistantMsg.content += chunk
+          render()
+        },
+        onDone: (d) => {
+          if (d?.conversation_id && !currentConversationId.value) {
+            currentConversationId.value = d.conversation_id
+          }
+          if (Array.isArray(d?.sources) && d.sources.length) assistantMsg.sources = d.sources
+          if (typeof d?.citation_coverage === 'number') {
+            assistantMsg.citation_coverage = d.citation_coverage
+          }
+          // The answer is fully streamed and saved — stop the clock NOW so
+          // trailing follow-up generation doesn't pad the number.
+          settleTimer(false)
+        },
+      }
+    )
+    if (!gotChunk) throw new Error('stream produced no content')
   } catch (error) {
-    console.error('Chat error:', error)
-    messages.value.push({
-      role: 'assistant',
-      content: 'Sorry, I encountered an error. Please try again.',
-      formattedHtml: formatMessage('Sorry, I encountered an error. Please try again.'),
-      sources: [],
-      followups: [],
-      citation_coverage: 0,
-      expandedSourceIndex: null,
-    })
+    // If nothing has rendered yet, fall back to the non-streaming endpoint so
+    // a stream hiccup never leaves the user staring at an empty bubble.
+    if (!gotChunk) {
+      try {
+        const { data } = await chatApi.send(
+          message, currentConversationId.value, true, useGraphRag.value, useCompare.value
+        )
+        if (data.conversation_id && !currentConversationId.value) {
+          currentConversationId.value = data.conversation_id
+        }
+        assistantMsg.content = data.message || '（无回答）'
+        assistantMsg.sources = data.sources || []
+        assistantMsg.citation_coverage =
+          typeof data.citation_coverage === 'number' ? data.citation_coverage : 0
+      } catch (fallbackError) {
+        console.error('Chat error:', fallbackError)
+        assistantMsg.content = '抱歉，出了点问题，请重试。'
+        assistantMsg.sources = []
+        hadError = true
+      }
+    } else {
+      // Mid-stream failure: keep whatever already rendered.
+      console.error('Chat stream interrupted:', error)
+      hadError = true
+    }
   } finally {
+    settleTimer(hadError)
+    assistantMsg.streaming = false
+    assistantMsg.formattedHtml = formatMessage(assistantMsg.content)
     loading.value = false
     await scrollToBottom()
   }
@@ -749,31 +886,116 @@ const onCitationClick = (event) => {
   color: var(--text-primary);
 }
 
+/* Blinking caret shown at the end of the assistant bubble while streaming. */
+.stream-cursor {
+  display: inline-block;
+  width: 0.5rem;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--primary, #6366f1);
+  border-radius: 1px;
+  animation: streamCursorBlink 1s steps(2, start) infinite;
+}
+@keyframes streamCursorBlink {
+  to { visibility: hidden; }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.followups-chips {
-  display: flex;
-  flex-wrap: wrap;
+/* Live response-time chip under the assistant bubble: a pulsing dot and a
+   counting stopwatch while streaming, settling into quiet mono microcopy
+   afterwards — same visual register as the SOURCES / coverage meta. */
+.timing-meta {
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.875rem;
-  padding: 0.625rem 0.75rem;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-}
-.followups-label {
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+  padding-left: 0.125rem;
   font-family: var(--font-mono);
   font-size: 0.6875rem;
+  letter-spacing: 0.02em;
   color: var(--text-tertiary);
-  letter-spacing: 0.05em;
-  margin-right: 0.125rem;
+  font-variant-numeric: tabular-nums;
+  animation: fadeIn 0.25s ease;
 }
-.followup-chip-btn :deep(.btn) { font-size: 0.8125rem; max-width: 100%; }
-.followup-chip-btn :deep(.btn) .btn-icon { width: 12px; height: 12px; }
+.timing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: timingPulse 0.9s ease-in-out infinite;
+}
+@keyframes timingPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(0.5); opacity: 0.4; }
+}
+.timing-live { color: var(--primary); font-weight: 600; }
+.timing-icon { width: 11px; height: 11px; flex-shrink: 0; }
+.timing-sep { opacity: 0.5; }
+.timing-total { color: var(--text-secondary); font-weight: 600; }
+.timing-meta.timing-error .timing-total,
+.timing-meta.timing-error .timing-icon { color: var(--error, #ef4444); }
+
+/* Deep-thinking trace: a collapsible block above the answer body. Auto-opens
+   while reasoning streams in, collapses to a one-line "Thought for X.XXs"
+   summary when the answer starts. Same quiet microcopy register as the
+   timing chip — present, but never louder than the answer. */
+.thinking-block {
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  overflow: hidden;
+  animation: fadeIn 0.25s ease;
+}
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.375rem 0.625rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  text-align: left;
+  transition: color 0.15s ease;
+}
+.thinking-toggle:hover { color: var(--text-secondary); }
+.thinking-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.thinking-chevron.open { transform: rotate(180deg); }
+.thinking-bolt { width: 11px; height: 11px; flex-shrink: 0; }
+.thinking-status { font-weight: 600; }
+.thinking-content {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.625rem 1.75rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+/* Right-aligned nudge in the input toolbar when Deep Think is on. */
+.thinking-mode-hint {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  animation: fadeIn 0.25s ease;
+}
 
 .feedback-bar {
   display: flex;

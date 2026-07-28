@@ -95,6 +95,7 @@ def make_service():
     svc.api_key = svc.settings.SILICON_FLOW_API_KEY
     svc.model = svc.settings.EMBEDDING_MODEL
     svc._semaphore = asyncio.Semaphore(5)
+    svc._client = None  # lazy shared client, created on first _get_client()
     return svc
 
 

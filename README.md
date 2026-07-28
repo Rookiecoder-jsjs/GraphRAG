@@ -202,7 +202,7 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 
 ## 🔌 API 接口设计
 
-所有需要鉴权的接口都要求 `Authorization: Bearer <jwt>` header。SSE 进度接口也通过 header 鉴权，**不接受** URL `?token=` 参数。
+所有需要鉴权的接口都要求 `Authorization: Bearer <jwt>` header。SSE 进度接口**优先**使用 header 鉴权；但由于原生 `EventSource` 客户端无法设置自定义 header，作为兼容回退也接受 `?token=` 查询参数。⚠️ 查询参数形式会把 token 泄露进反向代理访问日志与浏览器历史，请将此类 URL 视为敏感信息（前端 `EventSource` 即使用此回退方式）。
 
 ### 🔐 认证 `/api/auth`
 - `POST /api/auth/register` — 用户注册（用户名 3-50 字符 `[A-Za-z0-9_.-]`、密码 ≥ 8 字符且必须含字母+数字）
@@ -325,7 +325,7 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | 🗝️ API 密钥 | 环境变量 | **勿**硬编码到代码；`.env` 已 gitignore |
 | 🚦 生产模式 | `APP_ENV=production` | 默认 JWT_SECRET 启动时直接 `RuntimeError` |
 | 🚪 401 处理 | 拦截器去重 | 防重入 + 派发 `auth:logout` 事件 |
-| 📡 进度 SSE | Authorization header | 不接受 `?token=` URL 参数（避免日志泄露） |
+| 📡 进度 SSE | Authorization header 优先 | EventSource 回退接受 `?token=`（会进代理日志，视为敏感 URL） |
 | 💾 嵌入缓存 | JSON 序列化 | 取代 `pickle`（防反序列化漏洞） |
 | ✅ 注册校验 | 强校验 | 用户名 `[A-Za-z0-9_.-]`、密码 ≥ 8 字符含字母+数字 |
 | 👥 Neo4j 删除 | 跨用户隔离 | `delete_document` step 4 强制 `user_id` 过滤 |

@@ -1,43 +1,59 @@
 """Progress tracking using Server-Sent Events (SSE)."""
 import asyncio
 import json
-from typing import Dict, Callable, Optional, List
+import logging
+from typing import Dict, Callable, Optional, List, Set
 from collections import defaultdict
 import aiosqlite
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class ProgressEmitter:
     """Centralized progress event emitter using asyncio."""
 
     def __init__(self):
-        self._subscribers: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
-        self._locks: Dict[str, asyncio.Lock] = {}
+        # Each subscriber gets its OWN queue. A single shared queue per doc_id
+        # made multiple watchers (e.g. two browser tabs) steal events
+        # round-robin, and any one client disconnecting deleted the queue out
+        # from under the others. A set of per-subscriber queues fixes both.
+        self._subscribers: Dict[str, Set[asyncio.Queue]] = defaultdict(set)
 
     def subscribe(self, doc_id: str) -> asyncio.Queue:
-        """Subscribe to progress updates for a document."""
-        if doc_id not in self._locks:
-            self._locks[doc_id] = asyncio.Lock()
-        return self._subscribers[doc_id]
+        """Create and register a fresh per-subscriber queue for a document."""
+        queue: asyncio.Queue = asyncio.Queue()
+        self._subscribers[doc_id].add(queue)
+        return queue
 
-    def unsubscribe(self, doc_id: str):
-        """Unsubscribe from progress updates."""
-        if doc_id in self._subscribers:
-            del self._subscribers[doc_id]
-        if doc_id in self._locks:
-            del self._locks[doc_id]
+    def unsubscribe(self, doc_id: str, queue: Optional[asyncio.Queue] = None):
+        """Remove a subscriber's queue.
+
+        When ``queue`` is given, only that subscriber is removed (preferred).
+        Omitting it drops every subscriber for the doc — kept for backwards
+        compatibility, but avoid it when multiple clients may be watching.
+        """
+        if queue is None:
+            self._subscribers.pop(doc_id, None)
+            return
+        queues = self._subscribers.get(doc_id)
+        if queues is not None:
+            queues.discard(queue)
+            if not queues:
+                self._subscribers.pop(doc_id, None)
 
     async def emit(self, doc_id: str, progress_type: str, message: str, data: dict = None):
-        """Emit a progress event."""
+        """Emit a progress event to every subscriber of a document."""
         event = {
             "type": progress_type,
             "message": message,
             "data": data or {}
         }
 
-        if doc_id in self._subscribers:
-            await self._subscribers[doc_id].put(event)
+        # Iterate a snapshot so a concurrent unsubscribe can't mutate the set.
+        for queue in list(self._subscribers.get(doc_id, ())):
+            await queue.put(event)
 
     async def emit_and_save(self, doc_id: str, user_id: int, progress_type: str, message: str,
                            data: dict = None, entity_count: int = 0, relation_count: int = 0):

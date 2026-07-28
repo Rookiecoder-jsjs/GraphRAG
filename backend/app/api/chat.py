@@ -2,6 +2,7 @@
 import json
 import logging
 import math
+import time
 import uuid
 from typing import List, Dict, Any, AsyncGenerator, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.auth import get_current_user
+from app.config import get_settings
 from app.database import get_db
 from app.models.chat import ChatRequest, ChatResponse, Conversation
 from app.services.embedding import get_embedding_service
@@ -29,6 +31,37 @@ class FeedbackRequest(BaseModel):
     """Submit / replace a 👍/👎 rating on a single assistant message."""
     rating: str = Field(..., pattern="^(up|down)$")
     note: Optional[str] = Field(default=None, max_length=500)
+
+
+async def _resolve_conversation_id(
+    conversation_id: Optional[str], user_id: int, title: str
+) -> str:
+    """Return a conversation_id verified to belong to ``user_id``, creating one if absent.
+
+    SECURITY: when a ``conversation_id`` is supplied we must confirm ownership
+    before writing. Without this check any authenticated user could inject
+    messages into another user's conversation and — because the chat path loads
+    conversation history into the LLM prompt — read that user's content back
+    through the model's answer. A missing/foreign conversation 404s.
+    """
+    if conversation_id:
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                (conversation_id, user_id),
+            ) as cursor:
+                if not await cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+        return conversation_id
+
+    new_id = str(uuid.uuid4())
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)",
+            (new_id, user_id, title),
+        )
+        await db.commit()
+    return new_id
 
 
 # How many context chunks to expose to the LLM. We cap aggressively so the
@@ -263,17 +296,26 @@ async def build_rag_context(
             a COMPARISON instruction asking the LLM to structure the
             answer to highlight cross-document agreements/disagreements.
     """
-    # Query preprocessing
+    settings = get_settings()
+    t_start = time.perf_counter()
+
+    # Query preprocessing. Rewriting costs a full LLM round-trip (~1s) that
+    # BLOCKS every retrieval step after it, so only pay it for queries long
+    # enough to plausibly benefit — short keyword-style questions (the demo
+    # common case) go straight to retrieval. Tunable via QUERY_REWRITE_MIN_LEN
+    # (0 = always rewrite, i.e. the old behavior).
     search_query = query
-    if use_query_rewrite:
+    if use_query_rewrite and len(query.strip()) >= settings.QUERY_REWRITE_MIN_LEN:
         query_processor = await get_query_processor()
         rewritten = await query_processor.rewrite_query(query)
         if rewritten and len(rewritten) > 0:
             search_query = rewritten
+    t_rewrite = time.perf_counter()
 
     # Get query embedding
     embedding_service = await get_embedding_service()
     query_embedding = await embedding_service.embed_single(search_query)
+    t_embed = time.perf_counter()
 
     # Hybrid search
     chroma = get_chroma_client()
@@ -325,18 +367,23 @@ async def build_rag_context(
                         chunk_ids = [r["chunk_id"] for r in rows]
                         bm25.build_user_index(user_id, chunk_contents, chunk_ids)
 
+        # Recall budget per retriever. RRF + the reranker only need enough
+        # candidates to reliably contain the final top_k; RERANK_RECALL_K=25
+        # roughly halves the rerank payload (and its latency) vs the old 50.
+        recall_k = settings.RERANK_RECALL_K
+
         # Vector search (larger recall for fusion)
-        vector_results = chroma.search(query_embedding, user_id, top_k=50)
+        vector_results = chroma.search(query_embedding, user_id, top_k=recall_k)
 
         # BM25 search
-        bm25_results = bm25.search(search_query, user_id, top_k=50)
+        bm25_results = bm25.search(search_query, user_id, top_k=recall_k)
 
         # RRF fusion
         fused_results = reciprocal_rank_fusion(
             vector_results,
             bm25_results,
             k=60,
-            top_k=50
+            top_k=recall_k
         )
         hybrid_chunks = fused_results
     else:
@@ -354,10 +401,12 @@ async def build_rag_context(
         chunks = merged
     else:
         chunks = hybrid_chunks
+    t_retrieve = time.perf_counter()
 
     # Rerank to get top_k most relevant
     rerank_service = await get_rerank_service()
     chunks = await rerank_service.rerank(search_query, chunks, top_k=top_k)
+    t_rerank = time.perf_counter()
 
     # Get context chunks
     all_chunks = []
@@ -383,6 +432,21 @@ async def build_rag_context(
             if not any(e["name"] == rel["target"] for e in entities):
                 entities.append({"name": rel["target"], "type": "Related"})
 
+    # Per-stage latency breakdown — lets us compare before/after tuning and
+    # immediately spot which step dominates time-to-first-token.
+    t_end = time.perf_counter()
+    logger.info(
+        "build_rag_context timing: rewrite=%.3fs embed=%.3fs retrieve=%.3fs "
+        "rerank=%.3fs enrich=%.3fs total=%.3fs (context_chunks=%d)",
+        t_rewrite - t_start,
+        t_embed - t_rewrite,
+        t_retrieve - t_embed,
+        t_rerank - t_retrieve,
+        t_end - t_rerank,
+        t_end - t_start,
+        len(all_chunks),
+    )
+
     return {
         "chunks": all_chunks,
         "entities": entities,
@@ -398,17 +462,10 @@ async def chat(
     """Non-streaming chat with RAG."""
     user_id = current_user["id"]
 
-    # Get or create conversation
-    if request.conversation_id:
-        conversation_id = request.conversation_id
-    else:
-        conversation_id = str(uuid.uuid4())
-        async with get_db() as db:
-            await db.execute(
-                "INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)",
-                (conversation_id, user_id, request.message[:50])
-            )
-            await db.commit()
+    # Verify ownership (or create) before writing into the conversation.
+    conversation_id = await _resolve_conversation_id(
+        request.conversation_id, user_id, request.message[:50]
+    )
 
     # Save user message
     async with get_db() as db:
@@ -429,15 +486,21 @@ async def chat(
     else:
         context = {"chunks": [], "entities": [], "relations": []}
 
-    # Get conversation history
+    # Get conversation history — the 10 MOST RECENT messages, in chronological
+    # order. We select newest-first (DESC, id as a tie-breaker for same-second
+    # timestamps) then reverse, so long conversations keep recent context
+    # instead of the stale opening turns.
     conversation_history = []
     async with get_db() as db:
         async with db.execute(
-            "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at LIMIT 10",
+            "SELECT role, content FROM messages "
+            "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT 10",
             (conversation_id,)
         ) as cursor:
             rows = await cursor.fetchall()
-            conversation_history = [{"role": r["role"], "content": r["content"]} for r in rows]
+            conversation_history = [
+                {"role": r["role"], "content": r["content"]} for r in reversed(rows)
+            ]
 
     # Build a numbered citation context for the prompt
     if context["chunks"]:
@@ -491,46 +554,27 @@ async def chat(
         num_sources=len(citation["sources"]),
     )
 
-    # Optional follow-up chips — same semantics as the streaming path.
-    # Failure is non-fatal; the client just renders zero chips.
-    followups: List[str] = []
-    if request.with_followups:
-        try:
-            followups = await llm_service.generate_followups(
-                request.message, response, n=3,
-            )
-        except Exception as e:
-            logger.warning("generate_followups failed: %s", e)
-            followups = []
-
     return {
         "message": response,
         "conversation_id": conversation_id,
         "related_chunks": context["chunks"][:3],
         "related_entities": context["entities"][:5],
         "sources": citation["sources"],
-        "followups": followups,
         "citation_coverage": coverage,
     }
 
 
 async def chat_stream_generator(
     request: ChatRequest,
-    user_id: int
+    user_id: int,
+    conversation_id: str,
 ) -> AsyncGenerator[str, None]:
-    """Generator for streaming chat responses."""
-    # Get or create conversation
-    if request.conversation_id:
-        conversation_id = request.conversation_id
-    else:
-        conversation_id = str(uuid.uuid4())
-        async with get_db() as db:
-            await db.execute(
-                "INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)",
-                (conversation_id, user_id, request.message[:50])
-            )
-            await db.commit()
+    """Generator for streaming chat responses.
 
+    ``conversation_id`` is resolved and ownership-verified by the caller
+    (``chat_stream``) BEFORE this generator starts, so a foreign conversation
+    yields a clean 404 instead of a half-opened SSE stream.
+    """
     # Save user message
     async with get_db() as db:
         await db.execute(
@@ -551,6 +595,7 @@ async def chat_stream_generator(
         context = {"chunks": [], "entities": [], "relations": []}
 
     # Build a numbered citation context for the prompt
+    t_cite_start = time.perf_counter()
     if context["chunks"]:
         citation = await _build_citation_context(
             context["chunks"], user_id, comparison_mode=request.compare_mode,
@@ -561,6 +606,7 @@ async def chat_stream_generator(
             "sources": [],
             "chunk_id_to_index": {},
         }
+    t_cite_end = time.perf_counter()
 
     # Push the sources FIRST so the client can render citation chips while
     # the text is still streaming. Sources are tied to a query, not a
@@ -585,10 +631,47 @@ Context:
     # Stream response
     llm_service = await get_llm_service()
     full_response = []
+    thinking_parts = []
+    t_stream_start = time.perf_counter()
+    t_first_byte: Optional[float] = None
 
-    async for chunk in llm_service.chat_complete_stream(messages):
-        full_response.append(chunk)
-        yield f"data: {chunk}\n\n"
+    # chat_complete_stream yields (kind, text) tuples: "thinking" frames
+    # carry the model's reasoning (hybrid-thinking mode only) and get their
+    # own SSE event so the client renders them in a separate collapsible
+    # block; the first-byte metric below stays anchored to the first
+    # "content" chunk so the two modes are directly comparable.
+    async for kind, text in llm_service.chat_complete_stream(
+        messages, enable_thinking=request.enable_thinking
+    ):
+        if not text:
+            continue  # defensive: never forward None/empty deltas downstream
+        if kind == "thinking":
+            thinking_parts.append(text)
+            yield f"event: thinking\ndata: {json.dumps({'text': text})}\n\n"
+            continue
+        if t_first_byte is None:
+            t_first_byte = time.perf_counter()
+        full_response.append(text)
+        # JSON-encode the chunk: a raw newline in the model output would
+        # otherwise terminate the SSE `data:` field mid-token and corrupt
+        # the frame (dropping/garbling text on the client).
+        yield f"data: {json.dumps({'chunk': text})}\n\n"
+
+    t_stream_end = time.perf_counter()
+    # Full server-side attribution for one turn, pairing the in-context
+    # build_rag_context line: first_byte here minus that total there is the
+    # LLM provider's own prefill/queue latency (the part we don't control).
+    logger.info(
+        "chat_stream timing: citation=%.3fs first_byte=%.3fs stream=%.3fs "
+        "turn=%.3fs (context_chunks=%d, answer_chars=%d, thinking_chars=%d)",
+        t_cite_end - t_cite_start,
+        (t_first_byte or t_stream_end) - t_stream_start,
+        t_stream_end - t_stream_start,
+        t_stream_end - t_cite_start,
+        len(context["chunks"]),
+        sum(len(c) for c in full_response),
+        sum(len(t) for t in thinking_parts),
+    )
 
     # Save complete response
     complete_response = "".join(full_response)
@@ -614,21 +697,8 @@ Context:
         num_sources=len(citation["sources"]),
     )
 
-    # Optional follow-up chips — emit as a separate SSE event AFTER the
-    # body so the client can render the answer first, then surface the
-    # chips below it. Failure is non-fatal (generate_followups swallows
-    # its own errors); we still emit the 'done' event either way.
-    if request.with_followups:
-        followups: List[str] = []
-        try:
-            followups = await llm_service.generate_followups(
-                request.message, complete_response, n=3,
-            )
-        except Exception as e:
-            logger.warning("generate_followups failed: %s", e)
-            followups = []
-        yield f"event: followups\ndata: {json.dumps({'followups': followups})}\n\n"
-
+    # The answer is fully streamed, saved, and coverage is computed — the
+    # turn is logically complete.
     yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id, 'sources': citation['sources'], 'citation_coverage': coverage})}\n\n"
 
 
@@ -640,8 +710,14 @@ async def chat_stream(
     """Streaming chat with RAG."""
     user_id = current_user["id"]
 
+    # Verify ownership (or create) BEFORE opening the stream, so a foreign
+    # conversation_id returns a clean 404 instead of a half-opened response.
+    conversation_id = await _resolve_conversation_id(
+        request.conversation_id, user_id, request.message[:50]
+    )
+
     return StreamingResponse(
-        chat_stream_generator(request, user_id),
+        chat_stream_generator(request, user_id, conversation_id),
         media_type="text/event-stream"
     )
 

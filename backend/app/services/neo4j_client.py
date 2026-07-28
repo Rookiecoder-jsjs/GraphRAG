@@ -113,6 +113,66 @@ class Neo4jClient:
                     MERGE (curr)-[:NEXT]->(next)
                 """, chunk_id=chunk_id, next_id=next_chunk_id)
 
+    async def create_chunk_nodes_batch(
+        self, doc_id: str, user_id: int, chunks: List[Dict[str, Any]]
+    ) -> int:
+        """Bulk-create Chunk nodes + CONTAINS links in ONE round-trip (UNWIND).
+
+        Replaces the per-chunk create_chunk_node loop in the ingestion
+        pipeline: an N-chunk document used to cost 2N+ serial Neo4j
+        round-trips (~5–15ms each); this is a single transaction.
+
+        Each chunk dict must contain: chunk_id, content, hierarchy_path
+        (list[str]), position (int). Node properties match create_chunk_node
+        exactly, so downstream queries (CONTAINS-edge traversals, graph
+        visualisation) see no difference.
+
+        The Document node is MERGEd once before the UNWIND (the pipeline
+        always creates it earlier via create_document_node; the MERGE keeps
+        this helper safe to call standalone, mirroring create_chunk_node's
+        old per-call MERGE).
+        """
+        if not chunks:
+            return 0
+        async with self.session() as session:
+            result = await session.run("""
+                MERGE (d:Document {doc_id: $doc_id})
+                SET d.user_id = $user_id
+                WITH d
+                UNWIND $chunks AS ch
+                MERGE (c:Chunk {chunk_id: ch.chunk_id})
+                SET c.content = ch.content,
+                    c.hierarchy_path = ch.hierarchy_path,
+                    c.position = ch.position,
+                    c.user_id = $user_id,
+                    c.created_at = datetime()
+                MERGE (d)-[:CONTAINS]->(c)
+                RETURN count(c) AS created
+            """, doc_id=doc_id, user_id=user_id, chunks=chunks)
+            record = await result.single()
+            return record["created"] if record else 0
+
+    async def create_chunk_links_batch(self, links: List[Dict[str, str]]) -> int:
+        """Bulk-create NEXT links between chunks in ONE round-trip (UNWIND).
+
+        Each link dict must contain: from_id, to_id. The caller is expected
+        to have deduplicated pairs already (prev/next pointers are
+        symmetric, so naive expansion double-counts every edge — MERGE
+        would dedupe anyway, but sending unique pairs halves the work).
+        """
+        if not links:
+            return 0
+        async with self.session() as session:
+            result = await session.run("""
+                UNWIND $links AS link
+                MATCH (a:Chunk {chunk_id: link.from_id})
+                MATCH (b:Chunk {chunk_id: link.to_id})
+                MERGE (a)-[:NEXT]->(b)
+                RETURN count(*) AS linked
+            """, links=links)
+            record = await result.single()
+            return record["linked"] if record else 0
+
     async def create_entity(self, name: str, entity_type: str, description: Optional[str],
                            user_id: int) -> str:
         """Create or update an entity node."""
@@ -419,7 +479,7 @@ class Neo4jClient:
 
     async def search_entities(self, query: str, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         """Search entities by name (case-insensitive)."""
-        print(f"   Neo4j search: query='{query}', user_id={user_id}")
+        logger.debug(f"   Neo4j search: query='{query}', user_id={user_id}")
         async with self.session() as session:
             # First check all entities for this user
             check_result = await session.run("""
@@ -429,7 +489,7 @@ class Neo4jClient:
             """, user_id=user_id)
             check_record = await check_result.single()
             total_entities = check_record["total"] if check_record else 0
-            print(f"   Total entities for user {user_id}: {total_entities}")
+            logger.debug(f"   Total entities for user {user_id}: {total_entities}")
 
             # Now search
             result = await session.run("""
@@ -439,7 +499,7 @@ class Neo4jClient:
                 LIMIT $limit
             """, search_term=query, user_id=user_id, limit=limit)
             entities = [record.data() async for record in result]
-            print(f"   Found {len(entities)} matching entities")
+            logger.debug(f"   Found {len(entities)} matching entities")
             return entities
 
     async def get_related_entities(self, entity_names: List[str], user_id: int,
@@ -930,7 +990,7 @@ class Neo4jClient:
 
     async def get_full_graph_for_visualization(self, user_id: int) -> Dict[str, Any]:
         """Get complete graph with ALL nodes and relationships for visualization."""
-        print(f"   Getting full graph for user {user_id}")
+        logger.debug(f"   Getting full graph for user {user_id}")
         async with self.session() as session:
             nodes = {}
             edges = []
@@ -1010,7 +1070,7 @@ class Neo4jClient:
                     "properties": {"user_id": record['user_id']}
                 }
 
-            print(f"   Found {len(nodes)} total nodes")
+            logger.debug(f"   Found {len(nodes)} total nodes")
 
             # Get all relationships between these nodes
             # OWNS: (User)-[:OWNS]->(Document)
@@ -1098,7 +1158,7 @@ class Neo4jClient:
                     "type": "RELATES_TO"
                 })
 
-            print(f"   Found {len(edges)} total relationships")
+            logger.debug(f"   Found {len(edges)} total relationships")
 
             return {
                 "nodes": list(nodes.values()),
@@ -1107,7 +1167,7 @@ class Neo4jClient:
 
     async def delete_user_data(self, user_id: int):
         """Delete all data for a user."""
-        print(f"[neo4j] Deleting all data for user {user_id}")
+        logger.debug(f"[neo4j] Deleting all data for user {user_id}")
         async with self.session() as session:
             # Delete all relations first
             await session.run("""
@@ -1137,11 +1197,11 @@ class Neo4jClient:
                 DETACH DELETE d
             """, user_id=user_id)
 
-            print(f"[neo4j] All data deleted for user {user_id}")
+            logger.debug(f"[neo4j] All data deleted for user {user_id}")
 
     async def delete_document(self, doc_id: str, user_id: int):
         """Delete a document and its chunks, entities, and relations."""
-        print(f"[neo4j] ====== DELETE START: doc_id={doc_id}, user_id={user_id} ======")
+        logger.debug(f"[neo4j] ====== DELETE START: doc_id={doc_id}, user_id={user_id} ======")
 
         async with self.session() as session:
             # First, let's see what's currently in the database
@@ -1151,7 +1211,7 @@ class Neo4jClient:
                 RETURN count(e) as count
             """, user_id=user_id)
             record = await result.single()
-            print(f"[neo4j] BEFORE DELETE: Total entities in DB: {record['count'] if record else 0}")
+            logger.debug(f"[neo4j] BEFORE DELETE: Total entities in DB: {record['count'] if record else 0}")
 
             # Check how many chunks exist for this user
             result = await session.run("""
@@ -1160,7 +1220,7 @@ class Neo4jClient:
                 RETURN count(c) as count
             """, user_id=user_id)
             record = await result.single()
-            print(f"[neo4j] BEFORE DELETE: Total chunks in DB: {record['count'] if record else 0}")
+            logger.debug(f"[neo4j] BEFORE DELETE: Total chunks in DB: {record['count'] if record else 0}")
 
             # Step 1: Check if Document exists, collect chunk IDs
             result = await session.run("""
@@ -1173,7 +1233,7 @@ class Neo4jClient:
             chunk_ids = record["chunk_ids"] if record else []
 
             if not doc_exists:
-                print(f"[neo4j] Document {doc_id} not found in Neo4j!")
+                logger.debug(f"[neo4j] Document {doc_id} not found in Neo4j!")
                 # Still print stats
                 result = await session.run("""
                     MATCH (e:Entity)
@@ -1181,10 +1241,10 @@ class Neo4jClient:
                     RETURN count(e) as count
                 """, user_id=user_id)
                 record = await result.single()
-                print(f"[neo4j] AFTER DELETE: Total entities: {record['count'] if record else 0}")
+                logger.debug(f"[neo4j] AFTER DELETE: Total entities: {record['count'] if record else 0}")
                 return
             else:
-                print(f"[neo4j] Found document with {len(chunk_ids)} chunks")
+                logger.debug(f"[neo4j] Found document with {len(chunk_ids)} chunks")
 
             # Step 2: Collect entity names that are mentioned in this document's chunks
             result = await session.run("""
@@ -1194,7 +1254,7 @@ class Neo4jClient:
             """, chunk_ids=chunk_ids, user_id=user_id)
             record = await result.single()
             entity_names = record["entity_names"] if record else []
-            print(f"[neo4j] Entities in THIS document: {len(entity_names)}")
+            logger.debug(f"[neo4j] Entities in THIS document: {len(entity_names)}")
 
             # Step 3: Delete MENTIONS relations from chunks
             if chunk_ids:
@@ -1205,7 +1265,7 @@ class Neo4jClient:
                     RETURN count(r) as deleted
                 """, chunk_ids=chunk_ids)
                 record = await result.single()
-                print(f"[neo4j] Step 3: Deleted {record['deleted'] if record else 0} MENTIONS relations")
+                logger.debug(f"[neo4j] Step 3: Deleted {record['deleted'] if record else 0} MENTIONS relations")
 
             # Step 4: Delete entities that were IN THIS DOCUMENT only if no
             # remaining chunk (of the SAME user) still mentions them. The
@@ -1236,7 +1296,7 @@ class Neo4jClient:
                     RETURN count(r) as deleted
                 """, user_id=user_id, entity_names=entity_names)
                 record = await result.single()
-                print(f"[neo4j] Step 5: Deleted {record['deleted'] if record else 0} RELATES_TO relations")
+                logger.debug(f"[neo4j] Step 5: Deleted {record['deleted'] if record else 0} RELATES_TO relations")
 
             # Step 6: Delete Document and Chunk nodes
             result = await session.run("""
@@ -1246,7 +1306,7 @@ class Neo4jClient:
                 RETURN count(d) as deleted
             """, doc_id=doc_id)
             record = await result.single()
-            print(f"[neo4j] Step 6: Deleted {record['deleted'] if record else 0} documents")
+            logger.debug(f"[neo4j] Step 6: Deleted {record['deleted'] if record else 0} documents")
 
             # Final stats
             result = await session.run("""
@@ -1255,7 +1315,7 @@ class Neo4jClient:
                 RETURN count(e) as count
             """, user_id=user_id)
             record = await result.single()
-            print(f"[neo4j] ====== DELETE COMPLETE: Remaining entities: {record['count'] if record else 0} ======")
+            logger.debug(f"[neo4j] ====== DELETE COMPLETE: Remaining entities: {record['count'] if record else 0} ======")
 
 
 # Singleton instance
