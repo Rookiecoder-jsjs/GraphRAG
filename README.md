@@ -17,11 +17,11 @@
 1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块
 2. 🔍 **混合检索**：基于硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + Qwen3-Reranker 重排序 + RRF 融合
 3. 🕸️ **知识图谱可视化**：d3 + Vue 3 实现的交互式力导向图谱，支持节点拖拽、实体编辑、合并与删除
-4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈
+4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）
 5. 📊 **仪表盘与时间线**：文档 / 实体 / 标签统计、月度增长、近期活动、实体首现时间线
 6. 🗺️ **文档聚类地图**：2D PCA 投影可视化所有文档的语义分布
 7. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
-8. 🛡️ **健壮性**：统一 logging、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环
+8. 🛡️ **健壮性**：统一 logging、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、向量索引零成本重建脚本
 
 ## 技术架构
 
@@ -72,12 +72,15 @@ D:/NC/
 │   │   │   ├── fusion.py        # RRF / 加权融合
 │   │   │   ├── reranker.py      # 硅基流动 Rerank
 │   │   │   ├── query_processor.py  # 查询改写 / 变体 / 实体抽取
-│   │   │   └── progress_tracker.py  # SSE 进度跟踪
+│   │   │   ├── progress_tracker.py  # SSE 进度跟踪
+│   │   │   └── doc_status.py    # 文档处理状态机（pending/processing/indexed/failed）
+│   │   ├── auth/                # JWT 鉴权 + bcrypt 密码哈希 + 限流中间件
 │   │   ├── utils/md_parser.py   # Markdown 解析（markitdown 防御性封装）
 │   │   ├── config.py            # 配置管理（含 CORS 白名单 + 生产校验）
 │   │   ├── database.py          # SQLite 初始化
 │   │   ├── logger.py            # 统一 logging 配置
 │   │   └── main.py              # FastAPI 入口
+│   ├── scripts/rebuild_chroma.py # 向量索引零成本重建（SQLite chunks + embedding 缓存 → Chroma）
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/                     # Vue 3 + d3 前端（学术雅致派双主题）
@@ -104,7 +107,7 @@ D:/NC/
 │   │   ├── api/                  # axios 客户端封装（auth/documents/chat/graph/...）
 │   │   ├── router/index.js       # 路由 + 鉴权守卫
 │   │   ├── store/auth.js         # Pinia auth store
-│   │   ├── utils/                # categorize / timelineAnim 工具
+│   │   ├── utils/                # categorize / timelineAnim / SSE 流式解析 工具
 │   │   ├── styles/variables.css  # 学术雅致派设计令牌（墨蓝+琥珀双主题）
 │   │   ├── App.vue
 │   │   └── main.js
@@ -233,8 +236,11 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `POST   /api/graph/entities/merge` — 合并实体（`{source, target}`，source 被删除并重新指向 target）
 
 ### 💬 对话 `/api/chat`
-- `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `with_followups`）
+- `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `enable_thinking`）
 - `POST   /api/chat/stream` — 发送消息（Server-Sent Events 流式）
+
+> 流式帧顺序：`event: sources`（参考来源）→ `event: thinking`（仅当 `enable_thinking=true`，模型推理过程，可折叠）→ 默认 `data:` 帧（回答正文 chunk）→ `event: done`（终止）。
+> 深度思考模式：`enable_thinking` 透传 Qwen 混合思考参数，模型先流式输出 `reasoning_content` 再输出正文；对不支持该参数的模型层，HTTP 400 时自动去参重试一次。首字计时锚定到正文首 token，非推理首 token。
 - `GET    /api/chat/conversations` — 获取对话列表
 - `GET    /api/chat/conversations/{id}/messages` — 获取对话历史
 - `DELETE /api/chat/conversations/{id}` — 删除对话
@@ -274,6 +280,8 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
     → 向量检索 + BM25 → RRF 融合 → Qwen3-Reranker
     → 上下文扩展 (前/后 chunk) → Neo4j 图谱关联
     → 构建 Prompt → Kimi / 百炼 LLM → 流式返回结果
+        ├─ enable_thinking=true:  先流式 reasoning_content (event: thinking)
+        └─ 默认:                  直接流式正文 (data: chunk)
 ```
 
 ## 🧬 核心数据模型
@@ -326,7 +334,8 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | 🚦 生产模式 | `APP_ENV=production` | 默认 JWT_SECRET 启动时直接 `RuntimeError` |
 | 🚪 401 处理 | 拦截器去重 | 防重入 + 派发 `auth:logout` 事件 |
 | 📡 进度 SSE | Authorization header 优先 | EventSource 回退接受 `?token=`（会进代理日志，视为敏感 URL） |
-| 💾 嵌入缓存 | JSON 序列化 | 取代 `pickle`（防反序列化漏洞） |
+| 💾 嵌入缓存 | JSON 序列化 | 取代 `pickle`（防反序列化漏洞）；损坏 blob 自愈剔除 |
+| 🚦 API 限流 | 中间件 | `app/auth/rate_limit.py` 对认证接口限流，防暴力枚举 |
 | ✅ 注册校验 | 强校验 | 用户名 `[A-Za-z0-9_.-]`、密码 ≥ 8 字符含字母+数字 |
 | 👥 Neo4j 删除 | 跨用户隔离 | `delete_document` step 4 强制 `user_id` 过滤 |
 | ⚡ 批量写入 | UNWIND | 实体/关系/MENTIONS 由 N 次往返降为 1 次 |
@@ -409,6 +418,19 @@ docker-compose up -d
 ../.venv/Scripts/python.exe -m pytest backend/tests
 ```
 
+### ♻️ 向量索引重建（运维）
+
+当 Chroma 向量丢失（容器重建 / 误删 / 迁移）但 SQLite 的 `chunks` 表与 `embedding_cache` 仍在时，可零 API 成本回灌：
+
+```bash
+cd backend
+../.venv/Scripts/python.exe scripts/rebuild_chroma.py
+# 输出示例：
+# [info] chunks with cached embedding: 54
+# [info] upserted batch 1: 54/54
+# [done] upserted 54 chunks; collection now holds 54 vectors
+```
+
 ### 🐳 Docker 部署
 
 ```bash
@@ -475,6 +497,8 @@ vite ^7.2.4
 7. 🛡️ **markitdown 防御**：`utils/md_parser.py` 兼容新旧 API（`text_content` / `markdown` / `title`），失败时回退到 `txt` 解析
 8. 🧩 **Neo4j APOC**：docker-compose 启用了 APOC 插件，UNWIND 批量写入依赖其函数
 9. ⚠️ **实体合并**：`POST /api/graph/entities/merge` 会硬删 source 并将所有引用指向 target，操作不可逆
+10. 🔧 **Chroma entrypoint 绕过**：`docker-compose.yml` 覆盖了 chromadb 0.4.18 镜像 entrypoint——原 entrypoint 每次启动 `pip install --force-reinstall chroma-hnswlib`，新版会拉入 numpy 2.x 导致 `np.float_` 崩溃。改为直接跑 uvicorn，沿用镜像内可用的 hnswlib
+11. ♻️ **向量索引重建**：若 Chroma 向量丢失（容器重建/误删/迁移），运行 `backend/scripts/rebuild_chroma.py` 可从 SQLite `chunks` + `embedding_cache`（md5-keyed）零 API 成本回灌，复用 `get_chroma_client` 保证集合名/cosine/upsert 与摄入路径一致
 
 ## 📜 许可证
 
