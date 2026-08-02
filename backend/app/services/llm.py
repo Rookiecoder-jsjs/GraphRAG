@@ -1,14 +1,20 @@
-"""Bailian (百炼) LLM service."""
+"""Bailian (百炼) LLM service — thin shell delegating to the active provider.
+
+The provider registry (``app/services/providers/``) owns the wire-level
+chat completions (URL, auth, SSE streaming, retry quirks); this shell owns
+the domain logic: prompt building, RAG response generation, entity/relation
+extraction orchestration, and multimodal image attachment loading.
+"""
 import asyncio
 import base64
 import logging
 import re
 from pathlib import Path
-import httpx
 from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 import json
 
 from app.config import get_settings
+from app.services.providers import KIND_LLM, get_provider_class
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +36,11 @@ class LLMService:
 
     def __init__(self):
         self.settings = get_settings()
-        self.base_url = self.settings.BAILIAN_BASE_URL
-        self.api_key = self.settings.BAILIAN_API_KEY
-        self.default_model = self.settings.BAILIAN_MODEL
-        self._client: Optional[httpx.AsyncClient] = None
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=120.0,
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=50)
-            )
-        return self._client
+        provider_name = self.settings.LLM_PROVIDER.lower()
+        self._provider = get_provider_class(KIND_LLM, provider_name)(self.settings)
+        self.base_url = self._provider.base_url
+        self.api_key = self._provider.api_key
+        self.default_model = self._provider.default_model
 
     async def chat_complete(
         self,
@@ -65,56 +63,13 @@ class LLMService:
         Returns:
             Generated response text
         """
-        client = await self._get_client()
-
-        if not self.api_key:
-            raise ValueError("No API key configured")
-
-        # Resolve the model from config (settings.BAILIAN_MODEL) when the
-        # caller doesn't pin one. This is the single source of truth; the old
-        # literal default in the signature silently overrode the config.
-        model = model or self.default_model
-
-        try:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-
-        except httpx.HTTPError as e:
-            # Retry with delay
-            await asyncio.sleep(1)
-            try:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"]
-            except Exception as retry_error:
-                raise
+        return await self._provider.chat_complete(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=stream,
+        )
 
     async def chat_complete_stream(
         self,
@@ -146,109 +101,13 @@ class LLMService:
             "thinking" (reasoning stream — only when thinking is enabled
             and the model supports it).
         """
-        client = await self._get_client()
-
-        # Resolve the model from config (settings.BAILIAN_MODEL) when the
-        # caller doesn't pin one. This is the single source of truth; the old
-        # literal default in the signature silently overrode the config.
-        model = model or self.default_model
-
-        payload: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": True,
-        }
-        if enable_thinking is not None:
-            payload["enable_thinking"] = enable_thinking
-
-        url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        try:
-            async for item in self._stream_completions(client, url, headers, payload):
-                yield item
-        except httpx.HTTPStatusError as e:
-            if (
-                enable_thinking is not None
-                and e.response is not None
-                and e.response.status_code == 400
-            ):
-                # Non-thinking model tier: the provider rejects the
-                # enable_thinking param. Drop it and retry ONCE so the user
-                # gets a normal answer rather than an error bubble. Nothing
-                # was yielded before raise_for_status fired, so the retry is
-                # transparent to the caller.
-                logger.warning(
-                    "enable_thinking=%s rejected by provider (HTTP 400: %.200s); "
-                    "retrying without it",
-                    enable_thinking, e.response.text,
-                )
-                payload.pop("enable_thinking", None)
-                try:
-                    async for item in self._stream_completions(client, url, headers, payload):
-                        yield item
-                except Exception as retry_error:
-                    yield ("content", f"\n[Error: {str(retry_error)}]")
-            else:
-                yield ("content", f"\n[Error: {str(e)}]")
-        except Exception as e:
-            yield ("content", f"\n[Error: {str(e)}]")
-
-    async def _stream_completions(
-        self,
-        client: httpx.AsyncClient,
-        url: str,
-        headers: Dict[str, str],
-        payload: Dict[str, Any],
-    ) -> AsyncGenerator[Tuple[str, str], None]:
-        """Open one SSE stream and yield (kind, text) delta tuples.
-
-        kind is "thinking" for the ``reasoning_content`` field (Qwen hybrid
-        thinking) and "content" for the answer body. Raises on HTTP errors
-        so the caller can decide whether a param-rejection retry applies.
-        """
-        async with client.stream("POST", url, headers=headers, json=payload) as response:
-            response.raise_for_status()
-
-            async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    data_str = line[6:]
-                    if data_str == "[DONE]":
-                        break
-                    try:
-                        data = json.loads(data_str)
-                        # Providers send a trailing usage-only frame with an
-                        # EMPTY choices list; guard before indexing [0] or
-                        # we IndexError (which the outer handler would
-                        # inject into the answer as "[Error: ...]").
-                        choices = data.get("choices") or []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta", {})
-                        # Qwen hybrid thinking emits the reasoning stream in
-                        # `reasoning_content` BEFORE the answer body starts.
-                        # Forward it under the "thinking" kind so callers can
-                        # route it to a separate UI block and keep the main
-                        # first-token metric anchored to the answer body.
-                        reasoning = delta.get("reasoning_content")
-                        if reasoning:
-                            yield ("thinking", reasoning)
-                        # OpenAI-compatible providers also emit deltas like
-                        # {"content": null} (role-only / final frames). The
-                        # key is present but the value is None — yielding
-                        # that produced `{"chunk": null}` and later crashed
-                        # the "".join() in the caller. Only forward real,
-                        # non-empty text.
-                        content = delta.get("content")
-                        if content:
-                            yield ("content", content)
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+        return self._provider.chat_complete_stream(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            enable_thinking=enable_thinking,
+        )
 
     async def extract_entities_batch(
         self,
@@ -695,10 +554,8 @@ Context:
         return content
 
     async def close(self):
-        """Close HTTP client."""
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+        """Close the provider's shared HTTP client (no-op if never created)."""
+        await self._provider.close()
 
 
 # Singleton instance

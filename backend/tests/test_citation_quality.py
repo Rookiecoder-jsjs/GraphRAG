@@ -48,37 +48,50 @@ def check(name: str, cond: bool, detail: str = ""):
 # 1. RerankService.rerank attaches relevance_score
 # =========================================================================
 
-def test_rerank_returns_chunks_with_relevance_score():
-    """The reranker calls a remote API; we mock the HTTP response. The
-    service should return chunks with a `relevance_score` field matching
-    the API's `relevance_score` (or `score` for some vendors)."""
+class _FakeRerankerProvider:
+    """Scripted reranker provider: returns {index, score} results, or
+    raises the given exception. Records what the shell sent it."""
+
+    def __init__(self, results, error=None):
+        self._results = list(results)
+        self._error = error
+        self.last_query = None
+        self.last_documents = None
+        self.last_top_n = None
+
+    async def rerank(self, query, documents, top_n):
+        self.last_query = query
+        self.last_documents = list(documents)
+        self.last_top_n = top_n
+        if self._error:
+            raise self._error
+        return [dict(r) for r in self._results]
+
+
+def _make_rerank_svc(results, error=None):
     from app.services.reranker import RerankService
 
     svc = RerankService.__new__(RerankService)
-    svc.base_url = "https://example.test"
-    svc.api_key = "fake"
-    svc.model = "fake-rerank"
-    svc._client = None
     svc.settings = type("S", (), {"IMAGE_RESULT_QUOTA": 2})()
+    svc._provider = _FakeRerankerProvider(results, error=error)
+    return svc
+
+
+def test_rerank_returns_chunks_with_relevance_score():
+    """The reranker shell delegates the wire call to the provider and
+    attaches each returned score to the right chunk. Order follows the
+    provider's verdict, not the original input order."""
+    svc = _make_rerank_svc([
+        {"index": 0, "score": 0.92},
+        {"index": 2, "score": 0.31},
+        {"index": 1, "score": 0.55},
+    ])
 
     chunks = [
         {"chunk_id": "a", "content": "first"},
         {"chunk_id": "b", "content": "second"},
         {"chunk_id": "c", "content": "third"},
     ]
-
-    fake_resp = _mock.AsyncMock()
-    fake_resp.raise_for_status = _mock.Mock()
-    fake_resp.json = _mock.Mock(return_value={
-        "results": [
-            {"index": 0, "relevance_score": 0.92},
-            {"index": 2, "relevance_score": 0.31},
-            {"index": 1, "relevance_score": 0.55},
-        ]
-    })
-    fake_client = _mock.AsyncMock()
-    fake_client.post = _mock.AsyncMock(return_value=fake_resp)
-    svc._get_client = _mock.AsyncMock(return_value=fake_client)
 
     out = asyncio.run(svc.rerank("query", chunks, top_k=3))
 
@@ -87,37 +100,62 @@ def test_rerank_returns_chunks_with_relevance_score():
           abs(out[0]["relevance_score"] - 0.92) < 1e-6)
     check("rerank: each chunk carries a float score",
           all(isinstance(c.get("relevance_score"), float) for c in out))
-    check("rerank: order matches API order, not original order",
+    check("rerank: order matches provider order, not original order",
           [c["chunk_id"] for c in out] == ["a", "c", "b"])
+    check("rerank: documents sent to the provider in chunk order",
+          svc._provider.last_documents == ["first", "second", "third"]
+          and svc._provider.last_top_n == 3)
 
 
-def test_rerank_handles_vendor_score_field():
-    """Some rerank APIs use `score` instead of `relevance_score`. We
-    should accept both (defensive — siliconflow uses relevance_score
-    today but jina / cohere use different field names)."""
-    from app.services.reranker import RerankService
+def test_reranker_provider_accepts_both_score_fields():
+    """The siliconflow provider normalizes either `relevance_score`
+    (siliconflow default) or `score` (jina / cohere style) to `score`."""
+    from app.services.providers.reranker_siliconflow import (
+        SiliconFlowRerankerProvider,
+    )
 
-    svc = RerankService.__new__(RerankService)
-    svc.base_url = "https://example.test"
-    svc.api_key = "fake"
-    svc.model = "fake-rerank"
-    svc._client = None
-    svc.settings = type("S", (), {"IMAGE_RESULT_QUOTA": 2})()
+    provider = SiliconFlowRerankerProvider.__new__(SiliconFlowRerankerProvider)
+    provider.base_url = "https://example.test"
+    provider.api_key = "fake"
+    provider.model = "fake-rerank"
+    provider._client = None
 
     fake_resp = _mock.AsyncMock()
     fake_resp.raise_for_status = _mock.Mock()
     fake_resp.json = _mock.Mock(return_value={
         "results": [
             {"index": 0, "score": 0.8},  # vendor B style
+            {"index": 1, "relevance_score": 0.5},  # siliconflow style
         ]
     })
     fake_client = _mock.AsyncMock()
     fake_client.post = _mock.AsyncMock(return_value=fake_resp)
-    svc._get_client = _mock.AsyncMock(return_value=fake_client)
+    provider._get_client = _mock.AsyncMock(return_value=fake_client)
 
-    out = asyncio.run(svc.rerank("q", [{"chunk_id": "a", "content": "x"}], top_k=1))
-    check("rerank: accepts 'score' as fallback field name",
-          abs(out[0]["relevance_score"] - 0.8) < 1e-6)
+    out = asyncio.run(provider.rerank("q", ["x", "y"], top_n=2))
+    check("provider: both field spellings normalized to 'score'",
+          out == [{"index": 0, "score": 0.8}, {"index": 1, "score": 0.5}],
+          f"got {out}")
+
+
+def test_rerank_falls_back_to_original_order_on_provider_error():
+    """When the provider call fails (transport / HTTP), the shell keeps the
+    original order with no scores — the safe degraded path."""
+    import httpx
+
+    svc = _make_rerank_svc([], error=httpx.HTTPError("boom"))
+    chunks = [
+        {"chunk_id": "a", "content": "first"},
+        {"chunk_id": "b", "content": "second"},
+        {"chunk_id": "c", "content": "third"},
+    ]
+
+    out = asyncio.run(svc.rerank("q", chunks, top_k=2))
+
+    check("rerank: provider failure → original order, no scores",
+          [c["chunk_id"] for c in out] == ["a", "b"]
+          and all("relevance_score" not in c for c in out),
+          f"got {out}")
 
 
 # =========================================================================
@@ -281,7 +319,8 @@ def test_chat_response_envelope_has_coverage_field():
 
 ALL_TESTS = [
     test_rerank_returns_chunks_with_relevance_score,
-    test_rerank_handles_vendor_score_field,
+    test_reranker_provider_accepts_both_score_fields,
+    test_rerank_falls_back_to_original_order_on_provider_error,
     test_quality_for_score_bands,
     test_quality_for_score_handles_bad_input,
     test_build_citation_context_adds_score_and_quality_per_source,

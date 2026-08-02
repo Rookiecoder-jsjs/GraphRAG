@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     LLM_MODEL_KIMI: str = "kimi-k2-0905-preview"
     LLM_MODEL_SILICON: str = "Qwen/Qwen3-8B-Instruct"
 
+    # Provider selection for LLM / reranker — keys into the provider
+    # registry (app/services/providers/). Mirrors EMBEDDING_PROVIDER: a
+    # hard switch, not a failover; invalid values are rejected at startup.
+    LLM_PROVIDER: str = "bailian"
+    RERANKER_PROVIDER: str = "siliconflow"
+
     # JWT
     JWT_SECRET: str = "your-secret-key-change-this-in-production"
     JWT_ALGORITHM: str = "HS256"
@@ -123,6 +129,30 @@ class Settings(BaseSettings):
     # Rerank
     RERANK_MODEL: str = "Qwen/Qwen3-Reranker-8B"
 
+    # Retrieval pipeline composition. Steps are keys into the retrieval
+    # step registry (app/services/retrieval/steps.py); an unknown name
+    # fails at startup (main.py lifespan validation). Chat runs the full
+    # hybrid chain (graph_retrieve self-skips unless use_graph_rag is
+    # set); search is vector-only + image promotion by design.
+    CHAT_PIPELINE: str = (
+        "query_rewrite,graph_retrieve,query_embed,bm25_retrieve,"
+        "vector_retrieve,rrf_fuse,rerank,context_enrich,entity_enrich"
+    )
+    SEARCH_PIPELINE: str = (
+        "query_embed,vector_retrieve,rerank,image_promote,"
+        "context_enrich,entity_enrich"
+    )
+
+    # Graph-RAG fusion strategy. True: graph candidate chunks enter RRF
+    # as a third lane, competing fairly with vector + BM25. False: the
+    # legacy behavior — graph hits are prepended ahead of the fused set
+    # (operator rollback without code changes).
+    GRAPH_RRF_LANE: bool = True
+    # When the graph lane is active, merge query rewrite + entity
+    # extraction into ONE LLM call (halves the blocking LLM latency of
+    # the old two-call flow). False restores the exact two-call behavior.
+    CHAT_COMBINED_REWRITE_EXTRACT: bool = True
+
     # Retrieval latency tuning
     # Query rewriting costs a full LLM round-trip that BLOCKS retrieval, so
     # it is only worth paying for longer queries. Queries shorter than this
@@ -183,6 +213,12 @@ _INSECURE_JWT_SECRETS = {
 # model — or worse, mix vector spaces after a partial switch.
 _EMBEDDING_PROVIDERS = {"siliconflow", "dashscope"}
 
+# Valid LLM / reranker provider values — keys into the provider registry
+# (app/services/providers/). Single-provider today; the list grows when a
+# second vendor is registered.
+_LLM_PROVIDERS = {"bailian"}
+_RERANKER_PROVIDERS = {"siliconflow"}
+
 
 @lru_cache()
 def get_settings() -> Settings:
@@ -207,5 +243,15 @@ def get_settings() -> Settings:
             f"expected one of {sorted(_EMBEDDING_PROVIDERS)}. Switching providers "
             "changes the vector space — re-run scripts/migrate_embeddings.py "
             "with the backend stopped."
+        )
+    if settings.LLM_PROVIDER.lower() not in _LLM_PROVIDERS:
+        raise RuntimeError(
+            f"LLM_PROVIDER={settings.LLM_PROVIDER!r} is not valid; "
+            f"expected one of {sorted(_LLM_PROVIDERS)}"
+        )
+    if settings.RERANKER_PROVIDER.lower() not in _RERANKER_PROVIDERS:
+        raise RuntimeError(
+            f"RERANKER_PROVIDER={settings.RERANKER_PROVIDER!r} is not valid; "
+            f"expected one of {sorted(_RERANKER_PROVIDERS)}"
         )
     return settings
