@@ -68,7 +68,7 @@
         >
           <div class="result-header">
             <h3 class="result-title">{{ result.title || result.filename || 'Document' }}</h3>
-            <Tag shape="score">{{ (result.score || result.similarity || 0).toFixed(2) }}</Tag>
+            <Tag shape="score">{{ result.score !== null && result.score !== undefined ? (result.score * 100).toFixed(1) + '%' : '–' }}</Tag>
           </div>
 
           <div v-if="result.modality === 'image' && result.image_url" class="result-image">
@@ -122,17 +122,35 @@ const handleSearch = async () => {
   hasSearched.value = true
 
   try {
-    const { data } = await searchApi.search(query.value, 10, true)
+    // top_k=20 (was 10) so image chunks that rank after the text recall
+    // pool — common with the multimodal shared space, since exact-text
+    // matches in markdown often outrank semantic image matches — still
+    // surface in the default view.
+    const { data } = await searchApi.search(query.value, 20, true)
     const searchResults = data.chunks || data.results || []
     results.value = searchResults.map(r => {
       const modality = r.metadata?.modality || 'text'
+      // Score precedence:
+      //  1. relevance_score — set by the reranker on text chunks that
+      //     were in the original recall top_k. Most accurate signal
+      //     because it accounts for both vector and BM25 lanes.
+      //  2. 1 - distance — fallback for chunks the reranker skipped
+      //     (images) or didn't touch (rare). Distance is cosine, so
+      //     1 - distance = similarity in [0, 1].
+      //  3. null — context-expanded siblings (prev/next neighbours)
+      //     that were not in the original recall. They have neither
+      //     distance nor relevance_score; showing a fake 1.00 here
+      //     would make them look like exact matches.
+      const rerankScore = (typeof r.relevance_score === 'number') ? r.relevance_score : null
+      const vecScore = (typeof r.distance === 'number') ? 1 - r.distance : null
+      const displayScore = rerankScore ?? vecScore
       return {
         chunk: r.content || r.chunk,
         title: modality === 'image'
           ? (r.metadata?.hierarchy_path || 'Image')
           : (r.metadata?.title || r.metadata?.source || r.filename || 'Document'),
-        score: 1 - (r.distance || 0),
-        similarity: 1 - (r.distance || 0),
+        score: displayScore,
+        similarity: displayScore,
         metadata: r.metadata,
         modality,
         image_url: buildImageUrl(r.metadata),

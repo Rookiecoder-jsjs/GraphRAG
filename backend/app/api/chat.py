@@ -28,6 +28,23 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
+def _extract_image_attachments(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Filter retrieved chunks down to image chunks with an on-disk path.
+
+    The LLM is natively multimodal, so images that the vector search
+    surfaced get attached to the request as real image inputs (not just
+    source cards). Only chunks that carry a resolvable ``image_path`` are
+    eligible; the path is validated again inside the LLM service (realpath
+    fence + extension + size), so an attacker-controlled chunk can never
+    smuggle an arbitrary file into the prompt.
+    """
+    return [
+        c for c in chunks
+        if (c.get("metadata") or {}).get("modality") == "image"
+        and (c.get("metadata") or {}).get("image_path")
+    ]
+
+
 class FeedbackRequest(BaseModel):
     """Submit / replace a 👍/👎 rating on a single assistant message."""
     rating: str = Field(..., pattern="^(up|down)$")
@@ -574,6 +591,7 @@ async def chat(
         custom_context_str=citation["context_str"],
         citation_instruction=_CITATION_INSTRUCTION if citation["sources"] else None,
         comparison_mode=request.compare_mode,
+        image_attachments=_extract_image_attachments(context["chunks"]),
     )
 
     # Save assistant message
@@ -670,13 +688,28 @@ Context:
 
 {_CITATION_INSTRUCTION if citation['sources'] else ''}"""
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": request.message}
-    ]
-
-    # Stream response
+    # User message carries the text query, plus any retrieved images as
+    # multimodal inputs (the model is natively multimodal — see the
+    # non-streaming path). Image paths are re-validated inside the LLM
+    # service (realpath fence + extension + size).
     llm_service = await get_llm_service()
+    image_paths = [
+        (c.get("metadata") or {}).get("image_path")
+        for c in _extract_image_attachments(context["chunks"])
+    ]
+    if image_paths:
+        user_content = await llm_service.build_multimodal_user_message(
+            request.message, image_paths
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.message},
+        ]
     full_response = []
     thinking_parts = []
     t_stream_start = time.perf_counter()

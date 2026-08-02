@@ -1,7 +1,9 @@
 """Bailian (百炼) LLM service."""
 import asyncio
+import base64
 import logging
 import re
+from pathlib import Path
 import httpx
 from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
 import json
@@ -9,6 +11,18 @@ import json
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Images larger than this are not sent into the LLM prompt. base64 inflates
+# the payload by ~33%, so a 2 MB ceiling keeps the request body ~2.7 MB —
+# safely under provider body limits while still covering real screenshots
+# (the demo DeepSeek benchmark capture is ~1 MB).
+LLM_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
+_IMAGE_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
 
 
 class LLMService:
@@ -433,6 +447,7 @@ Rules:
         custom_context_str: Optional[str] = None,
         citation_instruction: Optional[str] = None,
         comparison_mode: bool = False,
+        image_attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         Generate a RAG response based on retrieved context.
@@ -456,6 +471,13 @@ Rules:
                 expected to have already formatted the context with
                 document titles inline (so the LLM can identify which
                 source each claim came from).
+            image_attachments: Retrieved image chunks (modality == "image"
+                with an ``image_path``). Sent to the model as multimodal
+                image inputs alongside the text query — the model is
+                natively multimodal, so it can read the image content
+                directly. Capped at IMAGE_RESULT_QUOTA and validated per
+                image (fence + extension + size). The images do NOT appear
+                in the text context_str; they ride on the user message.
 
         Returns:
             Generated response
@@ -489,13 +511,22 @@ Rules:
             "references so the user can click through to the original chunks."
             if comparison_mode else ""
         )
+        # The images ride on the user message OUTSIDE the text context_str,
+        # so the stock "use ONLY the provided context" line could make the
+        # model treat them as decoration and refuse to read them. Explicitly
+        # name them as part of the context when they are present.
+        multimodal_note = (
+            "\n\nImages attached to the user message ARE part of the provided "
+            "context — read them and use their content when answering."
+            if image_attachments else ""
+        )
 
         system_prompt = f"""You are a helpful assistant answering questions based on the provided documents and knowledge graph.
-Use ONLY the information from the provided context. If the answer is not in the context, say so clearly.
+Use ONLY the information from the provided context (including any attached images). If the answer is not in the context, say so clearly.
 
 Context:
 {context_str}
-{graph_context}{citation_block}{comparison_block}"""
+{graph_context}{citation_block}{comparison_block}{multimodal_note}"""
 
         messages = [{"role": "system", "content": system_prompt}]
 
@@ -503,7 +534,18 @@ Context:
         if conversation_history:
             messages.extend(conversation_history[-5:])  # Last 5 messages
 
-        messages.append({"role": "user", "content": query})
+        # User message carries the text query, and — when the retrieval
+        # surfaced images — the images themselves as multimodal inputs.
+        image_paths = [
+            (a.get("metadata") or {}).get("image_path") or a.get("image_path")
+            for a in (image_attachments or [])
+        ]
+        image_paths = [p for p in image_paths if p]
+        if image_paths:
+            user_content = await self.build_multimodal_user_message(query, image_paths)
+            messages.append({"role": "user", "content": user_content})
+        else:
+            messages.append({"role": "user", "content": query})
 
         return await self.chat_complete(messages, temperature=0.7, max_tokens=8000)
 
@@ -588,6 +630,69 @@ Context:
                     "relations": [],
                 }
         return empty
+
+    async def _load_image_data_uri(self, image_path: str) -> Optional[str]:
+        """Load an image from disk as a base64 data URI, or None.
+
+        Security: ``image_path`` is always resolved INSIDE IMAGE_DIR (the
+        realpath fence — traversal like ``../../etc/passwd`` or an absolute
+        path cannot escape), the extension must be a known image type, and
+        oversized files are dropped rather than inflating the prompt.
+        """
+        try:
+            base = Path(self.settings.IMAGE_DIR).resolve()
+            # SQLite stores the RELATIVE path "images/<doc_id>/<file>"
+            # (the prefix predates IMAGE_DIR, when images lived under
+            # UPLOAD_DIR/images). IMAGE_DIR is already the images root, so
+            # strip the prefix — and stay compatible with prefix-less
+            # paths in case storage changes.
+            rel = (
+                image_path[len("images/"):]
+                if image_path.startswith("images/") else image_path
+            )
+            full = (base / rel).resolve()
+            if str(full) != str(base) and not str(full).startswith(str(base) + "\\"):
+                logger.warning("image attachment outside IMAGE_DIR rejected: %s", image_path)
+                return None
+            ext = full.suffix.lower()
+            mime = _IMAGE_MIME_BY_EXT.get(ext)
+            if mime is None:
+                logger.warning("image attachment with unsupported extension rejected: %s", ext)
+                return None
+            if not full.is_file():
+                logger.warning("image attachment missing on disk: %s", image_path)
+                return None
+            if full.stat().st_size > LLM_IMAGE_MAX_BYTES:
+                logger.warning(
+                    "image attachment too large (%.1f MB > %.1f MB): %s",
+                    full.stat().st_size / 1024 / 1024,
+                    LLM_IMAGE_MAX_BYTES / 1024 / 1024,
+                    image_path,
+                )
+                return None
+            data = full.read_bytes()
+        except OSError as e:
+            logger.warning("image attachment read failed (%s): %s", e, image_path)
+            return None
+        return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+    async def build_multimodal_user_message(
+        self, text: str, image_paths: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Build a user message whose content can carry images.
+
+        qwen3.7-flash is natively multimodal (verified 2026-08-02: it reads
+        benchmark tables from screenshots), so retrieved image chunks go
+        into the request as base64 data URIs alongside the text instead of
+        being pre-captioned. ``image_paths`` are capped at the image result
+        quota and individually validated (fence + extension + size).
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+        for path in image_paths[: self.settings.IMAGE_RESULT_QUOTA]:
+            uri = await self._load_image_data_uri(path)
+            if uri:
+                content.append({"type": "image_url", "image_url": {"url": uri}})
+        return content
 
     async def close(self):
         """Close HTTP client."""
