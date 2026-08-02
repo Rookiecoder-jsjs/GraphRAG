@@ -66,13 +66,19 @@ def check(name: str, cond: bool, detail: str = ""):
 
 
 # `pytest.approx` may not be importable when running standalone, so provide
-# a minimal shim.
+# a minimal shim. Both branches share ONE contract — `_approx(value, expected)`
+# returns a bool — so call sites behave identically with or without pytest.
+# (Previously the pytest branch aliased `pytest.approx` directly, whose
+# different signature + non-bool return blew up `check()` in boolean context.)
 try:
     import pytest  # noqa: F401
     _HAS_PYTEST = True
-    _approx = pytest.approx
+
+    def _approx(value, expected, tol=1e-9):
+        return bool(value == pytest.approx(expected, abs=tol))
 except ImportError:
     _HAS_PYTEST = False
+
     def _approx(value, expected, tol=1e-9):
         return abs(value - expected) <= tol
 
@@ -392,6 +398,80 @@ def test_run_evaluation_refusal_path():
 
 
 # =========================================================================
+# Baseline comparison
+# =========================================================================
+
+def _report(summary: dict, cases: list | None = None) -> dict:
+    return {"summary": summary, "cases": cases or []}
+
+
+def test_compare_identical_runs_no_regression():
+    from eval.runner import compare_to_baseline
+
+    report = _report({"hit@5_mean": 0.8, "mrr_mean": 0.7, "ndcg@5_mean": 0.75})
+    comp = compare_to_baseline(report, report, max_regression=0.05)
+    check("identical runs: no regressions, all deltas zero",
+          comp["regressions"] == []
+          and all(row["delta"] == 0.0 for row in comp["rows"])
+          and len(comp["rows"]) == 3)
+
+
+def test_compare_regression_beyond_threshold_flagged():
+    from eval.runner import compare_to_baseline
+
+    baseline = _report({"hit@5_mean": 1.0, "mrr_mean": 0.9, "ndcg@5_mean": 0.9})
+    current = _report({"hit@5_mean": 0.6, "mrr_mean": 0.88, "ndcg@5_mean": 0.89})
+    comp = compare_to_baseline(current, baseline, max_regression=0.05)
+    check("drop of 0.4 on hit@5 is flagged; 0.02 drops are not",
+          comp["regressions"] == ["hit@5_mean"],
+          f"got {comp['regressions']}")
+
+
+def test_compare_within_threshold_and_improvement_ok():
+    from eval.runner import compare_to_baseline
+
+    baseline = _report({"hit@5_mean": 0.80, "mrr_mean": 0.70, "ndcg@5_mean": 0.70})
+    current = _report({"hit@5_mean": 0.77, "mrr_mean": 0.75, "ndcg@5_mean": 0.71})
+    comp = compare_to_baseline(current, baseline, max_regression=0.05)
+    check("-0.03 drop and positive deltas pass the 0.05 gate",
+          comp["regressions"] == [])
+
+
+def test_compare_missing_metrics_skipped():
+    from eval.runner import compare_to_baseline
+
+    baseline = _report({"hit@5_mean": 0.8})  # mrr / ndcg absent
+    current = _report({"hit@5_mean": 0.8, "mrr_mean": 0.9})
+    comp = compare_to_baseline(current, baseline, max_regression=0.05)
+    check("metrics absent from either report are skipped, not crashed on",
+          [row["metric"] for row in comp["rows"]] == ["hit@5_mean"]
+          and comp["regressions"] == [])
+
+
+def test_compare_case_rows_diff_per_case():
+    from eval.runner import compare_to_baseline
+
+    baseline = _report({}, cases=[
+        {"id": "a", "metrics": {"hit@5": 1.0, "mrr": 0.5}},
+        {"id": "b", "metrics": {"hit@5": 0.0}},
+    ])
+    current = _report({}, cases=[
+        {"id": "a", "metrics": {"hit@5": 1.0, "mrr": 1.0}},
+        {"id": "b", "metrics": {"hit@5": 1.0}},
+        {"id": "c", "metrics": {"hit@5": 1.0}},  # not in baseline → no row
+    ])
+    comp = compare_to_baseline(current, baseline, max_regression=0.05)
+    by_id = {row["id"]: row for row in comp["case_rows"]}
+    check("per-case deltas computed where both sides have the metric",
+          by_id["a"]["mrr_delta"] == 0.5
+          and by_id["a"]["hit@5_delta"] == 0.0
+          and by_id["b"]["hit@5_delta"] == 1.0
+          and "mrr_delta" not in by_id["b"]
+          and "c" not in by_id,
+          f"got {comp['case_rows']}")
+
+
+# =========================================================================
 # Driver
 # =========================================================================
 
@@ -435,6 +515,11 @@ ALL_TESTS = [
     test_evaluate_case_with_answer_provider,
     test_run_evaluation_aggregation,
     test_run_evaluation_refusal_path,
+    test_compare_identical_runs_no_regression,
+    test_compare_regression_beyond_threshold_flagged,
+    test_compare_within_threshold_and_improvement_ok,
+    test_compare_missing_metrics_skipped,
+    test_compare_case_rows_diff_per_case,
 ]
 
 

@@ -242,10 +242,101 @@ def format_markdown_report(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ---------- Baseline comparison -------------------------------------------
+
+# Metrics that gate a model/pipeline swap. Means over cases, as produced
+# by `aggregate` (suffix `_mean`).
+WATCHED_METRICS = ("hit@5_mean", "mrr_mean", "ndcg@5_mean")
+
+
+def compare_to_baseline(
+    report: Dict[str, Any],
+    baseline: Dict[str, Any],
+    max_regression: float,
+    watched: Sequence[str] = WATCHED_METRICS,
+) -> Dict[str, Any]:
+    """Diff a fresh report against a saved baseline JSON report.
+
+    Pure function (no I/O) so it is unit-testable. Returns:
+      - rows: one {metric, baseline, current, delta} per watched summary
+        metric present in both reports (delta = current - baseline)
+      - case_rows: per-case {id, hit@5_delta, mrr_delta} where both exist
+      - regressions: watched metrics whose delta < -max_regression
+    """
+    current_summary = report.get("summary", {})
+    baseline_summary = baseline.get("summary", {})
+
+    rows: List[Dict[str, Any]] = []
+    regressions: List[str] = []
+    for metric in watched:
+        base_value = baseline_summary.get(metric)
+        current_value = current_summary.get(metric)
+        if not isinstance(base_value, (int, float)) or not isinstance(
+            current_value, (int, float)
+        ):
+            continue
+        delta = current_value - base_value
+        rows.append({
+            "metric": metric,
+            "baseline": round(float(base_value), 4),
+            "current": round(float(current_value), 4),
+            "delta": round(float(delta), 4),
+        })
+        if delta < -max_regression:
+            regressions.append(metric)
+
+    baseline_by_id = {
+        row["id"]: row.get("metrics", {})
+        for row in baseline.get("cases", [])
+    }
+    case_rows: List[Dict[str, Any]] = []
+    for row in report.get("cases", []):
+        metrics = row.get("metrics", {})
+        base_metrics = baseline_by_id.get(row["id"], {})
+        entry: Dict[str, Any] = {"id": row["id"]}
+        for metric in ("hit@5", "mrr"):
+            if isinstance(metrics.get(metric), (int, float)) and isinstance(
+                base_metrics.get(metric), (int, float)
+            ):
+                entry[f"{metric}_delta"] = round(
+                    metrics[metric] - base_metrics[metric], 4
+                )
+        if len(entry) > 1:
+            case_rows.append(entry)
+
+    return {"rows": rows, "case_rows": case_rows, "regressions": regressions}
+
+
+def format_comparison(comparison: Dict[str, Any], max_regression: float) -> str:
+    """Render a comparison dict as a plain-text block for stderr."""
+    lines: List[str] = ["", f"Baseline comparison (max regression {max_regression}):"]
+    lines.append(f"  {'metric':<16} {'baseline':>9} {'current':>9} {'delta':>9}")
+    for row in comparison["rows"]:
+        lines.append(
+            f"  {row['metric']:<16} {row['baseline']:>9.3f} "
+            f"{row['current']:>9.3f} {row['delta']:>+9.3f}"
+        )
+    for row in comparison["case_rows"]:
+        parts = [
+            f"{key}={value:+.2f}"
+            for key, value in row.items()
+            if key != "id"
+        ]
+        if parts:
+            lines.append(f"  case {row['id']}: " + ", ".join(parts))
+    if comparison["regressions"]:
+        lines.append(
+            "  REGRESSION beyond threshold: " + ", ".join(comparison["regressions"])
+        )
+    else:
+        lines.append("  No regression beyond threshold.")
+    return "\n".join(lines)
+
+
 # ---------- Live pipeline wiring (for the __main__ entry) ----------------
 
 async def _build_rag_context_retriever(
-    user_id: int, use_graph_rag: bool = False,
+    user_id: int, use_graph_rag: bool = False, use_query_rewrite: bool = True,
 ) -> Retriever:
     """Wrap `build_rag_context` so it returns ranked chunk_ids.
 
@@ -260,7 +351,7 @@ async def _build_rag_context_retriever(
             user_id=user_id,
             top_k=top_k,
             use_hybrid=True,
-            use_query_rewrite=True,
+            use_query_rewrite=use_query_rewrite,
             use_graph_rag=use_graph_rag,
         )
         # `chunks` comes back in rank order from the reranker.
@@ -269,7 +360,7 @@ async def _build_rag_context_retriever(
     return _retrieve
 
 
-async def _build_rag_answer_provider(user_id: int):
+async def _build_rag_answer_provider(user_id: int, use_query_rewrite: bool = True):
     """Optional: produce the LLM-generated answer for keyword coverage."""
     from app.api.chat import build_rag_context
     from app.services.llm import get_llm_service
@@ -277,7 +368,7 @@ async def _build_rag_answer_provider(user_id: int):
     async def _answer(query: str) -> str:
         ctx = await build_rag_context(
             query=query, user_id=user_id, top_k=5,
-            use_hybrid=True, use_query_rewrite=True,
+            use_hybrid=True, use_query_rewrite=use_query_rewrite,
         )
         llm = await get_llm_service()
         return await llm.generate_rag_response(
@@ -317,6 +408,12 @@ def _build_argparser() -> argparse.ArgumentParser:
              "MENTIONS → hard candidate set, then vector+BM25 to fill.",
     )
     p.add_argument(
+        "--no-rewrite",
+        action="store_true",
+        help="Disable LLM query rewriting. REQUIRED for baseline runs — "
+             "rewriting is nondeterministic and would add jitter to diffs.",
+    )
+    p.add_argument(
         "--k-values",
         type=int,
         nargs="+",
@@ -333,6 +430,20 @@ def _build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the full JSON report to stdout.",
     )
+    p.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="Path to a previous --json report. Prints a delta table for "
+             "watched metrics (hit@5/mrr/ndcg@5) and exits 1 on regression.",
+    )
+    p.add_argument(
+        "--max-regression",
+        type=float,
+        default=0.05,
+        help="Maximum allowed drop per watched metric vs --baseline "
+             "(default: 0.05).",
+    )
     return p
 
 
@@ -345,9 +456,16 @@ async def main_async(argv: Optional[Sequence[str]] = None) -> int:
         return 1
 
     retriever = await _build_rag_context_retriever(
-        args.user_id, use_graph_rag=args.use_graph_rag,
+        args.user_id,
+        use_graph_rag=args.use_graph_rag,
+        use_query_rewrite=not args.no_rewrite,
     )
-    answer_provider = None if args.no_llm else await _build_rag_answer_provider(args.user_id)
+    answer_provider = (
+        None if args.no_llm
+        else await _build_rag_answer_provider(
+            args.user_id, use_query_rewrite=not args.no_rewrite
+        )
+    )
 
     report = await run_evaluation(
         retriever=retriever,
@@ -372,6 +490,21 @@ async def main_async(argv: Optional[Sequence[str]] = None) -> int:
             if key.endswith("_mean"):
                 base = key[: -len("_mean")]
                 print(f"  {base:18s}  {s[key]:.3f}")
+
+    if args.baseline is not None:
+        # Comparison goes to stderr so --json stdout stays machine-readable.
+        try:
+            with args.baseline.open("r", encoding="utf-8") as f:
+                baseline_report = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Could not read baseline {args.baseline}: {e}", file=sys.stderr)
+            return 1
+        comparison = compare_to_baseline(report, baseline_report, args.max_regression)
+        print(
+            format_comparison(comparison, args.max_regression), file=sys.stderr
+        )
+        if comparison["regressions"]:
+            return 1
 
     return 0
 

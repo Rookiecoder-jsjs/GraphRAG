@@ -1,15 +1,15 @@
 {
   "_comment": [
-    "Single-document factual lookup. The model should retrieve the right",
-    "chunk and answer from it. Replace expected_chunk_ids with real IDs",
-    "from your knowledge base — see README 'How to add gold'.",
-    "expected_keywords is a cheap fallback: pass [] or omit if you have",
-    "chunk_ids filled in; the eval will use the more precise chunk metrics."
+    "Single-document factual lookup against user 1's 《第一章 初识智能体》",
+    "document. The gold chunk is section 1.1 '什么是智能体？', which opens",
+    "with the sensors/environment/autonomy definition. Chunk IDs live in",
+    "SQLite (chunks table) and survive re-embedding — see README 'How to",
+    "add gold' for the refresh workflow."
   ],
   "id": "factual-01",
-  "query": "What does the document say about the [main topic]?",
+  "query": "文档中是如何定义智能体(Agent)这个概念的?",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_1"
+    "bb2b88bc-85ee-422e-af18-ca55b756bb92"
   ],
   "expected_keywords": [],
   "difficulty": "easy",

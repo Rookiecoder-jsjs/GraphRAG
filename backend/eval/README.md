@@ -19,13 +19,16 @@ proper regression gate.
 backend/eval/
 ├── __init__.py           # package marker
 ├── metrics.py            # pure retrieval + answer metrics
-├── runner.py             # async runner + CLI entry
-├── test_eval.py          # 39 standalone tests (no pytest required)
+├── runner.py             # async runner + CLI entry + baseline comparison
+├── test_eval.py          # 44 tests (run via pytest — see below)
 ├── README.md             # this file
+├── baselines/            # saved --json reports used as regression gates
 └── gold/
-    ├── 01_factual_lookup.json      # example: simple "what is X" question
-    ├── 02_cross_chunk_synthesis.json  # example: needs multiple chunks
-    └── 03_should_refuse.json       # example: model should decline
+    ├── 01_factual_lookup.json         # factual: agent definition
+    ├── 02_cross_chunk_synthesis.json  # synthesis: 3 collaboration-mode chunks
+    ├── 03_should_refuse.json          # refusal: out-of-corpus question
+    ├── 04_graph_rag.json              # entity-anchored: MetaGPT / CrewAI
+    └── 05_compare.json                # cross-doc: workflow vs agent
 ```
 
 ## Metrics
@@ -74,22 +77,16 @@ Each `gold/*.json` file:
 
 ### 1. Unit tests (no infra required)
 
-Standalone — uses a custom check() runner, no pytest needed:
-
 ```bash
-cd backend
-../.venv/Scripts/python.exe eval/test_eval.py
-```
-
-With pytest (recommended for IDE/CI):
-
-```bash
-pip install pytest pytest-asyncio
 cd backend
 ../.venv/Scripts/python.exe -m pytest eval/test_eval.py -v
 ```
 
-Expected: `All checks passed (39 tests).`
+Expected: `44 passed`.
+
+(The file also has a standalone `python eval/test_eval.py` driver, but its
+`tmp_path` fallback only works in environments **without** pytest installed;
+in a dev venv, use pytest.)
 
 ### 2. Live retrieval eval (no LLM, ~1 second per case)
 
@@ -127,6 +124,37 @@ scores `keyword_coverage` for refusal cases:
 
 Each case now spends API credits. Use sparingly — the `--no-llm` mode is
 plenty for catching retrieval regressions.
+
+### 4. Baseline comparison (regression gate)
+
+Two flags turn the runner into an automated before/after gate:
+
+- `--no-rewrite` — disables LLM query rewriting. **Always use it for
+  baseline runs**: rewriting is nondeterministic and adds jitter to diffs.
+- `--baseline FILE` + `--max-regression 0.05` — compares this run's
+  `hit@5 / mrr / ndcg@5` means (plus per-case deltas) against a previously
+  saved `--json` report. The comparison prints to **stderr** (so `--json`
+  stdout stays machine-readable) and the process **exits 1** if any watched
+  metric dropped by more than the threshold.
+
+Typical model-swap workflow (e.g. changing the embedding provider):
+
+```bash
+cd backend
+# 1. BEFORE the change — capture the baseline (run twice to see jitter)
+../.venv/Scripts/python.exe -m eval.runner --user-id 1 --no-llm --no-rewrite \
+    --json > eval/baselines/siliconflow-2026-08.json
+
+# 2. Make the change (config, re-embed, restart backend)
+
+# 3. AFTER — the gate
+../.venv/Scripts/python.exe -m eval.runner --user-id 1 --no-llm --no-rewrite \
+    --baseline eval/baselines/siliconflow-2026-08.json --max-regression 0.05
+# exit 0 = no regression beyond 0.05; exit 1 = REGRESSION printed on stderr
+```
+
+Gold chunk IDs live in SQLite, so they survive re-embedding — one filled-in
+gold set serves both sides of the comparison.
 
 ## How to add a new gold case
 
@@ -174,6 +202,7 @@ Suggested:
 - **Per-difficulty slicing**: `aggregate()` doesn't slice by difficulty
   yet. The per-case rows are tagged though, so this is a 10-line
   post-processing job.
-- **Threshold-based CI**: wrap the runner, parse `--json`, exit non-zero
-  if any metric drops >X% from a baseline file. Worth doing once you
-  have 20+ cases.
+- **Threshold-based CI**: `--baseline/--max-regression` now provide the
+  core gate (watched means + per-case deltas, exit 1 on regression).
+  Remaining work: slicing the gate by difficulty/tags once there are
+  20+ cases.

@@ -1,24 +1,22 @@
 {
   "_comment": [
-    "Cross-document comparison question. The user wants the LLM to",
-    "organize the answer to highlight agreements and disagreements",
-    "between at least two sources. Toggle Compare on (in the chat UI",
-    "or pass compare_mode=True to the API) so the prompt context is",
-    "augmented with '(from: Doc Title)' markers and the COMPARISON MODE",
-    "instruction.",
-    "expected_keywords: hand-pick 1-2 phrases that prove the LLM did",
-    "an actual cross-doc comparison (e.g. 'Doc A says ...', 'in",
-    "contrast', 'however', 'on the other hand')."
+    "Cross-document comparison. The two gold chunks come from DIFFERENT",
+    "documents of user 1: '2.txt' section 1.4.3 (Workflow vs Agent —",
+    "predefined structured orchestration) and 《第一章 初识智能体》 section",
+    "1.1.1 (traditional agents — model-based/goal-based/utility-based).",
+    "Run with compare_mode=True in the chat UI for the '(from: Doc Title)'",
+    "prompt augmentation; expected_keywords check that the answer actually",
+    "names both concepts."
   ],
   "id": "compare-01",
-  "query": "Compare and contrast 硅基流动 with 阿里云百炼.",
+  "query": "结合两份文档来看,预先定义的传统工作流与自主决策的智能体有什么本质区别?",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_FROM_DOC_A",
-    "REPLACE_WITH_REAL_CHUNK_UUID_FROM_DOC_B"
+    "2740f6ef-4e1a-4335-be24-7bafdb3fb75f",
+    "94a71f7d-0091-4a83-8023-74795f388999"
   ],
   "expected_keywords": [
-    "百炼",
-    "硅基流动"
+    "工作流",
+    "智能体"
   ],
   "difficulty": "medium",
   "tags": ["comparison", "multi-doc"]

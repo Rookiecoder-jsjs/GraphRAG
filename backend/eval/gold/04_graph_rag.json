@@ -1,17 +1,15 @@
 {
   "_comment": [
     "Entity-anchored question designed to benefit from the graph-RAG path.",
-    "The user is asking about a specific entity (e.g. 硅基流动) — the",
-    "graph should MENTION this entity, and the chunks that MENTION it are",
-    "the right answers. Use --use-graph-rag to see if this case's hit@5",
-    "improves vs the baseline (no graph).",
-    "Replace expected_chunk_ids with chunk IDs that actually contain",
-    "information about the entity you care about."
+    "MetaGPT and CrewAI are named entities in the '2.txt' chunk on",
+    "organizational workflows — the graph should MENTION them, so the",
+    "graph-RAG path can pull the right chunk even if vector similarity",
+    "alone ranks it lower. Compare hit@5 with and without --use-graph-rag."
   ],
   "id": "graph-rag-01",
-  "query": "Tell me about 硅基流动 (SiliconFlow).",
+  "query": "MetaGPT 和 CrewAI 是如何组织多智能体协作的?",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_1"
+    "1a14ccf7-04ba-4f46-8f16-875f1765b8a7_2"
   ],
   "expected_keywords": [],
   "difficulty": "medium",
