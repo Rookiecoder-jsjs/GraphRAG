@@ -97,9 +97,14 @@ class EmbeddingService:
         self.settings = get_settings()
         self.provider = self.settings.EMBEDDING_PROVIDER.lower()
         if self.provider == "dashscope":
-            # Native multimodal endpoint; auth shares the Bailian key.
             self._embed_url = self.settings.DASHSCOPE_EMBEDDING_URL
-            self.api_key = self.settings.BAILIAN_API_KEY
+            # Prefer the dedicated VL-embedding key (scoped quota); fall
+            # back to the LLM's Bailian key when the dedicated one is
+            # absent so single-key deployments keep working.
+            self.api_key = (
+                self.settings.BAILIAN_API_KEY_QWEN_VL_EMBEDDING
+                or self.settings.BAILIAN_API_KEY
+            )
             self.model = self.settings.DASHSCOPE_EMBEDDING_MODEL
         else:  # "siliconflow" — validated against _EMBEDDING_PROVIDERS in config
             self._embed_url = f"{self.settings.SILICON_FLOW_BASE_URL}/embeddings"
@@ -108,7 +113,9 @@ class EmbeddingService:
         self._semaphore = asyncio.Semaphore(5)
         self._client: Optional[httpx.AsyncClient] = None
         logger.info(
-            "EmbeddingService ready: provider=%s model=%s", self.provider, self.model
+            "EmbeddingService ready: provider=%s model=%s key=%s",
+            self.provider, self.model,
+            "dedicated" if self.settings.BAILIAN_API_KEY_QWEN_VL_EMBEDDING else "shared",
         )
 
     async def _get_client(self) -> httpx.AsyncClient:

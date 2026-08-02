@@ -124,6 +124,11 @@ class FakeSettings:
         self.SILICON_FLOW_BASE_URL = "https://sf.example.test/v1"
         self.SILICON_FLOW_API_KEY = "test-sf-key"
         self.BAILIAN_API_KEY = "test-bailian-key"
+        # Dedicated embedding key — tests cover both "configured" (this is
+        # set) and "absent, falls back to BAILIAN_API_KEY" paths.
+        self.BAILIAN_API_KEY_QWEN_VL_EMBEDDING = (
+            "test-bailian-vl-key" if provider == "dashscope" else ""
+        )
         self.DASHSCOPE_EMBEDDING_URL = "https://ds.example.test/native-embed"
         self.DASHSCOPE_EMBEDDING_MODEL = "test-vl-model"
         self.EMBEDDING_MODEL = "test-sf-model"
@@ -283,9 +288,9 @@ async def _case_payload_and_auth(provider: str):
     if provider == "dashscope":
         body = req["body"]
         check(
-            "[dashscope] POSTs the native endpoint with BAILIAN key",
+            "[dashscope] POSTs the native endpoint with the dedicated VL key",
             req["url"] == "https://ds.example.test/native-embed"
-            and req["auth"] == "Bearer test-bailian-key",
+            and req["auth"] == "Bearer test-bailian-vl-key",
             f"url={req['url']}, auth={req['auth']}",
         )
         check(
@@ -477,7 +482,7 @@ async def _case_embed_image_payload_and_dim():
         out == VEC
         and image_item.startswith("data:image/png;base64,")
         and body["parameters"] == {"dimension": 4}
-        and t.requests[0]["auth"] == "Bearer test-bailian-key",
+        and t.requests[0]["auth"] == "Bearer test-bailian-vl-key",
         f"body={ {k: v for k, v in body.items() if k != 'input'} }",
     )
 
@@ -543,6 +548,47 @@ asyncio.run(_case_embed_image_payload_and_dim())
 asyncio.run(_case_embed_image_cache_roundtrip())
 asyncio.run(_case_embed_image_empty_bytes_rejected())
 asyncio.run(_case_embed_image_siliconflow_rejected())
+
+
+# ---------- dedicated VL-embedding key wiring -------------------------------
+
+async def _case_dedicated_key_used_when_set():
+    """When BAILIAN_API_KEY_QWEN_VL_EMBEDDING is set, it overrides the LLM key."""
+    t = ScriptedTransport([(200, ds_ok([VEC]), JSON_HEADERS)])
+    patch_client(httpx, t)
+    svc = make_service("dashscope")
+    await svc.embed_single("hello", use_cache=False)
+    check(
+        "[dashscope] dedicated VL key is the Authorization bearer (not the LLM key)",
+        t.requests[0]["auth"] == "Bearer test-bailian-vl-key",
+        f"auth={t.requests[0]['auth']!r}",
+    )
+
+
+async def _case_dedicated_key_falls_back_when_absent():
+    """When the dedicated key is empty, BAILIAN_API_KEY is the fallback
+    (single-key deployments must keep working)."""
+    fake = FakeSettings("dashscope")
+    fake.BAILIAN_API_KEY_QWEN_VL_EMBEDDING = ""
+    original = embedding_module.get_settings
+    embedding_module.get_settings = lambda: fake
+    try:
+        svc = EmbeddingService()
+    finally:
+        embedding_module.get_settings = original
+    t = ScriptedTransport([(200, ds_ok([VEC]), JSON_HEADERS)])
+    patch_client(httpx, t)
+    await svc.embed_single("hello", use_cache=False)
+    check(
+        "[dashscope] empty dedicated key falls back to BAILIAN_API_KEY",
+        t.requests[0]["auth"] == "Bearer test-bailian-key",
+        f"auth={t.requests[0]['auth']!r}",
+    )
+
+
+print("\nDedicated key wiring")
+asyncio.run(_case_dedicated_key_used_when_set())
+asyncio.run(_case_dedicated_key_falls_back_when_absent())
 
 
 def test_all_embedding_checks_passed():

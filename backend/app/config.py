@@ -1,6 +1,7 @@
 """Configuration management for the knowledge graph system."""
 import os
 from functools import lru_cache
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -29,6 +30,20 @@ class Settings(BaseSettings):
     BAILIAN_API_KEY: str = ""
     BAILIAN_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     BAILIAN_MODEL: str = "qwen3.7-flash"
+
+    # Separate, scoped API key for the multimodal embedding model
+    # (qwen3-vl-embedding). Same provider (DashScope), but typically a
+    # different key with its own quota — share with the LLM key only if
+    # you don't mind coupling their limits. Both spellings are accepted:
+    # the canonical BAILIAN_API_KEY_QWEN_VL_EMBEDDING and the legacy
+    # BAILIAN_API_KEY_Qwen-VL-Embedding the user set first.
+    BAILIAN_API_KEY_QWEN_VL_EMBEDDING: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "BAILIAN_API_KEY_QWEN_VL_EMBEDDING",
+            "BAILIAN_API_KEY_Qwen-VL-Embedding",
+        ),
+    )
 
     # LLM Settings
     LLM_MODEL_KIMI: str = "kimi-k2-0905-preview"
