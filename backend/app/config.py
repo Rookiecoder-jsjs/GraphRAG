@@ -1,6 +1,7 @@
 """Configuration management for the knowledge graph system."""
 import os
 from functools import lru_cache
+from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
@@ -58,6 +59,23 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./data/uploads"
     MAX_FILE_SIZE: int = 10485760  # 10MB
 
+    # Root directory for uploaded/extracted images. Defaults to the
+    # repo-root data dir (D:\NC\data\images) anchored on THIS FILE's
+    # location — independent of the process CWD, unlike UPLOAD_DIR which
+    # is relative to the backend working dir. Images live outside
+    # backend/ because they are first-class retrieval units: the LLM reads
+    # them back from disk when they win retrieval (multimodal
+    # attachments), and co-locating them with the other data stores
+    # (sqlite/chromadb/neo4j) gives one backup story. SQLite stores the
+    # RELATIVE path "images/<doc_id>/<file>", resolved against this root —
+    # moving the root is a folder move, no DB rewrite. Override with an
+    # absolute path, or a relative path (resolved against the CWD).
+    IMAGE_DIR: str = Field(
+        default_factory=lambda: str(
+            Path(__file__).resolve().parents[2] / "data" / "images"
+        )
+    )
+
     # Image uploads / multimodal retrieval
     # 8 MB (not 10): images are sent to the embedding API as base64 data
     # URIs, whose ~33% inflation would push a 10 MB image past typical
@@ -66,6 +84,15 @@ class Settings(BaseSettings):
     # Max image hits appended after the reranked text results — images
     # bypass the text-only reranker and keep cosine order.
     IMAGE_RESULT_QUOTA: int = 2
+    # Images whose cosine similarity to the query reaches this threshold
+    # are promoted AHEAD of text results in search — the multimodal
+    # model's own relevance verdict, which the text-only reranker cannot
+    # see (rerank scores live on a compressed ~0.00x scale and would
+    # bury a genuinely relevant image under unrelated texts). Below the
+    # threshold images keep the text-first ordering. Measured against
+    # real corpus (2026-08-02): relevant images 0.49–0.56, irrelevant
+    # images ≤ 0.41 — 0.45 splits cleanly.
+    IMAGE_PROMOTION_THRESHOLD: float = 0.45
     # Extracted images smaller than this on BOTH axes are skipped
     # (icons, bullets, decoration — Phase 2b).
     IMAGE_MIN_DIMENSION: int = 120
@@ -131,8 +158,13 @@ class Settings(BaseSettings):
     # App environment: "development" (default) or "production"
     APP_ENV: str = "development"
 
+    # Load backend/.env FIRST (so it can override the repo-root .env for
+    # backend-specific keys like SQLITE_PATH or UPLOAD_DIR), then fall back
+    # to the repo-root .env for keys the user only set there — most
+    # importantly the dedicated VL-embedding key, which lives at the root
+    # by convention and would otherwise silently fall back to the LLM key.
     class Config:
-        env_file = ".env"
+        env_file = [".env", "../.env"]
         case_sensitive = False
         extra = "ignore"
 

@@ -30,7 +30,9 @@ _TMP_ROOT = tempfile.mkdtemp(prefix="imgpipe_")
 atexit.register(shutil.rmtree, _TMP_ROOT, True)
 os.environ["SQLITE_PATH"] = os.path.join(_TMP_ROOT, "app.db")
 os.environ["UPLOAD_DIR"] = os.path.join(_TMP_ROOT, "uploads")
-os.makedirs(os.path.join(_TMP_ROOT, "uploads", "images"), exist_ok=True)
+os.environ["IMAGE_DIR"] = os.path.join(_TMP_ROOT, "images")
+os.makedirs(os.path.join(_TMP_ROOT, "uploads"), exist_ok=True)
+os.makedirs(os.path.join(_TMP_ROOT, "images"), exist_ok=True)
 
 from app.config import get_settings  # noqa: E402
 
@@ -205,9 +207,9 @@ def _restore_pipeline(originals):
 
 
 def _seed_image_doc(doc_id: str, user_id: int = 1, title: str = "diagram") -> str:
-    """Write a real PNG under UPLOAD_DIR/images/<doc_id>/; return its path."""
+    """Write a real PNG under IMAGE_DIR/<doc_id>/; return its path."""
     settings = get_settings()
-    image_dir = os.path.join(settings.UPLOAD_DIR, "images", doc_id)
+    image_dir = os.path.join(settings.IMAGE_DIR, doc_id)
     os.makedirs(image_dir, exist_ok=True)
     path = os.path.join(image_dir, "abc123.png")
     with open(path, "wb") as f:

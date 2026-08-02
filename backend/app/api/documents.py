@@ -273,7 +273,7 @@ async def _register_image_upload(
 
     doc_id = str(uuid.uuid4())
     sha = hashlib.sha256(file_content).hexdigest()
-    image_dir = os.path.join(settings.UPLOAD_DIR, "images", doc_id)
+    image_dir = os.path.join(settings.IMAGE_DIR, doc_id)
     os.makedirs(image_dir, exist_ok=True)
     image_filename = f"{sha}{file_ext}"
     stored_path = os.path.join(image_dir, image_filename)
@@ -524,7 +524,7 @@ async def process_document_background(
                 )
                 chroma = get_chroma_client()
                 bm25 = get_bm25_service()
-                image_dir = os.path.join(settings.UPLOAD_DIR, "images", doc_id)
+                image_dir = os.path.join(settings.IMAGE_DIR, doc_id)
                 os.makedirs(image_dir, exist_ok=True)
                 placeholders: List[str] = []
                 for offset, img in enumerate(extracted, start=1):
@@ -1130,14 +1130,14 @@ async def _embed_chunks_for_centroid(contents: List[str]) -> List[List[float]]:
 
 
 def _safe_image_path(doc_id: str, filename: str) -> Optional[Path]:
-    """Resolve an image path strictly inside UPLOAD_DIR/images.
+    """Resolve an image path strictly inside IMAGE_DIR.
 
     Returns None (→ 404) on path traversal (``..``, absolute paths,
     symlink escapes), unknown extensions, or missing files. Pure apart
     from the filesystem stat, so it is unit-testable.
     """
     settings = get_settings()
-    base = Path(os.path.realpath(os.path.join(settings.UPLOAD_DIR, "images")))
+    base = Path(os.path.realpath(settings.IMAGE_DIR))
     target = Path(os.path.realpath(os.path.join(base, doc_id, filename)))
     try:
         target.relative_to(base)
@@ -1312,7 +1312,7 @@ async def delete_document(
     # Delete extracted/uploaded images for this document (realpath
     # containment: never rmtree outside the images sandbox).
     settings = get_settings()
-    images_base = os.path.realpath(os.path.join(settings.UPLOAD_DIR, "images"))
+    images_base = os.path.realpath(settings.IMAGE_DIR)
     images_dir = os.path.realpath(os.path.join(images_base, doc_id))
     if images_dir.startswith(images_base + os.sep) and os.path.isdir(images_dir):
         shutil.rmtree(images_dir, ignore_errors=True)

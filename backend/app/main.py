@@ -24,8 +24,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    # Multimodal: extracted/uploaded images live under UPLOAD_DIR/images/<doc_id>/
-    os.makedirs(os.path.join(settings.UPLOAD_DIR, "images"), exist_ok=True)
+    # Multimodal: extracted/uploaded images live under IMAGE_DIR/<doc_id>/
+    os.makedirs(settings.IMAGE_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(settings.SQLITE_PATH), exist_ok=True)
 
     await init_db()
