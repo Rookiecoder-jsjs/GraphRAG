@@ -19,7 +19,7 @@
           ref="fileInput"
           type="file"
           class="file-input"
-          accept=".pdf,.docx,.doc,.txt,.md,.markdown"
+          accept=".pdf,.docx,.doc,.txt,.md,.markdown,.png,.jpg,.jpeg"
           @change="handleFileSelect"
           multiple
         />
@@ -340,7 +340,7 @@ const editingTagDocId = ref(null)
 const newTagInput = ref('')
 const tagBusy = ref(false)
 
-const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.md', '.markdown']
+const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.md', '.markdown', '.png', '.jpg', '.jpeg']
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 
 const isAllowedFile = (file) => {

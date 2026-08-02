@@ -71,7 +71,12 @@
             <Tag shape="score">{{ (result.score || result.similarity || 0).toFixed(2) }}</Tag>
           </div>
 
-          <div v-if="result.chunk" class="result-content">
+          <div v-if="result.modality === 'image' && result.image_url" class="result-image">
+            <img :src="withToken(result.image_url)" :alt="result.title" />
+            <div class="figure-caption">{{ result.chunk }}</div>
+          </div>
+
+          <div v-else-if="result.chunk" class="result-content">
             <p>{{ result.chunk }}</p>
           </div>
 
@@ -119,13 +124,20 @@ const handleSearch = async () => {
   try {
     const { data } = await searchApi.search(query.value, 10, true)
     const searchResults = data.chunks || data.results || []
-    results.value = searchResults.map(r => ({
-      chunk: r.content || r.chunk,
-      title: r.metadata?.title || r.metadata?.source || r.filename || 'Document',
-      score: 1 - (r.distance || 0),
-      similarity: 1 - (r.distance || 0),
-      metadata: r.metadata
-    }))
+    results.value = searchResults.map(r => {
+      const modality = r.metadata?.modality || 'text'
+      return {
+        chunk: r.content || r.chunk,
+        title: modality === 'image'
+          ? (r.metadata?.hierarchy_path || 'Image')
+          : (r.metadata?.title || r.metadata?.source || r.filename || 'Document'),
+        score: 1 - (r.distance || 0),
+        similarity: 1 - (r.distance || 0),
+        metadata: r.metadata,
+        modality,
+        image_url: buildImageUrl(r.metadata),
+      }
+    })
   } catch (error) {
     console.error('Search error:', error)
     results.value = []
@@ -133,6 +145,17 @@ const handleSearch = async () => {
     loading.value = false
   }
 }
+
+// image_path metadata ("images/<doc_id>/<filename>") -> authed route.
+const buildImageUrl = (metadata) => {
+  const parts = (metadata?.image_path || '').split('/')
+  return parts.length === 3 && parts[0] === 'images'
+    ? `/api/documents/images/${parts[1]}/${parts[2]}`
+    : null
+}
+// <img> can't set headers, so the JWT rides as ?token= (progress SSE convention).
+const withToken = (url) =>
+  `${url}?token=${encodeURIComponent(localStorage.getItem('token') || '')}`
 </script>
 
 <style scoped>
@@ -276,6 +299,17 @@ const handleSearch = async () => {
   line-height: 1.6;
   border-left: 2px solid var(--border);
   padding-left: 0.875rem;
+}
+
+.result-image { margin-bottom: 0.5rem; }
+.result-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .result-meta {

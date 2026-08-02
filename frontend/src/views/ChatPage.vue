@@ -195,7 +195,16 @@
                           <span v-if="i < src.hierarchy_path.length - 1" class="crumb-sep">›</span>
                         </span>
                       </div>
-                      <pre class="source-card-content">{{ src.content }}</pre>
+                      <div
+                        v-if="src.modality === 'image' && src.image_url"
+                        class="source-card-image"
+                        title="点击查看大图"
+                        @click="openImage(src.image_url)"
+                      >
+                        <img :src="withToken(src.image_url)" :alt="src.title" />
+                        <div class="figure-caption">{{ src.content }}</div>
+                      </div>
+                      <pre v-else class="source-card-content">{{ src.content }}</pre>
                       <div v-if="src.truncated" class="source-card-footnote">
                         摘录已截断——原文片段更长。
                       </div>
@@ -462,6 +471,12 @@ const coverageTone = (ratio) => {
 
 const QUALITY_LABELS = { high: '高', medium: '中', low: '低' }
 const qualityLabel = (q) => QUALITY_LABELS[q] || q
+
+// Image sources are served authed; <img> tags can't set headers, so the
+// JWT rides as ?token= — same convention as the progress SSE stream.
+const withToken = (url) =>
+  `${url}?token=${encodeURIComponent(localStorage.getItem('token') || '')}`
+const openImage = (url) => window.open(withToken(url), '_blank')
 const qualityTitle = (src) => {
   if (!src || !src.quality) return ''
   const label = QUALITY_LABELS[src.quality] || src.quality
@@ -1193,6 +1208,18 @@ const onCitationClick = (event) => {
   overflow-y: auto;
   padding: 0.5rem 0.75rem;
   background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+}
+.source-card-image {
+  cursor: zoom-in;
+}
+.source-card-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
 .source-card-footnote {

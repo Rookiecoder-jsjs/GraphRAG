@@ -85,7 +85,10 @@
                   <div v-if="chunk.hierarchy_path" class="chunk-path">
                     {{ chunk.hierarchy_path.split(',').map(s => s.trim()).filter(Boolean).join(' › ') }}
                   </div>
-                  <div class="chunk-content">{{ chunk.content }}</div>
+                  <div v-if="chunk.modality === 'image' && chunk.image_url" class="chunk-image">
+                    <img :src="withToken(chunk.image_url)" alt="image chunk" />
+                  </div>
+                  <div v-else class="chunk-content">{{ chunk.content }}</div>
                 </li>
               </ol>
             </Card>
@@ -145,6 +148,11 @@ const XCircleIcon = {
 
 const route = useRoute()
 const router = useRouter()
+
+// Image chunks are served authed; <img> can't set headers, so the JWT
+// rides as ?token= (same convention as the progress SSE stream).
+const withToken = (url) =>
+  `${url}?token=${encodeURIComponent(localStorage.getItem('token') || '')}`
 
 const detail = ref(null)
 const loading = ref(true)
@@ -336,6 +344,15 @@ watch(() => route.params.id, loadIfChanged)
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.chunk-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
 }
 
 .related-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.375rem; }
