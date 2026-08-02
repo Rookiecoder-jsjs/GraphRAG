@@ -44,7 +44,26 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = 10485760  # 10MB
 
     # Embedding
+    # Provider selection: "siliconflow" (OpenAI-compatible /embeddings) or
+    # "dashscope" (native multimodal endpoint — text AND images). This is a
+    # HARD switch, NOT a failover: the two providers produce vectors in
+    # incompatible semantic spaces, so switching providers REQUIRES re-running
+    # scripts/migrate_embeddings.py with the backend stopped. An invalid value
+    # is rejected at startup (see get_settings).
+    EMBEDDING_PROVIDER: str = "siliconflow"
+    # SiliconFlow provider (OpenAI-compatible) model name.
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
+    # DashScope provider (native multimodal endpoint; auth via BAILIAN_API_KEY).
+    # Verified by scripts/probe_vl_embedding.py (2026-08-02): the compat-mode
+    # endpoint 404s for this model — only the native endpoint works.
+    DASHSCOPE_EMBEDDING_MODEL: str = "qwen3-vl-embedding"
+    DASHSCOPE_EMBEDDING_URL: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
+        "multimodal-embedding/multimodal-embedding"
+    )
+    # Authoritative pinned output dimension for EVERY provider: dashscope
+    # requests it via MRL (parameters.dimension), and zero-padding of blank
+    # text must match it. Changing this requires a full re-embed.
     EMBEDDING_DIM: int = 1024
 
     # Rerank
@@ -100,6 +119,11 @@ _INSECURE_JWT_SECRETS = {
     "replace-me-with-a-strong-random-value",
 }
 
+# Valid EMBEDDING_PROVIDER values. A typo here (e.g. "dash_scope") would
+# otherwise silently land on the siliconflow branch and embed with the wrong
+# model — or worse, mix vector spaces after a partial switch.
+_EMBEDDING_PROVIDERS = {"siliconflow", "dashscope"}
+
 
 @lru_cache()
 def get_settings() -> Settings:
@@ -117,5 +141,12 @@ def get_settings() -> Settings:
             "random value via `python -c \"import secrets; "
             "print(secrets.token_urlsafe(48))\"` and set it with the JWT_SECRET "
             "environment variable."
+        )
+    if settings.EMBEDDING_PROVIDER.lower() not in _EMBEDDING_PROVIDERS:
+        raise RuntimeError(
+            f"EMBEDDING_PROVIDER={settings.EMBEDDING_PROVIDER!r} is not valid; "
+            f"expected one of {sorted(_EMBEDDING_PROVIDERS)}. Switching providers "
+            "changes the vector space — re-run scripts/migrate_embeddings.py "
+            "with the backend stopped."
         )
     return settings

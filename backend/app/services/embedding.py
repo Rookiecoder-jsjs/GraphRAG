@@ -1,4 +1,19 @@
-"""Silicon Flow embedding service with caching, exponential backoff, and self-healing cache."""
+"""Embedding service (SiliconFlow / DashScope providers).
+
+Two providers behind one interface, selected by ``settings.EMBEDDING_PROVIDER``:
+
+- ``siliconflow``: OpenAI-compatible ``POST /embeddings`` (text only).
+- ``dashscope``: DashScope NATIVE multimodal endpoint (text + images; the
+  compat endpoint 404s for ``qwen3-vl-embedding`` — verified by
+  scripts/probe_vl_embedding.py). Auth uses ``BAILIAN_API_KEY``; every call
+  pins ``parameters.dimension`` to ``EMBEDDING_DIM`` via MRL.
+
+The provider is a HARD switch, not a failover: vector spaces are
+incompatible, so switching requires a full re-embed (migrate_embeddings.py).
+
+Reliability (shared by both providers): caching, exponential backoff, and
+self-healing cache.
+"""
 import asyncio
 import hashlib
 import json
@@ -63,7 +78,7 @@ def _looks_like_json_embedding(blob: bytes) -> bool:
 
 
 class EmbeddingService:
-    """Service for generating text embeddings using Silicon Flow API.
+    """Service for generating embeddings via SiliconFlow or DashScope.
 
     Reliability features:
       - Exponential backoff on transport / 5xx errors (5 attempts: 1,2,4,8,16s).
@@ -79,11 +94,21 @@ class EmbeddingService:
 
     def __init__(self):
         self.settings = get_settings()
-        self.base_url = self.settings.SILICON_FLOW_BASE_URL
-        self.api_key = self.settings.SILICON_FLOW_API_KEY
-        self.model = self.settings.EMBEDDING_MODEL
+        self.provider = self.settings.EMBEDDING_PROVIDER.lower()
+        if self.provider == "dashscope":
+            # Native multimodal endpoint; auth shares the Bailian key.
+            self._embed_url = self.settings.DASHSCOPE_EMBEDDING_URL
+            self.api_key = self.settings.BAILIAN_API_KEY
+            self.model = self.settings.DASHSCOPE_EMBEDDING_MODEL
+        else:  # "siliconflow" — validated against _EMBEDDING_PROVIDERS in config
+            self._embed_url = f"{self.settings.SILICON_FLOW_BASE_URL}/embeddings"
+            self.api_key = self.settings.SILICON_FLOW_API_KEY
+            self.model = self.settings.EMBEDDING_MODEL
         self._semaphore = asyncio.Semaphore(5)
         self._client: Optional[httpx.AsyncClient] = None
+        logger.info(
+            "EmbeddingService ready: provider=%s model=%s", self.provider, self.model
+        )
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the shared HTTP client.
@@ -159,21 +184,84 @@ class EmbeddingService:
     def _get_text_hash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8")).hexdigest()
 
+    def _build_text_payload(self, texts: List[str]) -> dict:
+        """Build the request body for a homogeneous TEXT batch.
+
+        siliconflow: OpenAI-compatible shape — single text goes out as a bare
+        string, a batch as a list (byte-identical to the pre-provider-split
+        wire format, so rollback behavior is unchanged). Deliberately does NOT
+        pin `dimensions` — the SiliconFlow model's native dim is what the
+        existing collection was built with.
+
+        dashscope: native multimodal shape, one ``{"text": t}`` content item
+        per input; ``parameters.dimension`` pins the MRL output to
+        EMBEDDING_DIM (probe T11, 2026-08-02).
+        """
+        if self.provider == "dashscope":
+            return {
+                "model": self.model,
+                "input": {"contents": [{"text": text} for text in texts]},
+                "parameters": {"dimension": self.settings.EMBEDDING_DIM},
+            }
+        return {
+            "model": self.model,
+            "input": texts[0] if len(texts) == 1 else texts,
+            "encoding_format": "float",
+        }
+
+    def _parse_embeddings(self, data: dict, expected: int) -> List[List[float]]:
+        """Extract vectors from a provider response, in input order.
+
+        Raises:
+            EmbeddingServiceError: on malformed payloads, a count mismatch,
+                or — for dashscope — dimension drift away from EMBEDDING_DIM
+                (an MRL guard: a silently-wrong dim would corrupt the Chroma
+                collection on upsert).
+        """
+        try:
+            if self.provider == "dashscope":
+                items = sorted(
+                    (data.get("output") or {}).get("embeddings") or [],
+                    key=lambda item: item.get("index", 0),
+                )
+                embeddings = [item["embedding"] for item in items]
+            else:
+                embeddings = [item["embedding"] for item in data["data"]]
+        except (KeyError, TypeError) as e:
+            raise EmbeddingServiceError(
+                f"Malformed {self.provider} response: {e}"
+            ) from e
+
+        if len(embeddings) != expected:
+            raise EmbeddingServiceError(
+                f"{self.provider} returned {len(embeddings)} embeddings "
+                f"for {expected} inputs"
+            )
+        if self.provider == "dashscope":
+            for embedding in embeddings:
+                if len(embedding) != self.settings.EMBEDDING_DIM:
+                    raise EmbeddingServiceError(
+                        f"dashscope returned dim {len(embedding)}, expected "
+                        f"{self.settings.EMBEDDING_DIM} — MRL drift, check "
+                        "parameters.dimension"
+                    )
+        return embeddings
+
     async def _call_with_retry(self, payload: dict) -> dict:
-        """POST to SiliconFlow with exponential backoff.
+        """POST to the active provider with exponential backoff.
 
         Raises:
             EmbeddingServiceError: after MAX_ATTEMPTS exhausted on retryable error
                 or immediately on a 4xx response.
         """
         last_error: Optional[BaseException] = None
-        url = f"{self.base_url}/embeddings"
+        label = "DashScope" if self.provider == "dashscope" else "SiliconFlow"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         client = await self._get_client()
 
         for attempt in range(MAX_ATTEMPTS):
             try:
-                response = await client.post(url, headers=headers, json=payload)
+                response = await client.post(self._embed_url, headers=headers, json=payload)
             except RETRYABLE_EXCEPTIONS as e:
                 last_error = e
                 if attempt < MAX_ATTEMPTS - 1:
@@ -186,7 +274,7 @@ class EmbeddingService:
                     continue
                 logger.error("Embedding call failed after %d attempts: %s", MAX_ATTEMPTS, e)
                 raise EmbeddingServiceError(
-                    f"SiliconFlow unreachable after {MAX_ATTEMPTS} attempts: {e}"
+                    f"{label} unreachable after {MAX_ATTEMPTS} attempts: {e}"
                 ) from e
 
             if response.status_code in RETRYABLE_STATUS_CODES:
@@ -204,13 +292,15 @@ class EmbeddingService:
                     await asyncio.sleep(delay)
                     continue
                 raise EmbeddingServiceError(
-                    f"SiliconFlow returned {response.status_code} after {MAX_ATTEMPTS} attempts"
+                    f"{label} returned {response.status_code} after {MAX_ATTEMPTS} attempts"
                 ) from last_error
 
             if response.status_code >= 400:
+                # The body preview carries the provider's own error detail
+                # (DashScope's {"code","message"} JSON identifies the cause).
                 body_preview = response.text[:300] if response.text else ""
                 raise EmbeddingServiceError(
-                    f"SiliconFlow rejected request (HTTP {response.status_code}): {body_preview}"
+                    f"{label} rejected request (HTTP {response.status_code}): {body_preview}"
                 )
 
             return response.json()
@@ -232,14 +322,9 @@ class EmbeddingService:
                 return cached
 
         async with self._semaphore:
-            data = await self._call_with_retry(
-                {"model": self.model, "input": text, "encoding_format": "float"}
-            )
+            data = await self._call_with_retry(self._build_text_payload([text]))
 
-        try:
-            embedding = data["data"][0]["embedding"]
-        except (KeyError, IndexError, TypeError) as e:
-            raise EmbeddingServiceError(f"Malformed SiliconFlow response: {e}") from e
+        embedding = self._parse_embeddings(data, expected=1)[0]
 
         if use_cache:
             await self._cache_embedding(text_hash, text, embedding)
@@ -283,23 +368,10 @@ class EmbeddingService:
 
             async with self._semaphore:
                 data = await self._call_with_retry(
-                    {
-                        "model": self.model,
-                        "input": batch_texts,
-                        "encoding_format": "float",
-                    }
+                    self._build_text_payload(batch_texts)
                 )
 
-            try:
-                embeddings = [item["embedding"] for item in data["data"]]
-            except (KeyError, TypeError) as e:
-                raise EmbeddingServiceError(f"Malformed SiliconFlow response: {e}") from e
-
-            if len(embeddings) != len(batch_texts):
-                raise EmbeddingServiceError(
-                    f"SiliconFlow returned {len(embeddings)} embeddings for "
-                    f"{len(batch_texts)} inputs"
-                )
+            embeddings = self._parse_embeddings(data, expected=len(batch_texts))
 
             for original_idx, embedding, text, text_hash in zip(
                 batch_indices, embeddings, batch_texts, batch_hashes
