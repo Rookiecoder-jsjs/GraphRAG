@@ -1,8 +1,11 @@
 """Query preprocessing service for RAG optimization."""
-import re
 import json
+import logging
+import re
 from typing import List, Dict, Any, Optional
 from app.services.llm import get_llm_service
+
+logger = logging.getLogger(__name__)
 
 
 class QueryProcessor:
@@ -47,6 +50,66 @@ Rewritten query (just return the rewritten query, nothing else):"""
         except Exception as e:
             # Fallback to original query on error
             return query
+
+    async def rewrite_and_extract(self, query: str) -> Dict[str, Any]:
+        """One LLM call producing BOTH the rewritten query and entities.
+
+        Combines the two round-trips (``rewrite_query`` +
+        ``extract_entities``) that graph-RAG requests used to make — each
+        call costs ~8-15s of blocking latency, so halving them matters.
+        The model rewrites the query FIRST, then extracts entities from
+        its own rewrite, matching the old two-call semantics (extraction
+        ran on the rewritten query).
+
+        Returns:
+            {"rewritten": str, "entities": [{"name", "type"}, ...]}.
+            On any failure degrades to the original query + [] —
+            best-effort, same exception-swallowing style as the
+            individual methods.
+        """
+        llm = await get_llm_service()
+
+        prompt = f"""You are a query rewriting + entity extraction assistant for search retrieval.
+First rewrite the search query to improve retrieval quality, then extract named entities FROM THE REWRITTEN query.
+
+Rewriting guidelines:
+- Expand abbreviations and technical terms to full forms
+- Make implicit concepts explicit
+- Keep the original intent but express it more clearly
+- Keep it concise (preferably under 100 characters)
+
+Entity types: PERSON, ORGANIZATION, LOCATION, CONCEPT, EVENT, TECHNOLOGY, DATE
+
+Original query: "{query}"
+
+Return ONLY a JSON object with exactly this shape, nothing else:
+{{"rewritten": "the rewritten query", "entities": [{{"name": "entity name", "type": "entity type"}}]}}
+If no entities are found, return {{"rewritten": "...", "entities": []}}."""
+
+        try:
+            response = await llm.chat_complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=400,
+            )
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                if isinstance(parsed, dict):
+                    rewritten = str(parsed.get("rewritten") or "").strip()
+                    entities = parsed.get("entities")
+                    return {
+                        "rewritten": rewritten or query,
+                        "entities": [
+                            e for e in entities
+                            if isinstance(e, dict) and str(e.get("name") or "").strip()
+                        ] if isinstance(entities, list) else [],
+                    }
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning("rewrite_and_extract parse failed (%s); falling back", e)
+        except Exception as e:
+            logger.warning("rewrite_and_extract failed (%s); falling back", e)
+        return {"rewritten": query, "entities": []}
 
     async def generate_query_variants(
         self,

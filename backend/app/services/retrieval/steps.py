@@ -51,7 +51,14 @@ def register_step(name: str):
 
 @register_step("query_rewrite")
 class QueryRewriteStep(RetrievalStep):
-    """Rewrite the query for better retrieval (chat only)."""
+    """Rewrite the query for better retrieval (chat only).
+
+    When the graph lane is active and CHAT_COMBINED_REWRITE_EXTRACT is
+    on, ONE LLM call produces both the rewritten query and the entities
+    to look up (halving the blocking LLM latency of the old two-call
+    flow); GraphRetrieveStep reuses ``ctx.query_entities``. Otherwise
+    the standalone rewrite runs as before.
+    """
 
     async def __call__(self, ctx: RetrievalContext) -> RetrievalContext:
         # Rewriting costs a full LLM round-trip (~1s) that BLOCKS every
@@ -62,9 +69,20 @@ class QueryRewriteStep(RetrievalStep):
         search_query = ctx.query
         if ctx.use_query_rewrite and len(ctx.query.strip()) >= ctx.settings.QUERY_REWRITE_MIN_LEN:
             query_processor = await get_query_processor()
-            rewritten = await query_processor.rewrite_query(ctx.query)
-            if rewritten and len(rewritten) > 0:
-                search_query = rewritten
+            if (
+                ctx.use_graph_rag
+                and getattr(ctx.settings, "CHAT_COMBINED_REWRITE_EXTRACT", True)
+                and hasattr(query_processor, "rewrite_and_extract")
+            ):
+                combined = await query_processor.rewrite_and_extract(ctx.query)
+                rewritten = (combined.get("rewritten") or "").strip()
+                if rewritten:
+                    search_query = rewritten
+                ctx.query_entities = combined.get("entities") or []
+            else:
+                rewritten = await query_processor.rewrite_query(ctx.query)
+                if rewritten and len(rewritten) > 0:
+                    search_query = rewritten
         ctx.search_query = search_query
         return ctx
 
@@ -135,11 +153,17 @@ class GraphRetrieveStep(RetrievalStep):
         if not ctx.use_graph_rag:
             return ctx
         try:
-            query_processor = await get_query_processor()
-            extracted = await query_processor.extract_entities(
-                ctx.search_query or ctx.query
-            )
-            entity_names = [e["name"] for e in (extracted or []) if e.get("name")]
+            # QueryRewriteStep may already have extracted entities in its
+            # combined LLM call — reuse them to avoid a second round-trip.
+            entity_names = [
+                e["name"] for e in (ctx.query_entities or []) if e.get("name")
+            ]
+            if not entity_names:
+                query_processor = await get_query_processor()
+                extracted = await query_processor.extract_entities(
+                    ctx.search_query or ctx.query
+                )
+                entity_names = [e["name"] for e in (extracted or []) if e.get("name")]
             if entity_names:
                 neo4j = await get_neo4j_client()
                 graph_chunk_ids = await neo4j.get_chunks_for_entities(
@@ -165,12 +189,12 @@ class GraphRetrieveStep(RetrievalStep):
 
 @register_step("rrf_fuse")
 class RRFFusionStep(RetrievalStep):
-    """Fuse the vector + BM25 lanes via Reciprocal Rank Fusion.
+    """Fuse the retrieval lanes via Reciprocal Rank Fusion.
 
-    Graph hits are currently PREPENDED ahead of the fused set (synthetic
-    rank boost; the reranker re-scores from scratch below). Commit 3
-    replaces this prepend with a third RRF lane — this is the only place
-    the graph merge lives, so the change stays contained.
+    Graph candidate chunks (when present) enter RRF as a THIRD lane by
+    default — competing fairly with vector and BM25 instead of being
+    force-ranked ahead. GRAPH_RRF_LANE=False restores the legacy prepend
+    behavior (graph hits first, hybrid deduped) as an operator rollback.
     """
 
     async def __call__(self, ctx: RetrievalContext) -> RetrievalContext:
@@ -179,14 +203,19 @@ class RRFFusionStep(RetrievalStep):
         # Recall budget per retriever. RRF + the reranker only need enough
         # candidates to reliably contain the final top_k; RERANK_RECALL_K
         # roughly halves the rerank payload (and its latency) vs 50.
+        use_lane = bool(ctx.graph_results) and getattr(
+            ctx.settings, "GRAPH_RRF_LANE", True
+        )
         fused_results = reciprocal_rank_fusion(
             ctx.vector_results,
             ctx.bm25_results,
+            graph_results=ctx.graph_results if use_lane else None,
             k=60,
             top_k=ctx.bm25_recall,
         )
-        # Merge: graph hits first (boost), then hybrid dedup.
-        if ctx.graph_results:
+        if ctx.graph_results and not use_lane:
+            # Legacy merge: graph hits first (synthetic rank boost; the
+            # reranker re-scores from scratch below), hybrid deduped.
             seen = {c.get("chunk_id") for c in ctx.graph_results}
             fused_results = list(ctx.graph_results) + [
                 c for c in fused_results if c.get("chunk_id") not in seen

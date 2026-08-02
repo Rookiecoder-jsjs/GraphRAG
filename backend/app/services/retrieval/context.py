@@ -34,6 +34,10 @@ class RetrievalContext:
 
     # --- produced by steps ---
     search_query: str = ""
+    # Entities extracted from the query (set by QueryRewriteStep in
+    # combined mode, reused by GraphRetrieveStep to avoid a second LLM
+    # call). Empty when extraction runs standalone or was skipped.
+    query_entities: List[Dict[str, Any]] = field(default_factory=list)
     query_embedding: List[float] = field(default_factory=list)
     vector_results: List[Dict[str, Any]] = field(default_factory=list)
     bm25_results: List[Dict[str, Any]] = field(default_factory=list)

@@ -171,7 +171,7 @@ def test_graph_retrieve_gating_and_fallback():
               ctx.graph_results == [])
 
 
-def test_rrf_fuse_prepends_graph_hits():
+def test_rrf_fuse_graph_lane_and_legacy_prepend():
     vector = [
         {"chunk_id": "v1", "content": "v1"},
         {"chunk_id": "v2", "content": "v2"},
@@ -180,21 +180,43 @@ def test_rrf_fuse_prepends_graph_hits():
         {"chunk_id": "v2", "content": "v2"},
         {"chunk_id": "v3", "content": "v3"},
     ]
+    graph = [{"chunk_id": "g1", "content": "graph"}]
+
+    # Default (GRAPH_RRF_LANE): g1 competes as a THIRD lane. RRF scores:
+    # v2 (1/62 + 1/61) > v1 (1/61) = g1 (1/61, tie → vector lane first)
+    # > v3 (1/62).
     ctx = _ctx(
         use_hybrid=True,
         vector_results=vector,
         bm25_results=bm25,
-        graph_results=[{"chunk_id": "g1", "content": "graph"}],
+        graph_results=graph,
     )
     asyncio.run(run_pipeline(build_pipeline(["rrf_fuse"]), ctx))
-    # RRF: v2 ranks in both lanes (1/61 + 1/62) > v1 (1/61) > v3 (1/62).
-    check("rrf_fuse: graph hits prepended, hybrid deduped",
-          [c["chunk_id"] for c in ctx.fused] == ["g1", "v2", "v1", "v3"],
+    check("rrf_fuse: graph chunk competes in the third lane",
+          [c["chunk_id"] for c in ctx.fused] == ["v2", "v1", "g1", "v3"],
           f"got {[c['chunk_id'] for c in ctx.fused]}")
-    # Prepended graph chunks bypass fusion (no score); the fused tail has one.
-    check("rrf_fuse: fused chunks carry rrf_score",
-          all(c.get("rrf_score") is not None for c in ctx.fused[1:])
-          and ctx.fused[0].get("rrf_score") is None)
+    g1 = next(c for c in ctx.fused if c["chunk_id"] == "g1")
+    check("rrf_fuse: lane-scored graph chunk carries rrf_score + 'graph' source",
+          g1.get("rrf_score") is not None
+          and "graph" in (g1.get("sources") or []))
+
+    # Legacy (GRAPH_RRF_LANE=False): graph hits prepended, hybrid deduped.
+    class _LegacyS(_S):
+        GRAPH_RRF_LANE = False
+
+    ctx2 = _ctx(
+        use_hybrid=True,
+        settings=_LegacyS(),
+        vector_results=vector,
+        bm25_results=bm25,
+        graph_results=graph,
+    )
+    asyncio.run(run_pipeline(build_pipeline(["rrf_fuse"]), ctx2))
+    check("rrf_fuse: GRAPH_RRF_LANE=False restores the prepend",
+          [c["chunk_id"] for c in ctx2.fused] == ["g1", "v2", "v1", "v3"],
+          f"got {[c['chunk_id'] for c in ctx2.fused]}")
+    check("rrf_fuse: prepended graph chunk bypasses fusion (no score)",
+          ctx2.fused[0].get("rrf_score") is None)
 
 
 def test_image_promote_hot_and_cold():
@@ -325,8 +347,14 @@ def test_build_rag_context_pipeline_parity():
 
     check("build_rag_context: returns the historical shape",
           set(ctx_out.keys()) == {"chunks", "entities", "relations"})
-    check("build_rag_context: graph hit is the first chunk (prepend)",
-          ctx_out["chunks"][0]["chunk_id"] == "g1",
+    # g1 ranks in BOTH the vector lane (rank 2 → 1/63) and the graph lane
+    # (rank 0 → 1/61), so it wins the fusion and lands first — the third
+    # lane is now a fair competition, not a forced prepend.
+    g1 = next(c for c in ctx_out["chunks"] if c["chunk_id"] == "g1")
+    check("build_rag_context: graph hit wins the lane competition",
+          ctx_out["chunks"][0]["chunk_id"] == "g1"
+          and g1.get("rrf_score") is not None
+          and "graph" in (g1.get("sources") or []),
           f"order={[c['chunk_id'] for c in ctx_out['chunks'][:4]]}")
     check("build_rag_context: entities/relations enriched",
           any(e["name"] == "Python" for e in ctx_out["entities"])
@@ -340,7 +368,7 @@ ALL_TESTS = [
     test_parse_pipeline,
     test_build_pipeline,
     test_graph_retrieve_gating_and_fallback,
-    test_rrf_fuse_prepends_graph_hits,
+    test_rrf_fuse_graph_lane_and_legacy_prepend,
     test_image_promote_hot_and_cold,
     test_context_enrich_dedup_policy,
     test_entity_enrich_append_related,

@@ -1,10 +1,11 @@
 """Fusion algorithms for hybrid search."""
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 def reciprocal_rank_fusion(
     vector_results: List[Dict[str, Any]],
     bm25_results: List[Dict[str, Any]],
+    graph_results: Optional[List[Dict[str, Any]]] = None,
     k: int = 60,
     top_k: int = 50
 ) -> List[Dict[str, Any]]:
@@ -16,9 +17,16 @@ def reciprocal_rank_fusion(
     This fusion method combines rankings from multiple retrieval systems
     without requiring score normalization.
 
+    Graph results form a THIRD parallel lane (when provided): chunks that
+    the graph says MENTION the query's entities compete fairly with the
+    vector and BM25 lanes instead of being force-ranked ahead. With
+    ``graph_results=None`` the function is arithmetically identical to
+    the historical two-lane version — same scores, same tie order.
+
     Args:
         vector_results: Results from vector search
         bm25_results: Results from BM25 search
+        graph_results: Optional results from graph retrieval (a third lane)
         k: Constant parameter (default 60, typical range 30-100)
         top_k: Number of results to return
 
@@ -28,50 +36,37 @@ def reciprocal_rank_fusion(
     scores: Dict[str, float] = {}
     doc_info: Dict[str, Dict[str, Any]] = {}
 
-    # Process vector results
-    for rank, doc in enumerate(vector_results):
-        doc_id = doc.get("id") or doc.get("chunk_id")
-        if not doc_id:
-            continue
+    # Process each lane identically: RRF score per rank, doc_info on first
+    # sight, source tag appended on every sight. The lanes are processed in
+    # order (vector, bm25, graph) so tie-breaking matches the historical
+    # two-lane behavior when no graph lane is present.
+    for source, lane in (
+        ("vector", vector_results),
+        ("bm25", bm25_results),
+        ("graph", graph_results or []),
+    ):
+        for rank, doc in enumerate(lane):
+            doc_id = doc.get("id") or doc.get("chunk_id")
+            if not doc_id:
+                continue
 
-        rrf_score = 1.0 / (k + rank + 1)  # +1 to avoid division by zero
-        scores[doc_id] = scores.get(doc_id, 0) + rrf_score
+            rrf_score = 1.0 / (k + rank + 1)  # +1 to avoid division by zero
+            scores[doc_id] = scores.get(doc_id, 0) + rrf_score
 
-        # Store doc info (prefer vector result's metadata)
-        if doc_id not in doc_info:
-            doc_info[doc_id] = {
-                "id": doc_id,
-                "content": doc.get("content", ""),
-                "hierarchy": doc.get("hierarchy", {}),
-                "metadata": doc.get("metadata", {}),
-                "rerank_score": doc.get("score", 0),
-                "sources": ["vector"]
-            }
-        else:
-            doc_info[doc_id]["sources"].append("vector")
-
-    # Process BM25 results
-    for rank, doc in enumerate(bm25_results):
-        doc_id = doc.get("id") or doc.get("chunk_id")
-        if not doc_id:
-            continue
-
-        rrf_score = 1.0 / (k + rank + 1)
-        scores[doc_id] = scores.get(doc_id, 0) + rrf_score
-
-        if doc_id not in doc_info:
-            doc_info[doc_id] = {
-                "id": doc_id,
-                "content": doc.get("content", ""),
-                "hierarchy": doc.get("hierarchy", {}),
-                "metadata": doc.get("metadata", {}),
-                "rerank_score": doc.get("score", 0),
-                "sources": ["bm25"]
-            }
-        else:
-            doc_info[doc_id]["sources"].append("bm25")
-            # Add BM25 score to metadata
-            doc_info[doc_id]["metadata"]["bm25_score"] = doc.get("score", 0)
+            if doc_id not in doc_info:
+                doc_info[doc_id] = {
+                    "id": doc_id,
+                    "content": doc.get("content", ""),
+                    "hierarchy": doc.get("hierarchy", {}),
+                    "metadata": doc.get("metadata", {}),
+                    "rerank_score": doc.get("score", 0),
+                    "sources": [source]
+                }
+            else:
+                doc_info[doc_id]["sources"].append(source)
+                if source == "bm25":
+                    # Add BM25 score to metadata
+                    doc_info[doc_id]["metadata"]["bm25_score"] = doc.get("score", 0)
 
     # Sort by RRF score
     sorted_docs = sorted(
