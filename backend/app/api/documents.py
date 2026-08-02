@@ -1,5 +1,6 @@
 """Document management API endpoints."""
 import logging
+import asyncio
 import hashlib
 import os
 import shutil
@@ -17,6 +18,7 @@ from app.api.auth import get_current_user
 from app.api._token_auth import authenticate_with_token_fallback
 from app.models.document import DocumentResponse, ChunkResponse, TagCreate, TagResponse
 from app.utils.md_parser import convert_document_to_markdown, clean_markdown, extract_title_from_markdown
+from app.utils.image_extractor import extract_images_from_document
 from app.services.chunker import chunk_markdown
 from app.services.embedding import get_embedding_service, EmbeddingServiceError
 from app.services.neo4j_client import get_neo4j_client
@@ -239,7 +241,9 @@ async def upload_document(
         doc_id,
         user_id,
         markdown_content,
-        title
+        title,
+        file_path,
+        file_ext[1:],
     )
 
     return dict(doc)
@@ -452,7 +456,14 @@ async def process_image_background(
         )
 
 
-async def process_document_background(doc_id: str, user_id: int, markdown: str, title: str):
+async def process_document_background(
+    doc_id: str,
+    user_id: int,
+    markdown: str,
+    title: str,
+    source_path: Optional[str] = None,
+    file_type: Optional[str] = None,
+):
     """Process document in background: chunk, embed, extract entities."""
     import time
     progress = get_progress_emitter()
@@ -488,6 +499,103 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
 
         # Get embedding service
         embedding_service = await get_embedding_service()
+
+        # Multimodal: extract embedded images (PDF/DOCX) BEFORE the text
+        # embedding batch — share the INDEXED checkpoint below. Per-image
+        # failures are ISOLATED (text is primary; a broken image extractor
+        # never fails the document).
+        image_chunk_payloads: List[dict] = []  # for Neo4j batch below
+        if source_path and file_type:
+            settings = get_settings()
+            try:
+                extracted = await asyncio.to_thread(
+                    extract_images_from_document, source_path, file_type
+                )
+            except Exception as e:
+                logger.warning("image extraction failed for doc %s: %s", doc_id, e)
+                extracted = []
+
+            if extracted:
+                logger.info("Extracted %d embedded image(s) from doc %s", len(extracted), doc_id)
+                await progress.emit_and_save(
+                    doc_id, user_id, "embedding",
+                    f"Embedding {len(extracted)} embedded image(s)...",
+                    {"stage": "embedding", "current": 0, "total": len(extracted)},
+                )
+                chroma = get_chroma_client()
+                bm25 = get_bm25_service()
+                image_dir = os.path.join(settings.UPLOAD_DIR, "images", doc_id)
+                os.makedirs(image_dir, exist_ok=True)
+                placeholders: List[str] = []
+                for offset, img in enumerate(extracted, start=1):
+                    image_filename = f"{img.sha256}{img.ext}"
+                    stored_path = os.path.join(image_dir, image_filename)
+                    rel_image_path = f"images/{doc_id}/{image_filename}"
+                    try:
+                        with open(stored_path, "wb") as f:
+                            f.write(img.data)
+                        embedding = await embedding_service.embed_image_bytes(
+                            img.data, img.media_type
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "skip extracted image %s for doc %s: %s",
+                            img.sha256[:8], doc_id, e,
+                        )
+                        continue
+
+                    # DOCX heading stack is the breadcrumb; PDF has no
+                    # reliable page alignment (markitdown drops page
+                    # markers) so fall back to "Page N".
+                    if img.heading_path and img.heading_path != [f"Page {img.page}"]:
+                        hierarchy = [title] + img.heading_path
+                    else:
+                        hierarchy = [title, f"Page {img.page}"] if img.page else [title]
+                    hierarchy_path_str = ",".join(hierarchy)
+
+                    chunk_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_OID, f"{doc_id}:image:{img.sha256}"
+                    ))
+                    caption = (
+                        f"[图片: {title}" + (f" p.{img.page}" if img.page else "") + "]"
+                    )
+                    placeholders.append(caption)
+
+                    chroma.add_chunks([chunk_id], [caption], [embedding], [{
+                        "user_id": str(user_id),
+                        "document_id": doc_id,
+                        "hierarchy_level": "0",
+                        "hierarchy_path": hierarchy_path_str,
+                        "prev_chunk_id": "",
+                        "next_chunk_id": "",
+                        "modality": "image",
+                        "image_path": rel_image_path,
+                    }])
+                    bm25.add_to_index(user_id, [caption], [chunk_id])
+
+                    async with get_db() as db:
+                        await db.execute(
+                            """INSERT OR IGNORE INTO chunks
+                               (chunk_id, document_id, user_id, content, hierarchy_path,
+                                level, prev_chunk_id, next_chunk_id, modality, image_path)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (chunk_id, doc_id, user_id, caption, hierarchy_path_str,
+                             0, None, None, "image", rel_image_path),
+                        )
+                        await db.commit()
+
+                    image_chunk_payloads.append({
+                        "chunk_id": chunk_id,
+                        "content": caption,
+                        "hierarchy_path": hierarchy,
+                        "position": 0,
+                    })
+
+                    await progress.emit_and_save(
+                        doc_id, user_id, "embedding",
+                        f"Embedded image {offset}/{len(extracted)}",
+                        {"stage": "embedding", "current": offset, "total": len(extracted)},
+                    )
 
         # Prepare for batch processing
         chunk_contents = [c.content for c in chunks]
@@ -579,6 +687,9 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
             }
             for chunk in chunks
         ]
+        # Extracted images reuse the same INDEXED checkpoint — append their
+        # chunk nodes so the graph traversal/delete path stays consistent.
+        chunk_payloads.extend(image_chunk_payloads)
         created_chunks = await neo4j.create_chunk_nodes_batch(doc_id, user_id, chunk_payloads)
 
         # prev/next pointers are symmetric (chunker sets both directions),

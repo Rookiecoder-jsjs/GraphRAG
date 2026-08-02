@@ -86,6 +86,10 @@ class FakeNeo4j:
     def __init__(self):
         self.created_docs = []
         self.chunk_batches = []
+        self.link_batches = []
+        self.entity_batches = []
+        self.mentions_batches = []
+        self.relation_batches = []
 
     async def create_document_node(self, doc_id, user_id, title):
         self.created_docs.append((doc_id, user_id, title))
@@ -93,6 +97,22 @@ class FakeNeo4j:
     async def create_chunk_nodes_batch(self, doc_id, user_id, chunks):
         self.chunk_batches.append((doc_id, list(chunks)))
         return len(chunks)
+
+    async def create_chunk_links_batch(self, link_payloads):
+        self.link_batches.append(list(link_payloads))
+        return len(link_payloads)
+
+    async def create_entities_batch(self, entities, user_id):
+        self.entity_batches.append((user_id, list(entities)))
+        return len(entities)
+
+    async def link_chunks_to_entities_batch(self, mentions, user_id):
+        self.mentions_batches.append((user_id, list(mentions)))
+        return len(mentions)
+
+    async def create_relations_batch(self, relations, user_id):
+        self.relation_batches.append((user_id, list(relations)))
+        return len(relations)
 
 
 class FakeEmbeddingService:
@@ -105,6 +125,10 @@ class FakeEmbeddingService:
         if self.fail:
             raise EmbeddingServiceError("simulated embedding failure")
         return [0.25, 0.5, 0.75, 1.0]
+
+    async def embed_batch(self, texts, use_cache=True):
+        # The text pipeline only needs vectors back; one per text, fixed dim.
+        return [[0.25, 0.5, 0.75, 1.0] for _ in texts]
 
 
 class FakeChroma:
@@ -128,6 +152,19 @@ class FakeBM25:
         self.indexed.append((user_id, list(contents), list(chunk_ids)))
 
 
+class FakeEntityExtractor:
+    """No-op entity extractor — returns an empty result so the text
+    pipeline reaches READY without any LLM call or Neo4j MENTIONS work.
+    """
+
+    async def process_chunks(self, chunks, use_rule_extraction=False):
+        return {
+            "entities": [],
+            "relations": [],
+            "chunk_entities": [],  # one MENTION per (chunk, entity) — empty here
+        }
+
+
 def _patch_pipeline(embed_fail: bool = False):
     """Swap documents.py singletons for fakes; return (fakes, originals)."""
     fakes = {
@@ -136,6 +173,7 @@ def _patch_pipeline(embed_fail: bool = False):
         "embedding": FakeEmbeddingService(fail=embed_fail),
         "chroma": FakeChroma(),
         "bm25": FakeBM25(),
+        "entity_extractor": FakeEntityExtractor(),
     }
     originals = {}
 
@@ -145,12 +183,16 @@ def _patch_pipeline(embed_fail: bool = False):
     async def _embedding_factory():
         return fakes["embedding"]
 
+    async def _entity_factory():
+        return fakes["entity_extractor"]
+
     for name, fn in [
         ("get_progress_emitter", lambda: fakes["progress"]),
         ("get_neo4j_client", _neo4j_factory),
         ("get_embedding_service", _embedding_factory),
         ("get_chroma_client", lambda: fakes["chroma"]),
         ("get_bm25_service", lambda: fakes["bm25"]),
+        ("get_entity_extractor", _entity_factory),
     ]:
         originals[name] = getattr(docs_mod, name)
         setattr(docs_mod, name, fn)
@@ -348,6 +390,114 @@ print("\nprocess_image_background")
 asyncio.run(init_db())
 asyncio.run(_case_image_pipeline_success())
 asyncio.run(_case_image_pipeline_embed_failure_isolated())
+
+
+# ---------- process_document_background: image extraction integration -------
+
+class _FakeExtracted:
+    def __init__(self, data, ext, media_type, sha, width, height, page, heading_path):
+        self.data = data
+        self.ext = ext
+        self.media_type = media_type
+        self.sha256 = sha
+        self.width = width
+        self.height = height
+        self.page = page
+        self.heading_path = heading_path
+
+
+async def _case_text_doc_with_extracted_images():
+    """Text doc (markdown) + 1 extracted image from a PDF run.
+
+    Verifies that process_document_background:
+      - extracts from source_path via the (patched) extractor,
+      - indexes each image into chroma / bm25 / sqlite / neo4j,
+      - tolerates an embed failure per image (skipped, not fatal),
+      - the document still reaches READY (text is the durable artifact).
+    """
+    import sqlite3
+
+    doc_id = "ext-doc-ok"
+    conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+    conn.execute(
+        "INSERT OR IGNORE INTO users (id, username, password_hash) "
+        "VALUES (1, 'tester', 'x')"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO documents "
+        "(id, user_id, title, file_path, original_filename, file_type, status) "
+        "VALUES (?, 1, 'notes', '/tmp/x.pdf', 'x.pdf', 'pdf', 'pending')",
+        (doc_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    png = _png_bytes()
+    extracted = [
+        _FakeExtracted(
+            data=png, ext=".png", media_type="image/png",
+            sha=hashlib_sha256(png),
+            width=200, height=200, page=1, heading_path=["Page 1"],
+        ),
+    ]
+
+    # Patch the extractor + sqlite-chunker's Neo4j so we exercise the
+    # extracted-images branch without spinning up a real PDF.
+    fakes, originals = _patch_pipeline()
+    orig_extractor = docs_mod.extract_images_from_document
+    docs_mod.extract_images_from_document = lambda path, ft: extracted
+    try:
+        await docs_mod.process_document_background(
+            doc_id, 1, "# heading\nbody text", "notes",
+            source_path="/tmp/x.pdf", file_type="pdf",
+        )
+    finally:
+        _restore_pipeline(originals)
+        docs_mod.extract_images_from_document = orig_extractor
+
+    image_adds = [a for a in fakes["chroma"].added
+                  if a["metadatas"][0].get("modality") == "image"]
+    check(
+        "extracted image gets a chroma upsert with modality='image'",
+        len(image_adds) == 1
+        and image_adds[0]["documents"] == ["[图片: notes p.1]"]
+        and image_adds[0]["metadatas"][0]["image_path"].startswith(
+            f"images/{doc_id}/"
+        ),
+        f"image_adds={image_adds}",
+    )
+    check(
+        "sqlite: extracted image chunk row has modality='image'",
+        _sqlite_scalar(
+            "SELECT modality FROM chunks WHERE document_id = ?", (doc_id,)
+        ) == "image",
+    )
+    check(
+        "neo4j: chunk batch includes the image chunk node",
+        any(
+            ch["content"] == "[图片: notes p.1]"
+            for (did, batch) in fakes["neo4j"].chunk_batches
+            for ch in batch
+            if did == doc_id
+        ),
+    )
+    check(
+        "doc status still reaches ready (text path is primary)",
+        _sqlite_scalar(
+            "SELECT status FROM documents WHERE id = ?", (doc_id,)
+        ) == "ready",
+        f"status={_sqlite_scalar('SELECT status FROM documents WHERE id = ?', (doc_id,))!r} "
+        f"error={_sqlite_scalar('SELECT error_message FROM documents WHERE id = ?', (doc_id,))!r}",
+    )
+
+
+def hashlib_sha256(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+print("\nprocess_document_background (extracted images)")
+asyncio.run(_case_text_doc_with_extracted_images())
 
 
 def test_all_image_pipeline_checks_passed():
