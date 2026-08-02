@@ -14,10 +14,10 @@
 
 ## 核心功能
 
-1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块
-2. 🔍 **混合检索**：基于硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + Qwen3-Reranker 重排序 + RRF 融合
+1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块；**图片（PNG/JPG）可直接上传或从 PDF/DOCX 内抽取**，作为独立检索单元入库
+2. 🔍 **多模态混合检索**：基于百炼 `qwen3-vl-embedding` 的多模态向量（文本与图片共享同一向量空间）+ BM25 关键词 + Qwen3-Reranker 重排序 + RRF 融合；**图片可被文本查询命中**，相关性达阈值（sim ≥ 0.45）时提升到文本结果之前
 3. 🕸️ **知识图谱可视化**：d3 + Vue 3 实现的交互式力导向图谱，支持节点拖拽、实体编辑、合并与删除
-4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）
+4. 💬 **大模型对话**：基于 Kimi / 百炼 `qwen3.7-flash`（**原生多模态**）的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）；**检索命中的图片作为多模态附件直接进 LLM 请求**，模型可读图表/截图作答
 5. 📊 **仪表盘与时间线**：文档 / 实体 / 标签统计、月度增长、近期活动、实体首现时间线
 6. 🗺️ **文档聚类地图**：2D PCA 投影可视化所有文档的语义分布
 7. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
@@ -32,9 +32,9 @@
 | 🕸️ 图数据库 | Neo4j 5.14 (Docker, APOC 插件) |
 | 🧬 向量数据库 | ChromaDB 0.4.18 (Docker) |
 | 💾 用户数据 | SQLite + SQLAlchemy 2.0 + aiosqlite (单文件) |
-| 🧩 嵌入模型 | 硅基流动 Qwen3-Embedding-8B (API) |
+| 🧩 嵌入模型 | 百炼 `qwen3-vl-embedding`（多模态，文本+图片，1024 维，DashScope 原生端点；可切回硅基流动 Qwen3-Embedding-8B） |
 | 🎯 重排序 | 硅基流动 Qwen3-Reranker-8B (API) |
-| 🤖 大模型 | Kimi API (Moonshot) / 百炼 qwen-flash (阿里云 DashScope) / 硅基流动 Qwen3-8B |
+| 🤖 大模型 | Kimi API (Moonshot) / 百炼 `qwen3.7-flash`（原生多模态，阿里云 DashScope）/ 硅基流动 Qwen3-8B |
 | 🔑 密码哈希 | bcrypt 3.2.2（原生） |
 | 📝 日志 | Python `logging` + RotatingFileHandler（统一在 `app/logger.py`） |
 
@@ -51,10 +51,10 @@ D:/NC/
 │   ├── app/
 │   │   ├── api/                 # API 端点
 │   │   │   ├── auth.py          # 注册/登录/me
-│   │   │   ├── documents.py     # 文档上传/列表/详情/删除/切块/标签/聚类
-│   │   │   ├── chat.py          # RAG 对话（流式 + 非流式 + 反馈）
+│   │   │   ├── documents.py     # 文档上传/列表/详情/删除/切块/标签/聚类/图片
+│   │   │   ├── chat.py          # RAG 对话（流式 + 非流式 + 反馈 + 图片附件）
 │   │   │   ├── graph.py         # 实体/图谱查询/可视化/编辑/合并
-│   │   │   ├── search.py        # 语义检索
+│   │   │   ├── search.py        # 语义检索（含图片跨模态提升）
 │   │   │   ├── progress.py      # 文档处理进度（SSE + 历史）
 │   │   │   ├── tags.py          # 用户级标签聚合
 │   │   │   ├── timeline.py      # 时间线聚合数据
@@ -62,25 +62,31 @@ D:/NC/
 │   │   ├── auth/                # JWT 鉴权与 bcrypt 密码哈希
 │   │   ├── models/              # Pydantic 数据模型（含字段校验）
 │   │   ├── services/            # 核心服务
-│   │   │   ├── embedding.py     # 硅基流动嵌入（限流 + JSON 缓存）
-│   │   │   ├── llm.py           # 百炼 / Kimi / 硅基流动 多 LLM
+│   │   │   ├── embedding.py     # 多模态嵌入（dashscope/siliconflow 双 provider，限流 + 缓存）
+│   │   │   ├── llm.py           # 百炼 / Kimi / 硅基流动 多 LLM + 多模态图片附件
 │   │   │   ├── chunker.py       # Markdown 层级切块
 │   │   │   ├── entity_extractor.py  # 实体 + 关系提取（LLM 模式）
 │   │   │   ├── neo4j_client.py  # Neo4j 封装（含 UNWIND 批量）
 │   │   │   ├── chroma_client.py # ChromaDB 封装
 │   │   │   ├── bm25.py          # BM25 关键词检索（per-user 索引）
 │   │   │   ├── fusion.py        # RRF / 加权融合
-│   │   │   ├── reranker.py      # 硅基流动 Rerank
+│   │   │   ├── reranker.py      # 硅基流动 Rerank（图片按余弦序分流）
 │   │   │   ├── query_processor.py  # 查询改写 / 变体 / 实体抽取
 │   │   │   ├── progress_tracker.py  # SSE 进度跟踪
 │   │   │   └── doc_status.py    # 文档处理状态机（pending/processing/indexed/failed）
 │   │   ├── auth/                # JWT 鉴权 + bcrypt 密码哈希 + 限流中间件
-│   │   ├── utils/md_parser.py   # Markdown 解析（markitdown 防御性封装）
+│   │   ├── utils/
+│   │   │   ├── md_parser.py     # Markdown 解析（markitdown 防御性封装）
+│   │   │   └── image_extractor.py  # PDF(DOCX 内嵌图片抽取（PyMuPDF / zipfile）
 │   │   ├── config.py            # 配置管理（含 CORS 白名单 + 生产校验）
-│   │   ├── database.py          # SQLite 初始化
+│   │   ├── database.py          # SQLite 初始化（chunks 含 modality/image_path 列）
 │   │   ├── logger.py            # 统一 logging 配置
 │   │   └── main.py              # FastAPI 入口
-│   ├── scripts/rebuild_chroma.py # 向量索引零成本重建（SQLite chunks + embedding 缓存 → Chroma）
+│   ├── scripts/
+│   │   ├── rebuild_chroma.py    # 向量索引零成本重建（SQLite chunks + embedding 缓存 → Chroma）
+│   │   ├── migrate_embeddings.py  # provider 切换时全量重嵌迁移
+│   │   └── probe_vl_embedding.py  # 多模态嵌入端点探针
+│   ├── tests/                   # pytest 测试（134 用例，含图片管道/抽取/附件）
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/                     # Vue 3 + d3 前端（学术雅致派双主题）
@@ -115,6 +121,9 @@ D:/NC/
 │   ├── package.json
 │   └── vite.config.js
 └── data/                         # 数据目录 (gitignore)
+    ├── images/                  # 图片根目录（IMAGE_DIR，默认锚定于此）
+    │   └── <doc_id>/            #   按文档隔离
+    │       └── <sha256>.<ext>   #   内容寻址：同图重复上传只存一份
     ├── sqlite/                  # SQLite 数据库
     ├── uploads/                 # 上传的原文件
     ├── logs/                    # 应用日志（RotatingFileHandler）
@@ -146,15 +155,19 @@ cp .env.example .env
 ```
 
 **必填项：**
-- `SILICON_FLOW_API_KEY` — 硅基流动 API 密钥（用于 Embedding + Rerank + 备用 LLM）
-- `BAILIAN_API_KEY` — 阿里云百炼 API 密钥（用于 LLM）
+- `SILICON_FLOW_API_KEY` — 硅基流动 API 密钥（Rerank + 备用 LLM；切换回 siliconflow 嵌入时也用它）
+- `BAILIAN_API_KEY` — 阿里云百炼 API 密钥（LLM `qwen3.7-flash` + 多模态嵌入 `qwen3-vl-embedding`）
+- `BAILIAN_API_KEY_QWEN_VL_EMBEDDING` — （可选）独立的 VL 嵌入专用密钥，配额与 LLM 解耦；不设置则共享 `BAILIAN_API_KEY`
 - `KIMI_API_KEY` — Moonshot Kimi API 密钥（备用 LLM）
 - `JWT_SECRET` — **生产环境必须**用 `python -c "import secrets; print(secrets.token_urlsafe(48))"` 生成
 
 可选调整：
 - `CORS_ALLOWED_ORIGINS` — 逗号分隔的允许来源（默认 `http://localhost:5173`）
 - `APP_ENV` — `development`（默认）或 `production`（生产环境会拒绝默认 JWT_SECRET 启动）
-- `UPLOAD_DIR` / `SQLITE_PATH` / `LOG_DIR` — 数据与日志目录
+- `UPLOAD_DIR` / `IMAGE_DIR` / `SQLITE_PATH` / `LOG_DIR` — 数据与日志目录（`IMAGE_DIR` 默认锚定 `D:\NC\data\images`，与启动目录无关）
+- `EMBEDDING_PROVIDER` — `dashscope`（默认，多模态）或 `siliconflow`；**切换 = 换向量空间，必须停服重跑 `scripts/migrate_embeddings.py`**
+- `IMAGE_PROMOTION_THRESHOLD` — 图片提升阈值（默认 `0.45`，实测相关图 0.49–0.56 / 无关图 ≤ 0.41）
+- `QUERY_REWRITE_MIN_LEN` — 查询改写触发长度（默认 20 字符，更长才付 LLM 改写成本）
 - `ENABLE_LLM_EXTRACTION` / `USE_RULE_EXTRACTION` — 实体提取策略（默认纯 LLM 模式）
 - `ENTITY_BATCH_SIZE` — 实体提取批大小（默认 200）
 
@@ -213,18 +226,19 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `GET  /api/auth/me` — 获取当前用户信息
 
 ### 📄 文档 `/api/documents`
-- `POST   /api/documents/upload` — 上传文档（multipart/form-data，支持 .pdf/.docx/.doc/.txt/.md/.markdown，≤ 10MB）
+- `POST   /api/documents/upload` — 上传文档（multipart/form-data，支持 .pdf/.docx/.doc/.txt/.md/.markdown，≤ 10MB；**也接受 .png/.jpg/.jpeg 图片，≤ 8MB**，图片跳过文本管道直接多模态入库）
 - `GET    /api/documents` — 列出用户文档（分页：`?skip=0&limit=100`；可选 `?tag=xxx` 过滤）
 - `GET    /api/documents/{id}/detail` — 文档详情（metadata + 标签 + 切块统计 + 关键实体 + 关联文档）
-- `GET    /api/documents/{id}/chunks` — 文档切块列表
-- `GET    /api/documents/cluster-map` — 2D PCA 聚类地图（所有文档的语义投影）
-- `DELETE /api/documents/{id}` — 删除文档（联动清理 SQLite + ChromaDB + Neo4j）
+- `GET    /api/documents/{id}/chunks` — 文档切块列表（图片 chunk 带 `modality` / `image_url`）
+- `GET    /api/documents/cluster-map` — 2D PCA 聚类地图（所有文档的语义投影，排除图片占位 chunk）
+- `DELETE /api/documents/{id}` — 删除文档（联动清理 SQLite + ChromaDB + Neo4j + images 目录）
+- `GET    /api/documents/images/{doc_id}/{filename}` — 图片服务端点（`Bearer` 或 `?token=` 鉴权；realpath 防穿越；越权返回 404 而非 403）
 - `GET    /api/documents/{id}/tags` — 文档标签列表
 - `POST   /api/documents/{id}/tags` — 添加文档标签（幂等，返回最新标签列表）
 - `DELETE /api/documents/{id}/tags/{tag:path}` — 移除文档标签（返回最新标签列表）
 
 ### 🔍 检索 `/api/search`
-- `POST /api/search` — 语义检索（向量 + BM25 + Rerank + 图谱关联）
+- `POST /api/search` — 语义检索（多模态向量召回 top_k×4 → Rerank 文本精排、图片按余弦序分流 → 图片提升：sim ≥ `IMAGE_PROMOTION_THRESHOLD` 前插到文本之前，低于阈值的保留在窗口末尾 → 两阶段去重扩展上下文 → 图谱关联）
 
 ### 🕸️ 图谱 `/api/graph`
 - `GET    /api/graph/entities?query=xxx` — 实体名称模糊搜索
@@ -236,8 +250,8 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `POST   /api/graph/entities/merge` — 合并实体（`{source, target}`，source 被删除并重新指向 target）
 
 ### 💬 对话 `/api/chat`
-- `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `enable_thinking`）
-- `POST   /api/chat/stream` — 发送消息（Server-Sent Events 流式）
+- `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `enable_thinking`；**检索命中的图片作为多模态附件随请求发送**，`qwen3.7-flash` 原生读图作答）
+- `POST   /api/chat/stream` — 发送消息（Server-Sent Events 流式，同样携带图片附件）
 
 > 流式帧顺序：`event: sources`（参考来源）→ `event: thinking`（仅当 `enable_thinking=true`，模型推理过程，可折叠）→ 默认 `data:` 帧（回答正文 chunk）→ `event: done`（终止）。
 > 深度思考模式：`enable_thinking` 透传 Qwen 混合思考参数，模型先流式输出 `reasoning_content` 再输出正文；对不支持该参数的模型层，HTTP 400 时自动去参重试一次。首字计时锚定到正文首 token，非推理首 token。
@@ -269,17 +283,26 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 
 ### 📤 文档上传流程
 ```
-PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
-    → 硅基流动 Embedding (Qwen3-Embedding-8B) → ChromaDB 存储
+文本 (PDF/Word/TXT/MD)
+    → markitdown → Markdown → 层级解析 → 语义切块
+    → 多模态 Embedding (qwen3-vl-embedding) → ChromaDB 存储
+    → 内嵌图片抽取 (PDF: PyMuPDF / DOCX: zipfile，≤20 张/文档) → 逐张入库
     → Neo4j 实体关系提取 (BM25 索引同步) → SSE 进度推送
+
+图片 (PNG/JPG 直接上传)
+    → magic bytes 校验 → 落盘 IMAGE_DIR/<doc_id>/<sha256>.<ext>
+    → 单图单向量 → ChromaDB (占位文本 + modality/image_path metadata)
+    → 跳过切块/实体抽取 → `indexed → ready` 直达
 ```
 
 ### 🔍 检索对话流程
 ```
-用户 Query → 查询改写 (LLM) → Embedding
-    → 向量检索 + BM25 → RRF 融合 → Qwen3-Reranker
+用户 Query → 查询改写 (LLM，≥20 字符才触发) → Embedding (qwen3-vl-embedding)
+    → 向量检索 + BM25 → RRF 融合 → Qwen3-Reranker (文本精排，图片按余弦序分流)
     → 上下文扩展 (前/后 chunk) → Neo4j 图谱关联
-    → 构建 Prompt → Kimi / 百炼 LLM → 流式返回结果
+    → 命中图片：从磁盘读取 (realpath 围栏 + 2MB 上限) → base64 data URI
+    → 构建 Prompt (文本 Context + 多模态图片附件) → qwen3.7-flash 读图作答
+    → 流式返回结果
         ├─ enable_thinking=true:  先流式 reasoning_content (event: thinking)
         └─ 默认:                  直接流式正文 (data: chunk)
 ```
@@ -292,16 +315,18 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
     "chunk_id": "uuid",
     "document_id": "doc_uuid",
     "user_id": "user_uuid",
-    "content": "文本内容",
+    "content": "文本内容 / 图片占位文本 [图片: <名称>]",
+    "modality": "text | image",        # 模态标记
+    "image_path": "images/<doc_id>/<file>",  # 仅图片：相对 IMAGE_DIR 的存储路径
     "hierarchy": {
         "level": 2,                    # 标题层级
-        "path": ["标题1", "标题1.1"],    # 层级路径
+        "path": ["标题1", "标题1.1"],    # 层级路径（图片为文档标题或 "Page N"）
         "parent_id": "parent_chunk_id"
     },
     "position": {
         "start_line": 10,
         "end_line": 25,
-        "prev_chunk_id": "uuid",       # 前一块（用于上下文召回）
+        "prev_chunk_id": "uuid",       # 前一块（用于上下文召回；图片无 prev/next）
         "next_chunk_id": "uuid"        # 后一块
     }
 }
@@ -356,16 +381,26 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | `SILICON_FLOW_BASE_URL` | 硅基流动 base URL | `https://api.siliconflow.cn/v1` | 否 |
 | `KIMI_API_KEY` | Moonshot Kimi 密钥（备用 LLM） | - | 否 |
 | `KIMI_BASE_URL` | Moonshot base URL | `https://api.moonshot.cn/v1` | 否 |
-| `BAILIAN_API_KEY` | 阿里云百炼 LLM 密钥 | - | **是** |
+| `BAILIAN_API_KEY` | 阿里云百炼密钥（LLM + 多模态嵌入） | - | **是** |
 | `BAILIAN_BASE_URL` | 百炼 base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 否 |
-| `BAILIAN_MODEL` | 百炼模型 | `qwen-flash` | 否 |
+| `BAILIAN_MODEL` | 百炼模型（原生多模态） | `qwen3.7-flash` | 否 |
+| `BAILIAN_API_KEY_QWEN_VL_EMBEDDING` | 独立 VL 嵌入专用密钥（不与 LLM 共享配额）；兼容旧拼写 `BAILIAN_API_KEY_Qwen-VL-Embedding` | 空（共享 `BAILIAN_API_KEY`） | 否 |
 | `JWT_SECRET` | JWT 签名密钥 | 占位符（生产必须替换） | **是** |
 | `JWT_ALGORITHM` | JWT 算法 | `HS256` | 否 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期（分钟） | `60` | 否 |
-| `UPLOAD_DIR` | 上传文件目录 | `./data/uploads` | 否 |
+| `UPLOAD_DIR` | 上传文件目录（相对 backend 运行目录） | `./data/uploads` | 否 |
+| `IMAGE_DIR` | 图片根目录（绝对路径或相对 cwd；默认锚定 `D:\NC\data\images`，与启动目录无关） | 根级 `data/images` | 否 |
 | `MAX_FILE_SIZE` | 最大文件大小（字节） | `10485760`（10MB） | 否 |
-| `EMBEDDING_MODEL` | 嵌入模型名 | `Qwen/Qwen3-Embedding-8B` | 否 |
-| `EMBEDDING_DIM` | 嵌入维度 | `1024` | 否 |
+| `IMAGE_MAX_FILE_SIZE` | 图片最大大小（字节，base64 膨胀余量） | `8388608`（8MB） | 否 |
+| `IMAGE_RESULT_QUOTA` | 图片结果配额（rerank 后追加的图片数量） | `2` | 否 |
+| `IMAGE_PROMOTION_THRESHOLD` | 图片提升阈值（余弦相似度，≥ 则前插） | `0.45` | 否 |
+| `IMAGE_MIN_DIMENSION` | 抽取图片最小边像素（滤图标/装饰） | `120` | 否 |
+| `EMBEDDING_PROVIDER` | 嵌入 provider（`dashscope` / `siliconflow`，切换 = 换向量空间，需重嵌） | `dashscope` | 否 |
+| `EMBEDDING_MODEL` | SiliconFlow provider 嵌入模型名 | `Qwen/Qwen3-Embedding-8B` | 否 |
+| `DASHSCOPE_EMBEDDING_MODEL` | DashScope provider 嵌入模型（多模态） | `qwen3-vl-embedding` | 否 |
+| `EMBEDDING_DIM` | 嵌入维度（钉死，所有 provider 一致；改动需全量重嵌） | `1024` | 否 |
+| `QUERY_REWRITE_MIN_LEN` | 查询改写触发长度（更短直接检索） | `20` | 否 |
+| `RERANK_RECALL_K` | 每路召回候选数（进 RRF/rerank 前） | `25` | 否 |
 | `RERANK_MODEL` | Rerank 模型 | `Qwen/Qwen3-Reranker-8B` | 否 |
 | `CORS_ALLOWED_ORIGINS` | 允许的 CORS 来源（逗号分隔） | localhost 开发地址 | 否 |
 | `ENABLE_LLM_EXTRACTION` | 启用 LLM 实体提取 | `True` | 否 |
@@ -499,6 +534,9 @@ vite ^7.2.4
 9. ⚠️ **实体合并**：`POST /api/graph/entities/merge` 会硬删 source 并将所有引用指向 target，操作不可逆
 10. 🔧 **Chroma entrypoint 绕过**：`docker-compose.yml` 覆盖了 chromadb 0.4.18 镜像 entrypoint——原 entrypoint 每次启动 `pip install --force-reinstall chroma-hnswlib`，新版会拉入 numpy 2.x 导致 `np.float_` 崩溃。改为直接跑 uvicorn，沿用镜像内可用的 hnswlib
 11. ♻️ **向量索引重建**：若 Chroma 向量丢失（容器重建/误删/迁移），运行 `backend/scripts/rebuild_chroma.py` 可从 SQLite `chunks` + `embedding_cache`（md5-keyed）零 API 成本回灌，复用 `get_chroma_client` 保证集合名/cosine/upsert 与摄入路径一致
+12. 🔀 **Embedding provider 切换 = 换向量空间**：`EMBEDDING_PROVIDER` 是硬开关不是自动降级，dashscope 与 siliconflow 向量互不兼容；切换必须停后端 → `scripts/migrate_embeddings.py --dry-run` 估成本 → `--yes` 全量重嵌（旧缓存键天然不命中，重跑零成本）→ 再启动
+13. 🖼️ **图片安全**：上传走 magic bytes 校验；存储内容寻址（sha256 文件名，天然去重）；服务端点 realpath 防穿越 + 扩展名白名单 + 属主校验（越权一律 404）；LLM 附件同围栏 + 2MB 上限，base64 不进磁盘缓存
+14. 🧠 **模型要求**：`qwen3.7-flash` 原生多模态（可读图作答）；若换成纯文本模型，图片附件会被忽略但检索/来源卡片不受影响
 
 ## 📜 许可证
 
