@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # incompatible semantic spaces, so switching providers REQUIRES re-running
     # scripts/migrate_embeddings.py with the backend stopped. An invalid value
     # is rejected at startup (see get_settings).
-    EMBEDDING_PROVIDER: str = "siliconflow"
+    EMBEDDING_PROVIDER: str = "dashscope"
     # SiliconFlow provider (OpenAI-compatible) model name.
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
     # DashScope provider (native multimodal endpoint; auth via BAILIAN_API_KEY).

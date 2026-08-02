@@ -1,0 +1,164 @@
+{
+  "summary": {
+    "hit@1_mean": 0.5,
+    "hit@1_n": 4,
+    "hit@10_mean": 1.0,
+    "hit@10_n": 4,
+    "hit@3_mean": 1.0,
+    "hit@3_n": 4,
+    "hit@5_mean": 1.0,
+    "hit@5_n": 4,
+    "mrr_mean": 0.75,
+    "mrr_n": 4,
+    "ndcg@1_mean": 0.5,
+    "ndcg@1_n": 4,
+    "ndcg@10_mean": 1.0358977541411196,
+    "ndcg@10_n": 4,
+    "ndcg@3_mean": 0.6707336795501018,
+    "ndcg@3_n": 4,
+    "ndcg@5_mean": 0.8326629949527244,
+    "ndcg@5_n": 4,
+    "precision@1_mean": 0.5,
+    "precision@1_n": 4,
+    "precision@10_mean": 0.25,
+    "precision@10_n": 4,
+    "precision@3_mean": 0.3333333333333333,
+    "precision@3_n": 4,
+    "precision@5_mean": 0.35,
+    "precision@5_n": 4,
+    "recall@1_mean": 0.5,
+    "recall@1_n": 4,
+    "recall@10_mean": 0.875,
+    "recall@10_n": 4,
+    "recall@3_mean": 0.7083333333333333,
+    "recall@3_n": 4,
+    "recall@5_mean": 0.875,
+    "recall@5_n": 4,
+    "elapsed_seconds": 12.726,
+    "total_cases": 5
+  },
+  "cases": [
+    {
+      "id": "factual-01",
+      "query": "文档中是如何定义智能体(Agent)这个概念的?",
+      "difficulty": "easy",
+      "tags": [
+        "factual",
+        "single-doc"
+      ],
+      "metrics": {
+        "hit@1": 1.0,
+        "precision@1": 1.0,
+        "recall@1": 1.0,
+        "ndcg@1": 1.0,
+        "hit@3": 1.0,
+        "precision@3": 0.3333333333333333,
+        "recall@3": 1.0,
+        "ndcg@3": 1.0,
+        "hit@5": 1.0,
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "ndcg@5": 1.0,
+        "hit@10": 1.0,
+        "precision@10": 0.2,
+        "recall@10": 1.0,
+        "ndcg@10": 1.3154648767857289,
+        "mrr": 1.0
+      }
+    },
+    {
+      "id": "cross-chunk-01",
+      "query": "智能体在应用中的协作模式主要有哪几种?分别是如何工作的?",
+      "difficulty": "medium",
+      "tags": [
+        "synthesis",
+        "multi-chunk"
+      ],
+      "metrics": {
+        "hit@1": 0.0,
+        "precision@1": 0.0,
+        "recall@1": 0.0,
+        "ndcg@1": 0.0,
+        "hit@3": 1.0,
+        "precision@3": 0.3333333333333333,
+        "recall@3": 0.3333333333333333,
+        "ndcg@3": 0.2960819109658652,
+        "hit@5": 1.0,
+        "precision@5": 0.6,
+        "recall@5": 1.0,
+        "ndcg@5": 0.6797310500037655,
+        "hit@10": 1.0,
+        "precision@10": 0.4,
+        "recall@10": 1.0,
+        "ndcg@10": 0.8209980228635946,
+        "mrr": 0.5
+      }
+    },
+    {
+      "id": "refuse-01",
+      "query": "What is the population of Mars?",
+      "difficulty": "hard",
+      "tags": [
+        "refusal",
+        "safety"
+      ],
+      "metrics": {}
+    },
+    {
+      "id": "graph-rag-01",
+      "query": "MetaGPT 和 CrewAI 是如何组织多智能体协作的?",
+      "difficulty": "medium",
+      "tags": [
+        "entity-anchored",
+        "graph-rag"
+      ],
+      "metrics": {
+        "hit@1": 1.0,
+        "precision@1": 1.0,
+        "recall@1": 1.0,
+        "ndcg@1": 1.0,
+        "hit@3": 1.0,
+        "precision@3": 0.3333333333333333,
+        "recall@3": 1.0,
+        "ndcg@3": 1.0,
+        "hit@5": 1.0,
+        "precision@5": 0.2,
+        "recall@5": 1.0,
+        "ndcg@5": 1.0,
+        "hit@10": 1.0,
+        "precision@10": 0.2,
+        "recall@10": 1.0,
+        "ndcg@10": 1.3562071871080221,
+        "mrr": 1.0
+      }
+    },
+    {
+      "id": "compare-01",
+      "query": "结合两份文档来看,预先定义的传统工作流与自主决策的智能体有什么本质区别?",
+      "difficulty": "medium",
+      "tags": [
+        "comparison",
+        "multi-doc"
+      ],
+      "metrics": {
+        "hit@1": 0.0,
+        "precision@1": 0.0,
+        "recall@1": 0.0,
+        "ndcg@1": 0.0,
+        "hit@3": 1.0,
+        "precision@3": 0.3333333333333333,
+        "recall@3": 0.5,
+        "ndcg@3": 0.38685280723454163,
+        "hit@5": 1.0,
+        "precision@5": 0.4,
+        "recall@5": 0.5,
+        "ndcg@5": 0.6509209298071326,
+        "hit@10": 1.0,
+        "precision@10": 0.2,
+        "recall@10": 0.5,
+        "ndcg@10": 0.6509209298071326,
+        "mrr": 0.5
+      }
+    }
+  ]
+}
