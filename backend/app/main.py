@@ -30,6 +30,12 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
+    # Fail fast on a typo'd retrieval pipeline config — an unknown step
+    # name would otherwise only surface on the first retrieval request.
+    from app.services.retrieval import build_pipeline, parse_pipeline
+    build_pipeline(parse_pipeline(settings.CHAT_PIPELINE))
+    build_pipeline(parse_pipeline(settings.SEARCH_PIPELINE))
+
     neo4j = await get_neo4j_client()
     await neo4j.connect()
 

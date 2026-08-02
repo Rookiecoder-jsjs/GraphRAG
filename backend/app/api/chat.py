@@ -14,14 +14,13 @@ from app.api.auth import get_current_user
 from app.config import get_settings
 from app.database import get_db
 from app.models.chat import ChatRequest, ChatResponse, Conversation
-from app.services.embedding import get_embedding_service
-from app.services.chroma_client import get_chroma_client
-from app.services.bm25 import get_bm25_service
-from app.services.fusion import reciprocal_rank_fusion, deduplicate_results
-from app.services.query_processor import get_query_processor
-from app.services.neo4j_client import get_neo4j_client
 from app.services.llm import get_llm_service
-from app.services.reranker import get_rerank_service
+from app.services.retrieval import (
+    RetrievalContext,
+    build_pipeline,
+    parse_pipeline,
+    run_pipeline,
+)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -341,7 +340,12 @@ async def build_rag_context(
     use_graph_rag: bool = False,
     compare_mode: bool = False,
 ) -> Dict[str, Any]:
-    """Build context for RAG from vector and graph retrieval.
+    """Build context for RAG by running the chat retrieval pipeline.
+
+    The pipeline (settings.CHAT_PIPELINE) executes the named retrieval
+    steps in order, threading a RetrievalContext between them; this
+    wrapper sets the input knobs and maps the result back to the
+    historical return shape.
 
     Args:
         query: User query
@@ -363,158 +367,61 @@ async def build_rag_context(
     settings = get_settings()
     t_start = time.perf_counter()
 
-    # Query preprocessing. Rewriting costs a full LLM round-trip (~1s) that
-    # BLOCKS every retrieval step after it, so only pay it for queries long
-    # enough to plausibly benefit — short keyword-style questions (the demo
-    # common case) go straight to retrieval. Tunable via QUERY_REWRITE_MIN_LEN
-    # (0 = always rewrite, i.e. the old behavior).
-    search_query = query
-    if use_query_rewrite and len(query.strip()) >= settings.QUERY_REWRITE_MIN_LEN:
-        query_processor = await get_query_processor()
-        rewritten = await query_processor.rewrite_query(query)
-        if rewritten and len(rewritten) > 0:
-            search_query = rewritten
-    t_rewrite = time.perf_counter()
+    ctx = RetrievalContext(
+        query=query,
+        user_id=user_id,
+        settings=settings,
+        top_k=top_k,
+        use_hybrid=use_hybrid,
+        use_query_rewrite=use_query_rewrite,
+        use_graph_rag=use_graph_rag,
+        compare_mode=compare_mode,
+        # Recall per retriever: RERANK_RECALL_K on the hybrid path; the
+        # legacy vector-only path fetched 20.
+        vector_recall=settings.RERANK_RECALL_K if use_hybrid else 20,
+        bm25_recall=settings.RERANK_RECALL_K,
+        # Entity enrichment knobs (chat): top-3 names, depth 2, append
+        # "Related"-typed neighbours.
+        entity_name_limit=3,
+        entity_depth=2,
+        append_related=True,
+    )
+    step_names = parse_pipeline(settings.CHAT_PIPELINE)
+    if use_graph_rag and "graph_retrieve" not in step_names:
+        # The graph candidate lane must run after query_rewrite (it
+        # extracts entities from the rewritten query) and before
+        # rrf_fuse (which merges its hits) — mirroring the historical
+        # graph-RAG ordering.
+        insert_at = step_names.index("query_rewrite") + 1 \
+            if "query_rewrite" in step_names else 1
+        step_names.insert(insert_at, "graph_retrieve")
+    ctx = await run_pipeline(
+        build_pipeline(step_names), ctx
+    )
 
-    # Get query embedding
-    embedding_service = await get_embedding_service()
-    query_embedding = await embedding_service.embed_single(search_query)
-    t_embed = time.perf_counter()
-
-    # Hybrid search
-    chroma = get_chroma_client()
-    bm25 = get_bm25_service()
-    neo4j = await get_neo4j_client()
-
-    # ---------- Optional graph-RAG candidate set ----------
-    # When enabled, ask the graph: "which chunks MENTION any of the
-    # entities the user is asking about?" The result is a hard-filtered
-    # candidate list; if it has fewer than top_k hits we fill the rest
-    # from the usual vector+BM25 path (deduped) so we never deliver
-    # fewer candidates than the reranker needs.
-    graph_chunks: List[Dict[str, Any]] = []
-    if use_graph_rag:
-        try:
-            query_processor = await get_query_processor()
-            extracted = await query_processor.extract_entities(search_query)
-            entity_names = [e["name"] for e in (extracted or []) if e.get("name")]
-            if entity_names:
-                graph_chunk_ids = await neo4j.get_chunks_for_entities(
-                    entity_names=entity_names,
-                    user_id=user_id,
-                    limit=max(top_k * 4, 20),
-                )
-                if graph_chunk_ids:
-                    graph_chunks = chroma.get_chunks_by_ids(graph_chunk_ids, user_id)
-                    logger.info(
-                        "graph_rag: extracted %d entities (%s) → %d graph chunks",
-                        len(entity_names), entity_names[:5], len(graph_chunks),
-                    )
-        except Exception as e:
-            # Graph-RAG is an optimization; never let it break the
-            # primary retrieval path.
-            logger.warning("graph_rag: extraction failed, falling back: %s", e)
-
-    # ---------- Vector + BM25 path (always run; will be deduped if graph_rag adds candidates) ----------
-    if use_hybrid:
-        # Check if user has BM25 index, if not, build it
-        if not bm25.has_index(user_id):
-            # Build BM25 index from SQLite for this user
-            async with get_db() as db:
-                async with db.execute(
-                    "SELECT chunk_id, content FROM chunks WHERE user_id = ?",
-                    (user_id,)
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                    if rows:
-                        chunk_contents = [r["content"] for r in rows]
-                        chunk_ids = [r["chunk_id"] for r in rows]
-                        bm25.build_user_index(user_id, chunk_contents, chunk_ids)
-
-        # Recall budget per retriever. RRF + the reranker only need enough
-        # candidates to reliably contain the final top_k; RERANK_RECALL_K=25
-        # roughly halves the rerank payload (and its latency) vs the old 50.
-        recall_k = settings.RERANK_RECALL_K
-
-        # Vector search (larger recall for fusion)
-        vector_results = chroma.search(query_embedding, user_id, top_k=recall_k)
-
-        # BM25 search
-        bm25_results = bm25.search(search_query, user_id, top_k=recall_k)
-
-        # RRF fusion
-        fused_results = reciprocal_rank_fusion(
-            vector_results,
-            bm25_results,
-            k=60,
-            top_k=recall_k
-        )
-        hybrid_chunks = fused_results
-    else:
-        # Original vector-only search
-        hybrid_chunks = chroma.search(query_embedding, user_id, top_k=20)
-
-    # ---------- Merge: graph hits first (boost), then hybrid dedup ----------
-    if graph_chunks:
-        seen = {c.get("chunk_id") for c in graph_chunks}
-        # Give graph hits a small synthetic rank boost by prepending them
-        # before the hybrid set. The reranker will re-score from scratch.
-        merged = list(graph_chunks) + [
-            c for c in hybrid_chunks if c.get("chunk_id") not in seen
-        ]
-        chunks = merged
-    else:
-        chunks = hybrid_chunks
-    t_retrieve = time.perf_counter()
-
-    # Rerank to get top_k most relevant
-    rerank_service = await get_rerank_service()
-    chunks = await rerank_service.rerank(search_query, chunks, top_k=top_k)
-    t_rerank = time.perf_counter()
-
-    # Get context chunks
-    all_chunks = []
-    for chunk in chunks:
-        all_chunks.append(chunk)
-        context = chroma.get_chunk_context(chunk["chunk_id"], user_id, window_size=1)
-        all_chunks.extend(context)
-
-    # Get entities from chunks
-    chunk_ids = [c["chunk_id"] for c in all_chunks]
-    entities = await neo4j.get_entities_from_chunks(chunk_ids, user_id)
-
-    # Get related entities from graph
-    entity_names = [e["name"] for e in entities]
-    relations = []
-    if entity_names:
-        graph_data = await neo4j.get_related_entities(entity_names[:3], user_id, depth=2)
-        relations = graph_data.get("relations", [])
-        # Add related entities to list
-        for rel in relations:
-            if not any(e["name"] == rel["source"] for e in entities):
-                entities.append({"name": rel["source"], "type": "Related"})
-            if not any(e["name"] == rel["target"] for e in entities):
-                entities.append({"name": rel["target"], "type": "Related"})
-
-    # Per-stage latency breakdown — lets us compare before/after tuning and
+    # Per-stage latency breakdown — recomputed from per-step timings so the
+    # log format is identical to the pre-pipeline version, and we can still
     # immediately spot which step dominates time-to-first-token.
+    def _bucket(*names: str) -> float:
+        return sum(ctx.timings.get(n, 0.0) for n in names)
+
     t_end = time.perf_counter()
     logger.info(
         "build_rag_context timing: rewrite=%.3fs embed=%.3fs retrieve=%.3fs "
         "rerank=%.3fs enrich=%.3fs total=%.3fs (context_chunks=%d)",
-        t_rewrite - t_start,
-        t_embed - t_rewrite,
-        t_retrieve - t_embed,
-        t_rerank - t_retrieve,
-        t_end - t_rerank,
+        _bucket("query_rewrite"),
+        _bucket("query_embed"),
+        _bucket("vector_retrieve", "bm25_retrieve", "graph_retrieve", "rrf_fuse"),
+        _bucket("rerank"),
+        _bucket("context_enrich", "entity_enrich"),
         t_end - t_start,
-        len(all_chunks),
+        len(ctx.chunks),
     )
 
     return {
-        "chunks": all_chunks,
-        "entities": entities,
-        "relations": relations
+        "chunks": ctx.chunks,
+        "entities": ctx.entities,
+        "relations": ctx.relations,
     }
 
 
