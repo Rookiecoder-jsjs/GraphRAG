@@ -2,6 +2,7 @@
 import json
 import logging
 import math
+import os
 import time
 import uuid
 from typing import List, Dict, Any, AsyncGenerator, Optional
@@ -167,7 +168,22 @@ async def _build_citation_context(
       - chunk_id_to_index: lookup so callers can resolve any chunk_id back
         to its citation number without re-iterating.
     """
-    selected = chunks[:max_chunks]
+    # Modality split: TEXT chunks feed the LLM prompt and own citation
+    # numbers; IMAGE chunks are display-only sources — the text LLM cannot
+    # see them, so it can never cite them, and counting them in the
+    # citation-coverage denominator would permanently deflate the ratio.
+    # Image sources get display indices AFTER the text block so the chips
+    # stay contiguous ([1]..[N] text, then [N+1].. images).
+    text_chunks = [
+        c for c in chunks
+        if (c.get("metadata") or {}).get("modality") != "image"
+    ]
+    image_chunks = [
+        c for c in chunks
+        if (c.get("metadata") or {}).get("modality") == "image"
+    ][:get_settings().IMAGE_RESULT_QUOTA]
+
+    selected = text_chunks[:max_chunks]
     parts: List[str] = []
     sources: List[Dict[str, Any]] = []
     chunk_id_to_index: Dict[str, int] = {}
@@ -178,7 +194,7 @@ async def _build_citation_context(
     doc_ids = list({
         (chunk.get("metadata") or {}).get("document_id")
         or chunk.get("document_id")
-        for chunk in selected
+        for chunk in [*selected, *image_chunks]
     } - {None})
     title_by_doc: Dict[str, str] = {}
     if doc_ids:
@@ -259,11 +275,42 @@ async def _build_citation_context(
                 float(raw_score) if raw_score is not None else None
             ),
             "quality": _quality_for_score(raw_score),
+            "modality": "text",
+            "image_url": None,
+        })
+
+    # Image sources: thumbnail cards for the panel, never prompt context.
+    next_index = len(selected) + 1
+    for offset, chunk in enumerate(image_chunks):
+        meta = chunk.get("metadata") or {}
+        document_id = meta.get("document_id") or chunk.get("document_id")
+        title = title_by_doc.get(document_id, "Untitled")
+        image_path = meta.get("image_path") or ""
+        sources.append({
+            "index": next_index + offset,
+            "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+            "document_id": document_id,
+            "title": title,
+            "hierarchy_path": [title],
+            "content": (chunk.get("content") or "").strip(),
+            "truncated": False,
+            # No reranker score for images — "medium" matches the existing
+            # missing-score rendering on the frontend.
+            "relevance_score": None,
+            "quality": "medium",
+            "modality": "image",
+            "image_url": (
+                f"/api/documents/images/{document_id}/"
+                f"{os.path.basename(image_path)}"
+            ) if image_path else None,
         })
 
     return {
         "context_str": "\n\n".join(parts),
         "sources": sources,
+        # Text-only by construction (images never enter the map) — the
+        # citation-coverage denominator must use this, not len(sources),
+        # or image sources would dilute the ratio.
         "chunk_id_to_index": chunk_id_to_index,
     }
 
@@ -551,7 +598,7 @@ async def chat(
                 cited_markers.add(idx)
     coverage = _citation_coverage(
         num_cited_markers=len(cited_markers),
-        num_sources=len(citation["sources"]),
+        num_sources=len(citation["chunk_id_to_index"]),
     )
 
     return {
@@ -694,7 +741,7 @@ Context:
                 cited_markers.add(idx)
     coverage = _citation_coverage(
         num_cited_markers=len(cited_markers),
-        num_sources=len(citation["sources"]),
+        num_sources=len(citation["chunk_id_to_index"]),
     )
 
     # The answer is fully streamed, saved, and coverage is computed — the

@@ -3,79 +3,23 @@
 Authentication:
     Header `Authorization: Bearer <jwt>` is preferred. EventSource cannot set
     custom headers, so for SSE connections we also accept the token via the
-    `?token=` query string as a fallback. The query-string form leaks the token
-    into reverse-proxy access logs and browser history — treat those URLs as
-    sensitive and prefer short-lived tokens. A future fix is to switch to
-    HttpOnly cookies set on login.
+    `?token=` query string as a fallback — see app/api/_token_auth.py, the
+    shared helper this endpoint uses together with the image-serving route.
 """
 import asyncio
 import json
-import logging
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.auth.jwt_handler import verify_token
+from app.api._token_auth import (
+    authenticate_with_token_fallback as _authenticate_sse,
+)
 from app.database import get_db
 from app.services.progress_tracker import get_progress_emitter
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter(tags=["progress"])
-
-
-def _extract_bearer_token(authorization: Optional[str]) -> str:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return authorization.split(" ", 1)[1].strip()
-
-
-def _resolve_token(
-    authorization: Optional[str], query_token: Optional[str]
-) -> str:
-    """Pick the token: prefer the Authorization header, fall back to ?token="""
-    if authorization:
-        try:
-            return _extract_bearer_token(authorization)
-        except HTTPException:
-            if not query_token:
-                raise
-    if query_token:
-        logger.debug("SSE auth via query string (URL logged by reverse proxy)")
-        return query_token.strip()
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing token (need Authorization header or ?token= query string)",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-async def _user_from_token(token: str) -> dict:
-    payload = verify_token(token)
-    username = payload.get("sub")
-    async with get_db() as db:
-        async with db.execute(
-            "SELECT id, username, created_at FROM users WHERE username = ?",
-            (username,),
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
-                )
-            return dict(row)
-
-
-async def _authenticate_sse(
-    authorization: Optional[str], query_token: Optional[str]
-) -> dict:
-    token = _resolve_token(authorization, query_token)
-    return await _user_from_token(token)
 
 
 def _sse_error(detail: str, status_code: int) -> StreamingResponse:

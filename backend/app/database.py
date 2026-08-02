@@ -33,6 +33,26 @@ async def _ensure_document_status_columns(db) -> None:
         )
 
 
+async def _ensure_chunk_modality_columns(db) -> None:
+    """Idempotently add the multimodal columns to an existing chunks table.
+
+    Databases created before the multimodal migration lack ``modality`` and
+    ``image_path``. Legacy rows are backfilled as ``modality='text'`` —
+    every pre-existing chunk is text, and retrieval code keys off this
+    column (reranker partition, cluster-map exclusion, frontend cards).
+    """
+    async with db.execute("PRAGMA table_info(chunks)") as cursor:
+        existing = {row[1] for row in await cursor.fetchall()}
+
+    if "modality" not in existing:
+        await db.execute("ALTER TABLE chunks ADD COLUMN modality TEXT")
+        await db.execute(
+            "UPDATE chunks SET modality = 'text' WHERE modality IS NULL"
+        )
+    if "image_path" not in existing:
+        await db.execute("ALTER TABLE chunks ADD COLUMN image_path TEXT")
+
+
 async def init_db():
     """Initialize SQLite database with required tables."""
     settings = get_settings()
@@ -95,6 +115,8 @@ async def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
+        # Migrate databases created before the multimodal columns existed.
+        await _ensure_chunk_modality_columns(db)
 
         # Create embedding cache table
         await db.execute("""

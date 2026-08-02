@@ -91,8 +91,21 @@ class Chunk(BaseModel):
 
 
 class ChunkResponse(Chunk):
-    """Chunk response model."""
+    """Chunk response model for DB-sourced chunk rows.
+
+    DB rows don't carry the chunker's line positions, so `position` is
+    relaxed to Optional here (the stricter parent shape is what the
+    ingestion pipeline uses in-memory).
+    """
     created_at: Optional[datetime] = None
+    document_id: Optional[str] = None
+    user_id: Optional[int] = None
+    position: Optional[ChunkPosition] = None
+    # Multimodal fields (optional — text chunks predate them):
+    # modality "text" renders as a snippet, "image" renders as a thumbnail
+    # fetched from image_url (?token= appended client-side).
+    modality: Optional[str] = "text"
+    image_url: Optional[str] = None
 
     class Config:
         from_attributes = True

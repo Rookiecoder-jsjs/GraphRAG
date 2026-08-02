@@ -1,16 +1,20 @@
 """Document management API endpoints."""
 import logging
+import hashlib
 import os
+import shutil
 import uuid
 from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, Header, Query, UploadFile, File, HTTPException, status, BackgroundTasks
+from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.database import get_db
 from app.api.auth import get_current_user
+from app.api._token_auth import authenticate_with_token_fallback
 from app.models.document import DocumentResponse, ChunkResponse, TagCreate, TagResponse
 from app.utils.md_parser import convert_document_to_markdown, clean_markdown, extract_title_from_markdown
 from app.services.chunker import chunk_markdown
@@ -68,6 +72,20 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt', '.md', '.markdown'}
 
+# Direct image uploads (multimodal retrieval). GIF/WebP are intentionally
+# NOT enabled yet — the Phase 0 probe only verified PNG/JPEG against the
+# DashScope endpoint; re-run scripts/probe_vl_embedding.py before adding.
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg'}
+ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS | IMAGE_EXTENSIONS
+
+# Explicit extension -> media type map for uploads AND serving. Never trust
+# the mimetypes module (platform-dependent) or client-declared types.
+MEDIA_TYPE_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+
 
 def get_file_extension(filename: str) -> str:
     """Get file extension."""
@@ -99,6 +117,10 @@ def _content_matches_extension(content: bytes, ext: str) -> bool:
             head[:4] in (b"PK\x03\x04", b"PK\x05\x06")
             or head[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
         )
+    if ext == "png":
+        return head[:8] == b"\x89PNG\r\n\x1a\n"
+    if ext in ("jpg", "jpeg"):
+        return head[:3] == b"\xff\xd8\xff"
     return True
 
 
@@ -144,6 +166,14 @@ async def upload_document(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File content does not match its extension"
+        )
+
+    # Images bypass the Markdown pipeline entirely — they are indexed as a
+    # single multimodal retrieval unit, not chunked as text.
+    file_ext = get_file_extension(file.filename)
+    if file_ext in IMAGE_EXTENSIONS:
+        return await _register_image_upload(
+            background_tasks, file, file_content, file_ext, user_id, settings
         )
 
     # Generate document ID
@@ -213,6 +243,213 @@ async def upload_document(
     )
 
     return dict(doc)
+
+
+async def _register_image_upload(
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    file_content: bytes,
+    file_ext: str,
+    user_id: int,
+    settings,
+) -> dict:
+    """Persist an image upload, register it, and queue multimodal indexing.
+
+    Images skip Markdown conversion / chunking / entity extraction: one
+    image becomes ONE vector in the shared text+image space. Storage is
+    content-addressed (sha256 filename) — re-uploads dedupe on disk and
+    the chunk id derives from the same hash, keeping re-runs idempotent.
+    """
+    if len(file_content) > settings.IMAGE_MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Image too large. Max size: "
+                   f"{settings.IMAGE_MAX_FILE_SIZE / 1024 / 1024:.1f}MB"
+        )
+
+    doc_id = str(uuid.uuid4())
+    sha = hashlib.sha256(file_content).hexdigest()
+    image_dir = os.path.join(settings.UPLOAD_DIR, "images", doc_id)
+    os.makedirs(image_dir, exist_ok=True)
+    image_filename = f"{sha}{file_ext}"
+    stored_path = os.path.join(image_dir, image_filename)
+    rel_image_path = f"images/{doc_id}/{image_filename}"
+    with open(stored_path, "wb") as f:
+        f.write(file_content)
+
+    title = Path(file.filename).stem or file.filename
+
+    async with get_db() as db:
+        await db.execute(
+            """INSERT INTO documents
+               (id, user_id, title, file_path, original_filename, file_type, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (doc_id, user_id, title, stored_path, file.filename, file_ext[1:],
+             DocStatus.PENDING.value)
+        )
+        await db.commit()
+
+        async with db.execute(
+            "SELECT id, title, original_filename, file_type, created_at, status "
+            "FROM documents WHERE id = ?",
+            (doc_id,)
+        ) as cursor:
+            doc = await cursor.fetchone()
+
+    background_tasks.add_task(
+        process_image_background,
+        doc_id,
+        user_id,
+        stored_path,
+        rel_image_path,
+        title,
+    )
+
+    return dict(doc)
+
+
+async def process_image_background(
+    doc_id: str,
+    user_id: int,
+    image_path_abs: str,
+    image_path_rel: str,
+    title: str,
+):
+    """Index an uploaded image as a single cross-modal retrieval unit.
+
+    Mirrors the text pipeline's error and progress discipline (same SSE
+    event names, same state-machine checkpoints) but skips chunking,
+    graph linking, and entity extraction — the text LLM can't see images,
+    so image documents go ``indexed -> ready`` directly (a legal forward
+    transition in doc_status).
+    """
+    import time
+    progress = get_progress_emitter()
+    start_time = time.time()
+
+    try:
+        logger.info("Starting image processing for doc %s", doc_id)
+        await progress.emit_and_save(
+            doc_id, user_id, "started", "Starting image processing",
+            {"title": title},
+        )
+
+        neo4j = await get_neo4j_client()
+        await neo4j.create_document_node(doc_id, user_id, title)
+        await set_document_status(doc_id, DocStatus.DOCUMENT_CREATED)
+        await progress.emit_and_save(
+            doc_id, user_id, "document_created", "Document created",
+            {"stage": "document_created"},
+        )
+
+        ext = get_file_extension(image_path_abs)
+        media_type = MEDIA_TYPE_BY_EXT.get(ext, "image/png")
+        with open(image_path_abs, "rb") as f:
+            image_bytes = f.read()
+
+        await progress.emit_and_save(
+            doc_id, user_id, "embedding", "Embedding image...",
+            {"stage": "embedding", "current": 0, "total": 1},
+        )
+        embedding_service = await get_embedding_service()
+        try:
+            embedding = await embedding_service.embed_image_bytes(
+                image_bytes, media_type
+            )
+        except (EmbeddingServiceError, ValueError) as embed_err:
+            logger.error("Image embedding failed for doc %s: %s", doc_id, embed_err)
+            await set_document_status(
+                doc_id, DocStatus.FAILED,
+                error_message=f"Image embedding failed: {embed_err}",
+            )
+            await progress.emit_and_save(
+                doc_id, user_id, "error",
+                f"Image embedding failed: {embed_err}",
+                {
+                    "stage": "embedding",
+                    "error": str(embed_err),
+                    "error_stage": "embedding",
+                    "retryable": True,
+                    "percent": 0,
+                },
+            )
+            return
+        await progress.emit_and_save(
+            doc_id, user_id, "embedding", "Created 1 embedding",
+            {"stage": "embedding", "current": 1, "total": 1, "percent": 100},
+        )
+
+        # Deterministic chunk id (doc + content hash) → idempotent upserts.
+        sha = hashlib.sha256(image_bytes).hexdigest()
+        chunk_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{doc_id}:image:{sha}"))
+        # Placeholder text occupies Chroma's `documents` field — it must be
+        # non-empty or chroma_client.search() filters the hit out — and feeds
+        # BM25/reranker harmlessly. Real retrieval is carried by the vector.
+        placeholder = f"[图片: {title}]"
+        metadata = {
+            "user_id": str(user_id),
+            "document_id": doc_id,
+            "hierarchy_level": "0",
+            "hierarchy_path": title,
+            "prev_chunk_id": "",
+            "next_chunk_id": "",
+            "modality": "image",
+            "image_path": image_path_rel,
+        }
+
+        chroma = get_chroma_client()
+        chroma.add_chunks([chunk_id], [placeholder], [embedding], [metadata])
+        await progress.emit_and_save(
+            doc_id, user_id, "stored", "Stored in vector database",
+            {"stage": "stored", "percent": 50},
+        )
+
+        bm25 = get_bm25_service()
+        bm25.add_to_index(user_id, [placeholder], [chunk_id])
+
+        async with get_db() as db:
+            await db.execute(
+                """INSERT OR IGNORE INTO chunks
+                   (chunk_id, document_id, user_id, content, hierarchy_path,
+                    level, prev_chunk_id, next_chunk_id, modality, image_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (chunk_id, doc_id, user_id, placeholder, title, 0,
+                 None, None, "image", image_path_rel),
+            )
+            await db.commit()
+
+        # Chunk node in Neo4j too — keeps the detail page, delete flow
+        # (CONTAINS traversal), and graph counts consistent with text docs.
+        await neo4j.create_chunk_nodes_batch(doc_id, user_id, [{
+            "chunk_id": chunk_id,
+            "content": placeholder,
+            "hierarchy_path": [title],
+            "position": 0,
+        }])
+
+        await set_document_status(doc_id, DocStatus.INDEXED)
+        # No graph/entity stages for images — straight to ready.
+        await set_document_status(doc_id, DocStatus.READY)
+
+        duration = time.time() - start_time
+        await progress.emit_and_save(
+            doc_id, user_id, "complete",
+            f"Image processing complete ({format_duration(duration)})",
+            {"stage": "complete", "percent": 100, "duration": format_duration(duration)},
+            entity_count=0,
+            relation_count=0,
+        )
+        logger.info("Image doc %s ready in %.2fs", doc_id, duration)
+
+    except Exception as e:
+        logger.error("Image processing failed for doc %s: %s", doc_id, e, exc_info=True)
+        await set_document_status(
+            doc_id, DocStatus.FAILED, error_message=str(e)
+        )
+        await progress.emit_and_save(
+            doc_id, user_id, "error", f"Image processing failed: {e}",
+            {"stage": "error", "error": str(e), "is_error": True},
+        )
 
 
 async def process_document_background(doc_id: str, user_id: int, markdown: str, title: str):
@@ -658,7 +895,7 @@ async def get_document_detail(
         chunk_count = int(count_row["n"]) if count_row else 0
 
         async with db.execute(
-            "SELECT chunk_id, content, hierarchy_path "
+            "SELECT chunk_id, content, hierarchy_path, modality, image_path "
             "FROM chunks WHERE document_id = ? AND user_id = ? "
             "ORDER BY created_at ASC LIMIT 3",
             (doc_id, user_id),
@@ -669,6 +906,12 @@ async def get_document_detail(
                 "chunk_id": r["chunk_id"],
                 "content": (r["content"] or "")[:400],
                 "hierarchy_path": r["hierarchy_path"] or "",
+                "modality": r["modality"] or "text",
+                "image_url": (
+                    f"/api/documents/images/{doc_id}/"
+                    f"{os.path.basename(r['image_path'])}"
+                    if r["image_path"] else None
+                ),
             }
             for r in chunk_rows
         ]
@@ -775,6 +1018,67 @@ async def _embed_chunks_for_centroid(contents: List[str]) -> List[List[float]]:
     return await svc.embed_batch(cleaned)
 
 
+def _safe_image_path(doc_id: str, filename: str) -> Optional[Path]:
+    """Resolve an image path strictly inside UPLOAD_DIR/images.
+
+    Returns None (→ 404) on path traversal (``..``, absolute paths,
+    symlink escapes), unknown extensions, or missing files. Pure apart
+    from the filesystem stat, so it is unit-testable.
+    """
+    settings = get_settings()
+    base = Path(os.path.realpath(os.path.join(settings.UPLOAD_DIR, "images")))
+    target = Path(os.path.realpath(os.path.join(base, doc_id, filename)))
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None  # escaped the images sandbox
+    if target.suffix.lower() not in IMAGE_EXTENSIONS:
+        return None
+    if not target.is_file():
+        return None
+    return target
+
+
+@router.get("/images/{doc_id}/{filename}")
+async def get_document_image(
+    doc_id: str,
+    filename: str,
+    authorization: Optional[str] = Header(default=None),
+    token: Optional[str] = Query(default=None, alias="token"),
+):
+    """Serve an image belonging to one of the caller's documents.
+
+    Auth accepts the Bearer header or ?token= (same fallback as the
+    progress SSE — <img> tags can't set headers). Ownership failures
+    return 404, never 403, so existence of another user's doc_id is
+    never leaked.
+    """
+    current_user = await authenticate_with_token_fallback(authorization, token)
+
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT id FROM documents WHERE id = ? AND user_id = ?",
+            (doc_id, current_user["id"]),
+        ) as cursor:
+            if await cursor.fetchone() is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Image not found",
+                )
+
+    target = _safe_image_path(doc_id, filename)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Image not found"
+        )
+
+    return FileResponse(
+        target,
+        media_type=MEDIA_TYPE_BY_EXT.get(target.suffix.lower(), "application/octet-stream"),
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 @router.get("/cluster-map")
 async def get_cluster_map(
     current_user: dict = Depends(get_current_user),
@@ -809,7 +1113,8 @@ async def get_cluster_map(
             doc_rows = await cursor.fetchall()
         async with db.execute(
             "SELECT document_id, content FROM chunks "
-            "WHERE user_id = ? ORDER BY created_at ASC",
+            "WHERE user_id = ? AND (modality = 'text' OR modality IS NULL) "
+            "ORDER BY created_at ASC",
             (user_id,),
         ) as cursor:
             chunk_rows = await cursor.fetchall()
@@ -893,6 +1198,14 @@ async def delete_document(
     except Exception:
         pass
 
+    # Delete extracted/uploaded images for this document (realpath
+    # containment: never rmtree outside the images sandbox).
+    settings = get_settings()
+    images_base = os.path.realpath(os.path.join(settings.UPLOAD_DIR, "images"))
+    images_dir = os.path.realpath(os.path.join(images_base, doc_id))
+    if images_dir.startswith(images_base + os.sep) and os.path.isdir(images_dir):
+        shutil.rmtree(images_dir, ignore_errors=True)
+
     # Delete from ChromaDB
     chroma = get_chroma_client()
     chroma.delete_document_chunks(doc_id, user_id)
@@ -930,8 +1243,10 @@ async def get_document_chunks(
     try:
         async with get_db() as db:
             async with db.execute(
-                """SELECT chunk_id, content, hierarchy_path, level,
-                          prev_chunk_id, next_chunk_id, created_at
+                """SELECT chunk_id, document_id, user_id, content,
+                          hierarchy_path, level,
+                          prev_chunk_id, next_chunk_id, created_at,
+                          modality, image_path
                    FROM chunks WHERE document_id = ? AND user_id = ? ORDER BY created_at""",
                 (doc_id, user_id)
             ) as cursor:
@@ -964,6 +1279,16 @@ async def get_document_chunks(
                 "path": row_dict["hierarchy_path"].split(", ") if row_dict["hierarchy_path"] else [],
                 "level": row_dict["level"]
             }
+            row_dict["modality"] = row_dict.get("modality") or "text"
+            # Path-only URL: the frontend appends ?token= (same convention
+            # as the progress SSE) since <img> tags can't set headers.
+            if row_dict.get("image_path"):
+                row_dict["image_url"] = (
+                    f"/api/documents/images/{doc_id}/"
+                    f"{os.path.basename(row_dict['image_path'])}"
+                )
+            else:
+                row_dict["image_url"] = None
             chunks.append(row_dict)
 
         return chunks

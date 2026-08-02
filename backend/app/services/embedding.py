@@ -15,6 +15,7 @@ Reliability (shared by both providers): caching, exponential backoff, and
 self-healing cache.
 """
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -182,7 +183,16 @@ class EmbeddingService:
             logger.warning("Failed to cache embedding: %s", e, exc_info=True)
 
     def _get_text_hash(self, text: str) -> str:
-        return hashlib.md5(text.encode("utf-8")).hexdigest()
+        return self._content_hash(text.encode("utf-8"))
+
+    @staticmethod
+    def _content_hash(data: bytes) -> str:
+        """md5 over raw bytes — the cache key for any modality.
+
+        For text this is byte-identical to the old md5(utf-8) keys, so
+        existing cache rows keep hitting; images hash their binary content.
+        """
+        return hashlib.md5(data).hexdigest()
 
     def _build_text_payload(self, texts: List[str]) -> dict:
         """Build the request body for a homogeneous TEXT batch.
@@ -390,6 +400,61 @@ class EmbeddingService:
             )
 
         return [r for r in results]  # type: ignore[misc]
+
+    async def embed_image_bytes(
+        self, image_bytes: bytes, media_type: str, use_cache: bool = True
+    ) -> List[float]:
+        """Embed a single image (PNG/JPEG bytes) via the DashScope provider.
+
+        Images exist only in the multimodal vector space, so this loudly
+        refuses under any other provider instead of returning a zero vector
+        that would poison cross-modal retrieval.
+
+        Raises:
+            ValueError: empty bytes (caller bug — nothing to embed).
+            EmbeddingServiceError: wrong provider, API failure after all
+                retries, or a malformed / dimension-drifted response.
+        """
+        if not image_bytes:
+            raise ValueError("embed_image_bytes requires non-empty image bytes")
+        if self.provider != "dashscope":
+            raise EmbeddingServiceError(
+                "image embedding requires EMBEDDING_PROVIDER=dashscope "
+                f"(active provider: {self.provider})"
+            )
+
+        content_hash = self._content_hash(image_bytes)
+        # The cache row's `text` column is NOT NULL — store a human-readable
+        # descriptor instead of the binary (key = content hash, value = the
+        # vector BLOB, same as text rows).
+        descriptor = (
+            f"image:{media_type}:sha256:"
+            f"{hashlib.sha256(image_bytes).hexdigest()}:{len(image_bytes)}B"
+        )
+
+        if use_cache:
+            cached = await self._get_cached_embedding(content_hash)
+            if cached is not None:
+                return cached
+
+        data_uri = (
+            f"data:{media_type};base64,"
+            f"{base64.b64encode(image_bytes).decode('ascii')}"
+        )
+        payload = {
+            "model": self.model,
+            "input": {"contents": [{"image": data_uri}]},
+            "parameters": {"dimension": self.settings.EMBEDDING_DIM},
+        }
+
+        async with self._semaphore:
+            data = await self._call_with_retry(payload)
+
+        embedding = self._parse_embeddings(data, expected=1)[0]
+
+        if use_cache:
+            await self._cache_embedding(content_hash, descriptor, embedding)
+        return embedding
 
 
 # Singleton instance

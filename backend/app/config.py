@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./data/uploads"
     MAX_FILE_SIZE: int = 10485760  # 10MB
 
+    # Image uploads / multimodal retrieval
+    # 8 MB (not 10): images are sent to the embedding API as base64 data
+    # URIs, whose ~33% inflation would push a 10 MB image past typical
+    # request-body limits.
+    IMAGE_MAX_FILE_SIZE: int = 8388608
+    # Max image hits appended after the reranked text results — images
+    # bypass the text-only reranker and keep cosine order.
+    IMAGE_RESULT_QUOTA: int = 2
+    # Extracted images smaller than this on BOTH axes are skipped
+    # (icons, bullets, decoration — Phase 2b).
+    IMAGE_MIN_DIMENSION: int = 120
+
     # Embedding
     # Provider selection: "siliconflow" (OpenAI-compatible /embeddings) or
     # "dashscope" (native multimodal endpoint — text AND images). This is a

@@ -27,11 +27,32 @@ class RerankService:
         chunks: List[Dict[str, Any]],
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
-        """Rerank chunks by relevance to query."""
+        """Rerank chunks by relevance to query.
+
+        Modality split happens HERE so both call sites (search, chat) stay
+        unchanged: the reranker model is text-only, so image chunks are
+        partitioned out, keep their cosine rank order (RRF preserves the
+        vector-lane rank for image-only entries), and are appended after
+        the reranked texts under a fixed quota. Images carry no
+        relevance_score — callers render a missing score as "medium".
+        """
         if not chunks:
             return []
 
-        documents = [chunk["content"] for chunk in chunks]
+        quota = self.settings.IMAGE_RESULT_QUOTA
+        images = [
+            chunk for chunk in chunks
+            if (chunk.get("metadata") or {}).get("modality") == "image"
+        ][:quota]
+        texts = [
+            chunk for chunk in chunks
+            if (chunk.get("metadata") or {}).get("modality") != "image"
+        ]
+
+        if not texts:
+            return images
+
+        documents = [chunk["content"] for chunk in texts]
         client = await self._get_client()
 
         try:
@@ -57,20 +78,20 @@ class RerankService:
             reranked = []
             for result in data["results"][:top_k]:
                 idx = result["index"]
-                chunk = dict(chunks[idx])  # shallow copy so we don't
-                                           # mutate the caller's chunk
+                chunk = dict(texts[idx])  # shallow copy so we don't
+                                          # mutate the caller's chunk
                 score = result.get("relevance_score", result.get("score"))
                 if score is not None:
                     chunk["relevance_score"] = float(score)
                 reranked.append(chunk)
 
-            return reranked
+            return reranked + images
 
         except httpx.HTTPError:
             # Fallback to original order on error — no scores available
             # since the API never responded. Callers (chat) treat a
             # missing score as "unknown quality" (rendered as medium).
-            return chunks[:top_k]
+            return texts[:top_k] + images
 
     async def close(self):
         """Close HTTP client."""

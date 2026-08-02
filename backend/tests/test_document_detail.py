@@ -342,7 +342,8 @@ def test_detail_endpoint_returns_combined_payload():
     ]
     chunks_rows = [
         _FakeRow({"chunk_id": f"c{i}", "content": f"chunk {i}",
-                  "hierarchy_path": "Section A > §A.1" if i == 0 else ""})
+                  "hierarchy_path": "Section A > §A.1" if i == 0 else "",
+                  "modality": "text", "image_path": None})
         for i in range(5)
     ]
     ctx = _build_doc_ctx(

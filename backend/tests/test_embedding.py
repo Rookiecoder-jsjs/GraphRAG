@@ -442,6 +442,109 @@ print("\nCache")
 asyncio.run(_case_cache_roundtrip_and_model_namespace())
 
 
+# ---------- image embedding (dashscope only) ---------------------------------
+
+def _png_bytes(size: int = 16) -> bytes:
+    """Synthetic size×size solid-red PNG (stdlib only — no fixture files)."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload)) + tag + payload
+            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    row = b"\x00" + b"\xff\x00\x00" * size
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(row * size))
+        + chunk(b"IEND", b"")
+    )
+
+
+async def _case_embed_image_payload_and_dim():
+    t = ScriptedTransport([(200, ds_ok([VEC]), JSON_HEADERS)])
+    patch_client(httpx, t)
+    svc = make_service("dashscope")
+    out = await svc.embed_image_bytes(_png_bytes(), "image/png", use_cache=False)
+    body = t.requests[0]["body"]
+    image_item = body["input"]["contents"][0]["image"]
+    check(
+        "[dashscope] image payload = base64 data URI + pinned dimension",
+        out == VEC
+        and image_item.startswith("data:image/png;base64,")
+        and body["parameters"] == {"dimension": 4}
+        and t.requests[0]["auth"] == "Bearer test-bailian-key",
+        f"body={ {k: v for k, v in body.items() if k != 'input'} }",
+    )
+
+
+async def _case_embed_image_cache_roundtrip():
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    conn = sqlite3.connect(tmp.name)
+    conn.execute(
+        """CREATE TABLE embedding_cache (
+               text_hash TEXT PRIMARY KEY,
+               text TEXT NOT NULL,
+               embedding BLOB NOT NULL,
+               model TEXT NOT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    conn.commit()
+    conn.close()
+    try:
+        png = _png_bytes()
+        t = ScriptedTransport([
+            (200, ds_ok([VEC]), JSON_HEADERS),
+            (200, ds_ok([VEC2]), JSON_HEADERS),  # must NOT be consumed
+        ])
+        patch_client(httpx, t)
+        svc = make_service("dashscope", sqlite_path=tmp.name)
+        first = await svc.embed_image_bytes(png, "image/png", use_cache=True)
+        second = await svc.embed_image_bytes(png, "image/png", use_cache=True)
+        check(
+            "second identical image served from cache (exactly 1 HTTP call)",
+            first == second == VEC and t.calls == 1,
+            f"{t.calls} calls",
+        )
+    finally:
+        os.unlink(tmp.name)
+
+
+async def _case_embed_image_empty_bytes_rejected():
+    svc = make_service("dashscope")
+    try:
+        await svc.embed_image_bytes(b"", "image/png")
+        check("empty image bytes raise ValueError", False, "no exception")
+    except ValueError:
+        check("empty image bytes raise ValueError (no zero vector)", True)
+
+
+async def _case_embed_image_siliconflow_rejected():
+    svc = make_service("siliconflow")
+    try:
+        await svc.embed_image_bytes(_png_bytes(), "image/png")
+        check("siliconflow provider rejects image embedding", False, "no exception")
+    except EmbeddingServiceError as e:
+        check(
+            "siliconflow provider rejects image embedding loudly",
+            "dashscope" in str(e),
+            f"msg={e}",
+        )
+
+
+print("\nImage embedding")
+asyncio.run(_case_embed_image_payload_and_dim())
+asyncio.run(_case_embed_image_cache_roundtrip())
+asyncio.run(_case_embed_image_empty_bytes_rejected())
+asyncio.run(_case_embed_image_siliconflow_rejected())
+
+
 def test_all_embedding_checks_passed():
     """pytest mirror: every case above already ran at import time.
 

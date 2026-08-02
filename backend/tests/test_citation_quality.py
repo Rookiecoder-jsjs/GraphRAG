@@ -59,6 +59,7 @@ def test_rerank_returns_chunks_with_relevance_score():
     svc.api_key = "fake"
     svc.model = "fake-rerank"
     svc._client = None
+    svc.settings = type("S", (), {"IMAGE_RESULT_QUOTA": 2})()
 
     chunks = [
         {"chunk_id": "a", "content": "first"},
@@ -101,6 +102,7 @@ def test_rerank_handles_vendor_score_field():
     svc.api_key = "fake"
     svc.model = "fake-rerank"
     svc._client = None
+    svc.settings = type("S", (), {"IMAGE_RESULT_QUOTA": 2})()
 
     fake_resp = _mock.AsyncMock()
     fake_resp.raise_for_status = _mock.Mock()
