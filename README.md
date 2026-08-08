@@ -15,13 +15,13 @@
 ## 核心功能
 
 1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块
-2. 🔍 **混合检索**：基于硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + Qwen3-Reranker 重排序 + RRF 融合
+2. 🔍 **混合检索**：多查询 + 硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + 图谱通道 + RRF 融合 + Qwen3-Reranker 重排序 + 父文档扩展再重排（统一管线 `services/retriever.py`，TTL+LRU 缓存）
 3. 🕸️ **知识图谱可视化**：d3 + Vue 3 实现的交互式力导向图谱，支持节点拖拽、实体编辑、合并与删除
-4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）
+4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）
 5. 📊 **仪表盘与时间线**：文档 / 实体 / 标签统计、月度增长、近期活动、实体首现时间线
 6. 🗺️ **文档聚类地图**：2D PCA 投影可视化所有文档的语义分布
 7. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
-8. 🛡️ **健壮性**：统一 logging、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、向量索引零成本重建脚本
+8. 🛡️ **健壮性**：统一 logging（请求级 `X-Request-ID` 关联）、请求体大小全局兜底（413）、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、BM25 启动预热、卡死文档启动对账（reconcile）、检索结果 TTL+LRU 缓存、向量索引零成本重建脚本、SQLite 增量迁移（`schema_version` 追踪）、全量备份脚本
 
 ## 技术架构
 
@@ -34,7 +34,7 @@
 | 💾 用户数据 | SQLite + SQLAlchemy 2.0 + aiosqlite (单文件) |
 | 🧩 嵌入模型 | 硅基流动 Qwen3-Embedding-8B (API) |
 | 🎯 重排序 | 硅基流动 Qwen3-Reranker-8B (API) |
-| 🤖 大模型 | Kimi API (Moonshot) / 百炼 qwen-flash (阿里云 DashScope) / 硅基流动 Qwen3-8B |
+| 🤖 大模型 | Kimi API (Moonshot, kimi-k2) / 百炼 qwen3.7-flash (阿里云 DashScope) / 硅基流动 Qwen3-8B |
 | 🔑 密码哈希 | bcrypt 3.2.2（原生） |
 | 📝 日志 | Python `logging` + RotatingFileHandler（统一在 `app/logger.py`） |
 
@@ -59,27 +59,31 @@ D:/NC/
 │   │   │   ├── tags.py          # 用户级标签聚合
 │   │   │   ├── timeline.py      # 时间线聚合数据
 │   │   │   └── dashboard.py     # 仪表盘汇总
-│   │   ├── auth/                # JWT 鉴权与 bcrypt 密码哈希
 │   │   ├── models/              # Pydantic 数据模型（含字段校验）
 │   │   ├── services/            # 核心服务
+│   │   │   ├── retriever.py     # 统一检索管线（多查询 + 图谱 + 父文档扩展 + 再重排 + TTL 缓存）
+│   │   │   ├── intent.py        # 查询意图分类（fact_retrieval / chitchat / should_reject）
 │   │   │   ├── embedding.py     # 硅基流动嵌入（限流 + JSON 缓存）
 │   │   │   ├── llm.py           # 百炼 / Kimi / 硅基流动 多 LLM
-│   │   │   ├── chunker.py       # Markdown 层级切块
+│   │   │   ├── chunker.py       # Markdown 层级切块（可配 overlap）
 │   │   │   ├── entity_extractor.py  # 实体 + 关系提取（LLM 模式）
 │   │   │   ├── neo4j_client.py  # Neo4j 封装（含 UNWIND 批量）
 │   │   │   ├── chroma_client.py # ChromaDB 封装
-│   │   │   ├── bm25.py          # BM25 关键词检索（per-user 索引）
+│   │   │   ├── bm25.py          # BM25 关键词检索（per-user 索引 + 启动预热）
 │   │   │   ├── fusion.py        # RRF / 加权融合
 │   │   │   ├── reranker.py      # 硅基流动 Rerank
 │   │   │   ├── query_processor.py  # 查询改写 / 变体 / 实体抽取
+│   │   │   ├── reconcile.py     # 卡死文档启动对账（标记 failed）
 │   │   │   ├── progress_tracker.py  # SSE 进度跟踪
-│   │   │   └── doc_status.py    # 文档处理状态机（pending/processing/indexed/failed）
+│   │   │   └── doc_status.py    # 文档处理状态机（pending/document_created/indexed/graphed/ready/failed）
 │   │   ├── auth/                # JWT 鉴权 + bcrypt 密码哈希 + 限流中间件
+│   │   ├── middleware.py        # 纯 ASGI 中间件（请求体限流 + X-Request-ID）
 │   │   ├── utils/md_parser.py   # Markdown 解析（markitdown 防御性封装）
-│   │   ├── config.py            # 配置管理（含 CORS 白名单 + 生产校验）
-│   │   ├── database.py          # SQLite 初始化
-│   │   ├── logger.py            # 统一 logging 配置
-│   │   └── main.py              # FastAPI 入口
+│   │   ├── config.py            # 配置管理（含 CORS 白名单 + JWT 占位符拦截）
+│   │   ├── database.py          # SQLite 初始化 + 增量迁移（schema_version 追踪）
+│   │   ├── logger.py            # 统一 logging 配置（请求 ID 关联）
+│   │   └── main.py              # FastAPI 入口（lifespan：预热 / 对账 / 就绪探针）
+│   ├── migrations/001_baseline.sql  # 迁移基线（stamp version 1，未来增量迁移按序应用）
 │   ├── scripts/rebuild_chroma.py # 向量索引零成本重建（SQLite chunks + embedding 缓存 → Chroma）
 │   ├── requirements.txt
 │   └── Dockerfile
@@ -114,6 +118,9 @@ D:/NC/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
+├── scripts/                      # 根级脚本
+│   ├── run-backend.mjs           # npm run backend 调用（跨平台启动 uvicorn）
+│   └── backup.sh                 # 全量备份（SQLite 在线 .backup + Neo4j/Chroma/uploads）
 └── data/                         # 数据目录 (gitignore)
     ├── sqlite/                  # SQLite 数据库
     ├── uploads/                 # 上传的原文件
@@ -236,7 +243,7 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `POST   /api/graph/entities/merge` — 合并实体（`{source, target}`，source 被删除并重新指向 target）
 
 ### 💬 对话 `/api/chat`
-- `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `enable_thinking`）
+- `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `enable_thinking`；意图路由自动判定是否检索）
 - `POST   /api/chat/stream` — 发送消息（Server-Sent Events 流式）
 
 > 流式帧顺序：`event: sources`（参考来源）→ `event: thinking`（仅当 `enable_thinking=true`，模型推理过程，可折叠）→ 默认 `data:` 帧（回答正文 chunk）→ `event: done`（终止）。
@@ -262,7 +269,8 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `GET /api/progress/{doc_id}/history` — 历史进度事件列表
 
 ### 💓 健康检查
-- `GET /health` — 返回 `{"status": "healthy"}`
+- `GET /health` — 存活探针（liveness），返回 `{"status": "healthy"}`
+- `GET /health/ready` — 就绪探针（readiness），逐个 ping SQLite / ChromaDB / Neo4j，任一核心存储不可用返回 503
 - `GET /` — 返回 API 元信息
 
 ## 🌊 数据流架构
@@ -276,10 +284,22 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 
 ### 🔍 检索对话流程
 ```
-用户 Query → 查询改写 (LLM) → Embedding
-    → 向量检索 + BM25 → RRF 融合 → Qwen3-Reranker
-    → 上下文扩展 (前/后 chunk) → Neo4j 图谱关联
-    → 构建 Prompt → Kimi / 百炼 LLM → 流式返回结果
+用户 Query
+  ├─ 意图分类 (LLM, ENABLE_INTENT_ROUTING)
+  │     ├─ chitchat / should_reject → 跳过检索，模板直接应答
+  │     └─ fact_retrieval (默认 / 失败回退) → 进入统一检索管线 retrieve()
+  │
+  └─ retrieve()（services/retriever.py，结果按 TTL+LRU 缓存）
+        1. 并行 LLM 预处理：会话改写 + 多查询变体（+ 图谱实体抽取）
+        2. 并行 Embedding（逐文本缓存）
+        3. 逐查询 向量 + BM25 召回（multi-query）
+        4. 图谱通道作为独立 RRF 列表（GRAPH_RAG_MODE: auto / on / off）
+        5. 多列表 RRF 融合（图谱权重 GRAPH_RRF_WEIGHT 可配）
+        6. Qwen3-Reranker → seed chunks
+        7. 扩展：前后邻居 (Chroma) + 父文档同节兄弟 (SQLite)，去重
+        8. 扩展集再重排（按 relevance 排序，不驱逐邻居）
+        9. 实体 / 关系富化 (Neo4j)
+        → 构建 Prompt → Kimi / 百炼 LLM → 流式返回结果
         ├─ enable_thinking=true:  先流式 reasoning_content (event: thinking)
         └─ 默认:                  直接流式正文 (data: chunk)
 ```
@@ -331,11 +351,13 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | 🌐 CORS 来源 | 白名单 | 通过 `CORS_ALLOWED_ORIGINS` 配置，禁用通配符 |
 | 🔒 密码哈希 | bcrypt | 72 字节硬截断；不 mutate 调用方入参 |
 | 🗝️ API 密钥 | 环境变量 | **勿**硬编码到代码；`.env` 已 gitignore |
-| 🚦 生产模式 | `APP_ENV=production` | 默认 JWT_SECRET 启动时直接 `RuntimeError` |
+| 🚦 JWT 占位符 | 任意环境拦截 | `get_settings()` 在**任何**环境（含 development）检测到公开占位符即 `RuntimeError`；`APP_ENV` 仅为环境标记 |
 | 🚪 401 处理 | 拦截器去重 | 防重入 + 派发 `auth:logout` 事件 |
 | 📡 进度 SSE | Authorization header 优先 | EventSource 回退接受 `?token=`（会进代理日志，视为敏感 URL） |
 | 💾 嵌入缓存 | JSON 序列化 | 取代 `pickle`（防反序列化漏洞）；损坏 blob 自愈剔除 |
 | 🚦 API 限流 | 中间件 | `app/auth/rate_limit.py` 对认证接口限流，防暴力枚举 |
+| 📦 请求体大小 | 全局兜底 | `RequestBodyLimitMiddleware` 按 `MAX_REQUEST_BODY` 在消费 body 前拒绝超大请求（413）；上传端点另按 `MAX_FILE_SIZE` 流式校验 |
+| 🆔 请求追踪 | correlation id | `RequestIDMiddleware` 为每个请求打 `X-Request-ID`，回写响应头并注入日志 |
 | ✅ 注册校验 | 强校验 | 用户名 `[A-Za-z0-9_.-]`、密码 ≥ 8 字符含字母+数字 |
 | 👥 Neo4j 删除 | 跨用户隔离 | `delete_document` step 4 强制 `user_id` 过滤 |
 | ⚡ 批量写入 | UNWIND | 实体/关系/MENTIONS 由 N 次往返降为 1 次 |
@@ -358,7 +380,9 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | `KIMI_BASE_URL` | Moonshot base URL | `https://api.moonshot.cn/v1` | 否 |
 | `BAILIAN_API_KEY` | 阿里云百炼 LLM 密钥 | - | **是** |
 | `BAILIAN_BASE_URL` | 百炼 base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 否 |
-| `BAILIAN_MODEL` | 百炼模型 | `qwen-flash` | 否 |
+| `BAILIAN_MODEL` | 百炼模型 | `qwen3.7-flash` | 否 |
+| `LLM_MODEL_KIMI` | Kimi 模型 | `kimi-k2-0905-preview` | 否 |
+| `LLM_MODEL_SILICON` | 硅基流动模型 | `Qwen/Qwen3-8B-Instruct` | 否 |
 | `JWT_SECRET` | JWT 签名密钥 | 占位符（生产必须替换） | **是** |
 | `JWT_ALGORITHM` | JWT 算法 | `HS256` | 否 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期（分钟） | `60` | 否 |
@@ -368,10 +392,27 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | `EMBEDDING_DIM` | 嵌入维度 | `1024` | 否 |
 | `RERANK_MODEL` | Rerank 模型 | `Qwen/Qwen3-Reranker-8B` | 否 |
 | `CORS_ALLOWED_ORIGINS` | 允许的 CORS 来源（逗号分隔） | localhost 开发地址 | 否 |
+| `MAX_REQUEST_BODY` | 全局请求体大小上限（字节） | `15728640`（15MB） | 否 |
+| `ENABLE_INTENT_ROUTING` | 启用查询意图路由（闲聊/拒答绕过检索） | `True` | 否 |
+| `INTENT_CLASSIFY_TIMEOUT` | 意图分类超时（秒） | `3.0` | 否 |
+| `GRAPH_RAG_MODE` | 图谱 RAG 模式（auto/on/off） | `auto` | 否 |
+| `MULTI_QUERY_NUM_VARIANTS` | 多查询变体数 | `3` | 否 |
+| `QUERY_REWRITE_MIN_LEN` | 触发查询改写的最短长度（字符） | `20` | 否 |
+| `RERANK_RECALL_K` | 每路召回送入 RRF/重排的候选数 | `25` | 否 |
+| `GRAPH_RRF_WEIGHT` | 图谱通道 RRF 权重 | `1.0` | 否 |
+| `ENABLE_EXPANSION_RERERANK` | 扩展集再重排 | `True` | 否 |
+| `RETRIEVAL_CACHE_TTL` | 检索结果缓存 TTL（秒） | `300` | 否 |
+| `BM25_PREWARM` | 启动预热 per-user BM25 索引 | `True` | 否 |
+| `PARENT_SECTION_MAX_CHARS` | 父文档扩展最大字符数 | `2000` | 否 |
+| `PARENT_SECTION_SIBLING_LIMIT` | 父文档扩展兄弟块上限 | `4` | 否 |
+| `CONVERSATIONAL_REWRITE_HISTORY_TURNS` | 会话改写参考的历史轮数 | `4` | 否 |
+| `CHUNK_OVERLAP` | 切块重叠字符数（仅影响新上传） | `50` | 否 |
 | `ENABLE_LLM_EXTRACTION` | 启用 LLM 实体提取 | `True` | 否 |
 | `USE_RULE_EXTRACTION` | 同时使用规则提取 | `False` | 否 |
 | `ENTITY_BATCH_SIZE` | 实体提取批大小 | `200` | 否 |
 | `ENTITY_EXTRACTION_DELAY` | 实体提取批间延迟（秒） | `0` | 否 |
+| `LLM_EXTRACTION_CONCURRENCY` | 实体提取并发上限 | `20` | 否 |
+| `LLM_EXTRACT_MAX_TOKENS` | 实体提取 max_tokens | `1024` | 否 |
 | `LOG_DIR` / `LOG_LEVEL` | 日志目录与级别 | `./data/logs` / `INFO` | 否 |
 
 ## 🧭 前端路由总览
@@ -416,6 +457,24 @@ print('OK')
 # 集成测试（需启动 Docker 服务）
 docker-compose up -d
 ../.venv/Scripts/python.exe -m pytest backend/tests
+```
+
+> 单元测试无需真实密钥：`conftest.py` 会 `setdefault` 一个临时 `JWT_SECRET`（CI 中也显式注入），JWT 占位符拦截不会阻断测试。
+
+### ✅ 持续集成（CI）
+
+`.github/workflows/ci.yml` 在 push 到 `main`/`master` 及 PR 时自动运行 `backend` 的 `pytest tests/ -q`（Python 3.11）。无需真实密钥——`JWT_SECRET` 与 `APP_ENV=test` 由 workflow 注入。
+
+### 🗃️ 数据库迁移
+
+表结构由 `database.init_db` 的 `CREATE TABLE IF NOT EXISTS` 创建；其后 `_run_migrations` 按 `backend/migrations/NNN_*.sql` 文件名序号顺序应用，进度记录在 `schema_version` 表。`001_baseline.sql` 仅 stamp 版本 1（无结构变更），新增增量迁移直接加 `002_*.sql` 即可。
+
+### 🗄️ 备份
+
+```bash
+# 全量备份（SQLite 在线 .backup + Neo4j/Chroma/uploads 打包）
+./scripts/backup.sh
+# 自定义路径：DATA_DIR=./data OUT_DIR=/tmp ./scripts/backup.sh
 ```
 
 ### ♻️ 向量索引重建（运维）
@@ -489,7 +548,7 @@ vite ^7.2.4
 ## 📌 注意事项
 
 1. 🗝️ **API 密钥保护**：`.env` 中的密钥若已泄露，**立即**在控制台轮换
-2. 🔑 **JWT_SECRET**：生产环境 (`APP_ENV=production`) 拒绝默认占位符启动
+2. 🔑 **JWT_SECRET**：**任意环境**检测到公开占位符即拒绝启动（不限于 production）；用 `python -c "import secrets; print(secrets.token_urlsafe(48))"` 生成
 3. ⚡ **硅基流动限速**：嵌入服务实现了批量处理、异步队列和并发控制（Semaphore=5）
 4. 🧮 **NumPy 版本**：必须使用 NumPy 1.x（<2.0）以保证 ChromaDB 兼容性
 5. 🧬 **ChromaDB 版本**：客户端和服务端必须都使用 0.4.18 版本
