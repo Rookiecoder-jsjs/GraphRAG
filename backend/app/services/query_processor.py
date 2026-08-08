@@ -8,20 +8,35 @@ from app.services.llm import get_llm_service
 class QueryProcessor:
     """Query preprocessing and enhancement service."""
 
-    async def rewrite_query(self, query: str) -> str:
-        """
-        Rewrite query to improve retrieval quality.
+    async def rewrite_query(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """Rewrite query to improve retrieval quality.
 
-        This expands abbreviations, clarifies intent, and makes
-        the query more effective for semantic search.
-
-        Args:
-            query: Original user query
-
-        Returns:
-            Rewritten query
+        When ``conversation_history`` is supplied (multi-turn chat), the
+        rewrite also resolves pronouns/context into a STANDALONE query so
+        retrieval isn't run against a bare "its performance?" that won't
+        match any chunk. Single-turn callers (e.g. /api/search) pass None.
         """
         llm = await get_llm_service()
+
+        history_block = ""
+        standalone_instruction = ""
+        if conversation_history:
+            from app.config import get_settings
+            n_turns = get_settings().CONVERSATIONAL_REWRITE_HISTORY_TURNS
+            turns = conversation_history[-n_turns:] if n_turns > 0 else []
+            if turns:
+                history_block = "\n\nConversation so far:\n" + "\n".join(
+                    f"{t.get('role', 'user')}: {t.get('content', '')}" for t in turns
+                )
+                standalone_instruction = (
+                    "\n- The query is the latest turn in a conversation. Rewrite "
+                    "it into a STANDALONE search query that resolves pronouns and "
+                    "references using the conversation context."
+                )
 
         prompt = f"""You are a query rewriting assistant for search retrieval.
 Rewrite the following search query to improve retrieval quality.
@@ -31,9 +46,9 @@ Guidelines:
 - Make implicit concepts explicit
 - Keep the original intent but express it more clearly
 - Use more precise terminology where applicable
-- Keep it concise (preferably under 100 characters)
+- Keep it concise (preferably under 100 characters){standalone_instruction}
 
-Original query: "{query}"
+Original query: "{query}"{history_block}
 
 Rewritten query (just return the rewritten query, nothing else):"""
 

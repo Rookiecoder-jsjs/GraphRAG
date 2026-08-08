@@ -37,9 +37,12 @@ class Chunk:
 class MarkdownChunker:
     """Chunk markdown documents by hierarchy."""
 
-    def __init__(self, max_chunk_size: int = 500, min_chunk_size: int = 200):
+    def __init__(self, max_chunk_size: int = 500, min_chunk_size: int = 200, overlap: int = 0):
         self.max_chunk_size = max_chunk_size
         self.min_chunk_size = min_chunk_size
+        # Tail-char overlap between adjacent split chunks so facts straddling
+        # a boundary stay retrievable from both sides. 0 disables.
+        self.overlap = max(0, overlap)
 
     def _parse_headers(self, markdown: str) -> List[Tuple[int, str, int]]:
         """Parse all headers from markdown, returns list of (level, title, line_num)."""
@@ -112,6 +115,15 @@ class MarkdownChunker:
         if current_chunk:
             chunks.append(current_chunk)
 
+        # Apply overlap: prefix each chunk (except the first) with the tail
+        # of its predecessor. Keeps boundary-spanning facts retrievable from
+        # both sides. May push a chunk slightly over max_chunk_size; that's
+        # acceptable for retrieval and bounded by ``overlap``.
+        if self.overlap and len(chunks) > 1:
+            overlapped = [chunks[0]]
+            for prev, cur in zip(chunks, chunks[1:]):
+                overlapped.append(prev[-self.overlap:] + cur)
+            chunks = overlapped
         return chunks
 
     def chunk_document(
@@ -269,6 +281,12 @@ def chunk_markdown(
     user_id: int,
     source_file: str = ""
 ) -> List[Chunk]:
-    """Convenience function to chunk markdown document."""
-    chunker = MarkdownChunker()
+    """Convenience function to chunk markdown document.
+
+    Reads ``CHUNK_OVERLAP`` from settings so callers (the upload pipeline)
+    don't have to thread it through; existing documents are untouched
+    since this only runs on newly-uploaded content.
+    """
+    from app.config import get_settings
+    chunker = MarkdownChunker(overlap=get_settings().CHUNK_OVERLAP)
     return chunker.chunk_document(document_id, user_id, markdown, source_file)

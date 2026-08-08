@@ -1,10 +1,15 @@
 """SQLite database connection and initialization."""
+import logging
 import os
+from pathlib import Path
+
 import aiosqlite
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 async def _ensure_document_status_columns(db) -> None:
@@ -31,6 +36,50 @@ async def _ensure_document_status_columns(db) -> None:
         await db.execute(
             "UPDATE documents SET updated_at = created_at WHERE updated_at IS NULL"
         )
+
+
+async def _run_migrations(db) -> None:
+    """Apply pending SQL migrations from ``backend/migrations/``, tracked
+    by a ``schema_version`` table.
+
+    Existing tables are created by ``init_db``'s ``CREATE TABLE IF NOT
+    EXISTS`` statements (the baseline). This stamps that baseline as
+    version 1 and applies future ``NNN_*.sql`` files in order, skipping
+    already-applied ones. Migrations should be idempotent where possible
+    (``CREATE TABLE IF NOT EXISTS``, ``CREATE INDEX IF NOT EXISTS``);
+    SQLite ``ALTER TABLE ADD COLUMN`` is not idempotent, so prefer adding
+    new tables/columns via the baseline or guarded Python checks.
+    """
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    async with db.execute("SELECT MAX(version) FROM schema_version") as cur:
+        row = await cur.fetchone()
+    current = (row[0] if row and row[0] is not None else 0)
+
+    migrations_dir = Path(__file__).resolve().parent.parent / "migrations"
+    if not migrations_dir.is_dir():
+        return
+    for sql_file in sorted(migrations_dir.glob("*.sql")):
+        stem = sql_file.stem
+        try:
+            version = int(stem.split("_", 1)[0])
+        except (ValueError, IndexError):
+            continue
+        if version <= current:
+            continue
+        script = sql_file.read_text(encoding="utf-8")
+        await db.executescript(script)
+        await db.execute(
+            "INSERT INTO schema_version (version, name) VALUES (?, ?)",
+            (version, stem),
+        )
+        await db.commit()
+        logger.info("Applied migration %s (version %d)", stem, version)
 
 
 async def init_db():
@@ -169,6 +218,18 @@ async def init_db():
         # the same tag twice is a no-op rather than a duplicate row. Cascade
         # delete on document/user removal keeps the table tidy.
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS message_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                chunk_id TEXT NOT NULL,
+                rank INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (message_id, chunk_id),
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            )
+        """)
+
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS document_tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 document_id TEXT NOT NULL,
@@ -191,6 +252,9 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_document_tags_user_tag
                 ON document_tags (user_id, tag)
         """)
+
+        # Apply incremental SQL migrations (tracks version in schema_version).
+        await _run_migrations(db)
 
         await db.commit()
 

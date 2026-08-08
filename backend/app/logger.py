@@ -9,10 +9,25 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from app.middleware import request_id_var
+
 
 _CONFIGURED = False
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s [req:%(request_id)s]: %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+class _RequestIdFilter(logging.Filter):
+    """Inject the current request id onto every log record.
+
+    ``request_id_var`` defaults to "-" outside any request (startup,
+    background tasks), so the format string's ``%(request_id)s`` always
+    resolves instead of raising KeyError.
+    """
+
+    def filter(self, record):
+        record.request_id = request_id_var.get()
+        return True
 
 
 def configure_logging() -> None:
@@ -31,9 +46,11 @@ def configure_logging() -> None:
         root.removeHandler(handler)
 
     formatter = logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
+    rid_filter = _RequestIdFilter()
 
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(formatter)
+    stream.addFilter(rid_filter)
     root.addHandler(stream)
 
     log_dir = Path(os.environ.get("LOG_DIR", "./data/logs"))
@@ -46,6 +63,7 @@ def configure_logging() -> None:
             encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(rid_filter)
         root.addHandler(file_handler)
     except OSError:
         pass

@@ -31,6 +31,16 @@ class ChromaClient:
         self._collection = None
         self._client = None
 
+    def heartbeat(self) -> None:
+        """Ping the ChromaDB server; raises on connection failure.
+
+        Used by the readiness health check. Connects lazily so it also
+        validates the configured host/port on first call.
+        """
+        if self._client is None:
+            self.connect()
+        self._client.heartbeat()
+
     def add_chunks(
         self,
         chunk_ids: List[str],

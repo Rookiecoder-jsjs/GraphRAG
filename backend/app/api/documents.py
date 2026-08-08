@@ -1,9 +1,10 @@
 """Document management API endpoints."""
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks
@@ -518,6 +519,9 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         duration = time.time() - start_time
         duration_str = format_duration(duration)
 
+        # Invalidate the user's cluster-map cache (a new doc changed the set).
+        _cluster_cache.pop(user_id, None)
+
         # Emit completion
         await progress.emit_and_save(
             doc_id, user_id, "complete", f"Document processing complete ({duration_str})",
@@ -718,6 +722,12 @@ async def get_document_detail(
 #     extra deps.
 _MAX_CHUNKS_PER_DOC_FOR_CLUSTER = 5
 
+# Per-user cluster-map cache: (timestamp, points). Re-embedding every doc
+# centroid on each page load is expensive, so cache the result and
+# invalidate on upload/delete. TTL is a safety net for background changes.
+_cluster_cache: Dict[int, Tuple[float, dict]] = {}
+_CLUSTER_CACHE_TTL = 300  # seconds
+
 
 def _pca_2d(X: np.ndarray) -> np.ndarray:
     """Project an (N, D) matrix to (N, 2) via 2-component PCA.
@@ -800,6 +810,11 @@ async def get_cluster_map(
     """
     user_id = current_user["id"]
 
+    # Fast path: return a cached cluster map if it's still fresh.
+    cached = _cluster_cache.get(user_id)
+    if cached and (time.time() - cached[0] < _CLUSTER_CACHE_TTL):
+        return cached[1]
+
     async with get_db() as db:
         async with db.execute(
             "SELECT id, title, file_type, original_filename "
@@ -860,8 +875,9 @@ async def get_cluster_map(
             "x": float(x),
             "y": float(y),
         })
-
-    return {"points": points}
+    result = {"points": points}
+    _cluster_cache[user_id] = (time.time(), result)
+    return result
 
 
 @router.delete("/{doc_id}")
@@ -896,6 +912,8 @@ async def delete_document(
     # Delete from ChromaDB
     chroma = get_chroma_client()
     chroma.delete_document_chunks(doc_id, user_id)
+    # Invalidate the user's cluster-map cache (their doc set changed).
+    _cluster_cache.pop(user_id, None)
 
     # Delete from Neo4j
     neo4j = await get_neo4j_client()

@@ -1,14 +1,17 @@
 """Lightweight in-memory sliding-window rate limiter (no external dependencies).
 
 Used to throttle authentication endpoints (login/register) against brute-force
-and account-spraying attacks. State lives in process memory, so limits are
-per-worker and reset on restart — adequate as a first line of defence for a
-single-instance deployment. Swap for a shared store (e.g. Redis) if the app
-ever runs multiple workers behind a load balancer.
+and account-spraying attacks, and the billable chat/search endpoints against
+quota-burning loops. State lives in process memory, so limits are per-worker
+and reset on restart - adequate as a first line of defence for a single-instance
+deployment. Swap for a shared store (e.g. Redis) if the app ever runs multiple
+workers behind a load balancer.
 """
 import time
 from collections import defaultdict, deque
 from typing import Deque, Dict
+
+from fastapi import HTTPException, status
 
 
 class SlidingWindowLimiter:
@@ -55,3 +58,28 @@ login_limiter = SlidingWindowLimiter(max_calls=8, window_seconds=60)
 # Registration: tight per-IP to blunt mass account creation (each account
 # triggers billable LLM/embedding work on first upload).
 register_limiter = SlidingWindowLimiter(max_calls=10, window_seconds=3600)
+# Chat: each call fans out into billable LLM + embedding + rerank work, so
+# throttle per user to cap a single account's spend rate. 20/min is well
+# above any honest read pace but stops a tight loop from burning provider
+# quota.
+chat_limiter = SlidingWindowLimiter(max_calls=20, window_seconds=60)
+# Search: cheaper than chat (no generation) but still hits embedding +
+# rerank, so allow a slightly higher rate.
+search_limiter = SlidingWindowLimiter(max_calls=30, window_seconds=60)
+
+
+def enforce_rate_limit(limiter: SlidingWindowLimiter, key: str) -> None:
+    """Raise 429 when ``key`` exceeds ``limiter``. No-op under test env.
+
+    Centralised so every throttled endpoint (auth/chat/search) applies the
+    same test-env bypass and Retry-After header without re-implementing it.
+    """
+    from app.config import get_settings
+    if get_settings().APP_ENV.lower() in ("test", "testing"):
+        return
+    if not limiter.is_allowed(key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests. Please slow down.",
+            headers={"Retry-After": str(limiter.retry_after(key))},
+        )

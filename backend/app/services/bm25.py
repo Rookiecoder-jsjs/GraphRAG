@@ -1,7 +1,10 @@
 """BM25 retrieval service for hybrid search with multi-user support."""
+import logging
 import re
 from typing import List, Dict, Any, Optional, Set
 from rank_bm25 import BM25Okapi
+
+logger = logging.getLogger(__name__)
 
 
 class BM25Service:
@@ -174,6 +177,55 @@ class BM25Service:
     def has_index(self, user_id: int) -> bool:
         """Check if user has BM25 index."""
         return user_id in self._user_indexes
+
+
+# Prewarm status, surfaced via /health/ready. `done` means the background
+# task has finished (success or failure); callers should not block on it.
+_prewarm_state = {"done": False, "users": 0, "error": None}
+
+
+async def prewarm_all_bm25() -> None:
+    """Build BM25 indexes for every user that has chunks.
+
+    Run as a background task at startup (non-blocking) so the first query
+    from any user doesn't pay a full SQLite scan + re-tokenise on the
+    request path. Idempotent: skips users whose index already exists (e.g.
+    the lazy build in ``retrieve`` raced ahead). Failures are logged, not
+    raised - prewarm is an optimisation, never a startup requirement.
+    """
+    global _prewarm_state
+    from app.database import get_db
+    bm25 = get_bm25_service()
+    try:
+        async with get_db() as db:
+            async with db.execute("SELECT DISTINCT user_id FROM chunks") as cur:
+                user_rows = await cur.fetchall()
+        for row in user_rows:
+            uid = row["user_id"]
+            if bm25.has_index(uid):
+                continue
+            async with get_db() as db:
+                async with db.execute(
+                    "SELECT chunk_id, content FROM chunks WHERE user_id = ? ORDER BY created_at",
+                    (uid,),
+                ) as cur:
+                    rows = await cur.fetchall()
+            if rows:
+                bm25.build_user_index(
+                    uid,
+                    [r["content"] for r in rows],
+                    [r["chunk_id"] for r in rows],
+                )
+                logger.info("BM25 prewarmed for user_id=%d (%d chunks)", uid, len(rows))
+        _prewarm_state = {"done": True, "users": len(user_rows), "error": None}
+    except Exception as e:
+        logger.warning("BM25 prewarm failed: %s", e)
+        _prewarm_state = {"done": True, "users": 0, "error": str(e)}
+
+
+def get_prewarm_state() -> dict:
+    """Return a snapshot of the BM25 prewarm status for health checks."""
+    return dict(_prewarm_state)
 
 
 # Singleton instance

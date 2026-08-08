@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.auth.security import verify_password, get_password_hash
 from app.auth.jwt_handler import create_access_token, verify_token
-from app.auth.rate_limit import login_limiter, register_limiter
+from app.auth.rate_limit import enforce_rate_limit, login_limiter, register_limiter
 from app.models.user import UserCreate, UserResponse, Token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -23,19 +23,6 @@ def _client_ip(request: Optional[Request]) -> str:
     if request is not None and request.client is not None:
         return request.client.host
     return "unknown"
-
-
-def _rate_limit(limiter, key: str) -> None:
-    """Raise 429 when ``key`` exceeds ``limiter``. Skipped under test."""
-    settings = get_settings()
-    if settings.APP_ENV.lower() in ("test", "testing"):
-        return  # never throttle the automated test suite
-    if not limiter.is_allowed(key):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many attempts. Please try again later.",
-            headers={"Retry-After": str(limiter.retry_after(key))},
-        )
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
@@ -61,7 +48,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
 async def register(user_data: UserCreate, request: Request = None):
     """Register a new user."""
     # Throttle mass account creation (each account can trigger billable work).
-    _rate_limit(register_limiter, f"register:{_client_ip(request)}")
+    enforce_rate_limit(register_limiter, f"register:{_client_ip(request)}")
     async with get_db() as db:
         # Check if username exists
         async with db.execute(
@@ -106,7 +93,7 @@ async def login(
 ):
     """Login and get access token."""
     # Throttle online password brute-forcing per (IP, username).
-    _rate_limit(
+    enforce_rate_limit(
         login_limiter, f"login:{_client_ip(request)}:{form_data.username.lower()}"
     )
     async with get_db() as db:

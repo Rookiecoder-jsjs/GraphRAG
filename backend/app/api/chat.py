@@ -10,6 +10,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.auth import get_current_user
+from app.auth.rate_limit import chat_limiter, enforce_rate_limit
+from app.services.intent import classify_intent
 from app.config import get_settings
 from app.database import get_db
 from app.models.chat import ChatRequest, ChatResponse, Conversation
@@ -296,162 +298,14 @@ async def build_rag_context(
             a COMPARISON instruction asking the LLM to structure the
             answer to highlight cross-document agreements/disagreements.
     """
-    settings = get_settings()
-    t_start = time.perf_counter()
-
-    # Query preprocessing. Rewriting costs a full LLM round-trip (~1s) that
-    # BLOCKS every retrieval step after it, so only pay it for queries long
-    # enough to plausibly benefit — short keyword-style questions (the demo
-    # common case) go straight to retrieval. Tunable via QUERY_REWRITE_MIN_LEN
-    # (0 = always rewrite, i.e. the old behavior).
-    search_query = query
-    if use_query_rewrite and len(query.strip()) >= settings.QUERY_REWRITE_MIN_LEN:
-        query_processor = await get_query_processor()
-        rewritten = await query_processor.rewrite_query(query)
-        if rewritten and len(rewritten) > 0:
-            search_query = rewritten
-    t_rewrite = time.perf_counter()
-
-    # Get query embedding
-    embedding_service = await get_embedding_service()
-    query_embedding = await embedding_service.embed_single(search_query)
-    t_embed = time.perf_counter()
-
-    # Hybrid search
-    chroma = get_chroma_client()
-    bm25 = get_bm25_service()
-    neo4j = await get_neo4j_client()
-
-    # ---------- Optional graph-RAG candidate set ----------
-    # When enabled, ask the graph: "which chunks MENTION any of the
-    # entities the user is asking about?" The result is a hard-filtered
-    # candidate list; if it has fewer than top_k hits we fill the rest
-    # from the usual vector+BM25 path (deduped) so we never deliver
-    # fewer candidates than the reranker needs.
-    graph_chunks: List[Dict[str, Any]] = []
-    if use_graph_rag:
-        try:
-            query_processor = await get_query_processor()
-            extracted = await query_processor.extract_entities(search_query)
-            entity_names = [e["name"] for e in (extracted or []) if e.get("name")]
-            if entity_names:
-                graph_chunk_ids = await neo4j.get_chunks_for_entities(
-                    entity_names=entity_names,
-                    user_id=user_id,
-                    limit=max(top_k * 4, 20),
-                )
-                if graph_chunk_ids:
-                    graph_chunks = chroma.get_chunks_by_ids(graph_chunk_ids, user_id)
-                    logger.info(
-                        "graph_rag: extracted %d entities (%s) → %d graph chunks",
-                        len(entity_names), entity_names[:5], len(graph_chunks),
-                    )
-        except Exception as e:
-            # Graph-RAG is an optimization; never let it break the
-            # primary retrieval path.
-            logger.warning("graph_rag: extraction failed, falling back: %s", e)
-
-    # ---------- Vector + BM25 path (always run; will be deduped if graph_rag adds candidates) ----------
-    if use_hybrid:
-        # Check if user has BM25 index, if not, build it
-        if not bm25.has_index(user_id):
-            # Build BM25 index from SQLite for this user
-            async with get_db() as db:
-                async with db.execute(
-                    "SELECT chunk_id, content FROM chunks WHERE user_id = ?",
-                    (user_id,)
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                    if rows:
-                        chunk_contents = [r["content"] for r in rows]
-                        chunk_ids = [r["chunk_id"] for r in rows]
-                        bm25.build_user_index(user_id, chunk_contents, chunk_ids)
-
-        # Recall budget per retriever. RRF + the reranker only need enough
-        # candidates to reliably contain the final top_k; RERANK_RECALL_K=25
-        # roughly halves the rerank payload (and its latency) vs the old 50.
-        recall_k = settings.RERANK_RECALL_K
-
-        # Vector search (larger recall for fusion)
-        vector_results = chroma.search(query_embedding, user_id, top_k=recall_k)
-
-        # BM25 search
-        bm25_results = bm25.search(search_query, user_id, top_k=recall_k)
-
-        # RRF fusion
-        fused_results = reciprocal_rank_fusion(
-            vector_results,
-            bm25_results,
-            k=60,
-            top_k=recall_k
-        )
-        hybrid_chunks = fused_results
-    else:
-        # Original vector-only search
-        hybrid_chunks = chroma.search(query_embedding, user_id, top_k=20)
-
-    # ---------- Merge: graph hits first (boost), then hybrid dedup ----------
-    if graph_chunks:
-        seen = {c.get("chunk_id") for c in graph_chunks}
-        # Give graph hits a small synthetic rank boost by prepending them
-        # before the hybrid set. The reranker will re-score from scratch.
-        merged = list(graph_chunks) + [
-            c for c in hybrid_chunks if c.get("chunk_id") not in seen
-        ]
-        chunks = merged
-    else:
-        chunks = hybrid_chunks
-    t_retrieve = time.perf_counter()
-
-    # Rerank to get top_k most relevant
-    rerank_service = await get_rerank_service()
-    chunks = await rerank_service.rerank(search_query, chunks, top_k=top_k)
-    t_rerank = time.perf_counter()
-
-    # Get context chunks
-    all_chunks = []
-    for chunk in chunks:
-        all_chunks.append(chunk)
-        context = chroma.get_chunk_context(chunk["chunk_id"], user_id, window_size=1)
-        all_chunks.extend(context)
-
-    # Get entities from chunks
-    chunk_ids = [c["chunk_id"] for c in all_chunks]
-    entities = await neo4j.get_entities_from_chunks(chunk_ids, user_id)
-
-    # Get related entities from graph
-    entity_names = [e["name"] for e in entities]
-    relations = []
-    if entity_names:
-        graph_data = await neo4j.get_related_entities(entity_names[:3], user_id, depth=2)
-        relations = graph_data.get("relations", [])
-        # Add related entities to list
-        for rel in relations:
-            if not any(e["name"] == rel["source"] for e in entities):
-                entities.append({"name": rel["source"], "type": "Related"})
-            if not any(e["name"] == rel["target"] for e in entities):
-                entities.append({"name": rel["target"], "type": "Related"})
-
-    # Per-stage latency breakdown — lets us compare before/after tuning and
-    # immediately spot which step dominates time-to-first-token.
-    t_end = time.perf_counter()
-    logger.info(
-        "build_rag_context timing: rewrite=%.3fs embed=%.3fs retrieve=%.3fs "
-        "rerank=%.3fs enrich=%.3fs total=%.3fs (context_chunks=%d)",
-        t_rewrite - t_start,
-        t_embed - t_rewrite,
-        t_retrieve - t_embed,
-        t_rerank - t_retrieve,
-        t_end - t_rerank,
-        t_end - t_start,
-        len(all_chunks),
+    from app.services.retriever import retrieve
+    return await retrieve(
+        query, user_id,
+        top_k=top_k,
+        use_graph_rag=use_graph_rag,
+        conversation_history=None,
+        enable_rewrite=use_query_rewrite,
     )
-
-    return {
-        "chunks": all_chunks,
-        "entities": entities,
-        "relations": relations
-    }
 
 
 @router.post("")
@@ -461,6 +315,8 @@ async def chat(
 ):
     """Non-streaming chat with RAG."""
     user_id = current_user["id"]
+    # Throttle billable LLM work per user (no-op under test).
+    enforce_rate_limit(chat_limiter, f"chat:{user_id}")
 
     # Verify ownership (or create) before writing into the conversation.
     conversation_id = await _resolve_conversation_id(
@@ -475,21 +331,8 @@ async def chat(
         )
         await db.commit()
 
-    # Build context
-    if request.include_context:
-        context = await build_rag_context(
-            request.message,
-            user_id,
-            use_graph_rag=request.use_graph_rag,
-            compare_mode=request.compare_mode,
-        )
-    else:
-        context = {"chunks": [], "entities": [], "relations": []}
-
-    # Get conversation history — the 10 MOST RECENT messages, in chronological
-    # order. We select newest-first (DESC, id as a tie-breaker for same-second
-    # timestamps) then reverse, so long conversations keep recent context
-    # instead of the stale opening turns.
+    # Get conversation history (10 most recent, chronological) FIRST so it
+    # can feed both retrieval (conversational rewrite) and generation.
     conversation_history = []
     async with get_db() as db:
         async with db.execute(
@@ -498,9 +341,24 @@ async def chat(
             (conversation_id,)
         ) as cursor:
             rows = await cursor.fetchall()
-            conversation_history = [
-                {"role": r["role"], "content": r["content"]} for r in reversed(rows)
-            ]
+        conversation_history = [
+            {"role": r["role"], "content": r["content"]} for r in reversed(rows)
+        ]
+
+    # Intent routing: chitchat / should_reject skip retrieval (the LLM
+    # answers directly or refuses); only fact_retrieval pays for RAG.
+    # Classification failure falls back to fact_retrieval.
+    intent = await classify_intent(request.message)
+    if intent["intent"] == "fact_retrieval" and request.include_context:
+        from app.services.retriever import retrieve
+        context = await retrieve(
+            request.message,
+            user_id,
+            use_graph_rag=request.use_graph_rag,
+            conversation_history=conversation_history[:-1],
+        )
+    else:
+        context = {"chunks": [], "entities": [], "relations": []}
 
     # Build a numbered citation context for the prompt
     if context["chunks"]:
@@ -529,12 +387,21 @@ async def chat(
         comparison_mode=request.compare_mode,
     )
 
-    # Save assistant message
+    # Save assistant message + the chunk_ids it cited (for feedback attribution)
     async with get_db() as db:
-        await db.execute(
+        cur = await db.execute(
             "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
             (conversation_id, "assistant", response)
         )
+        msg_id = cur.lastrowid
+        if msg_id and citation.get("sources"):
+            await db.executemany(
+                "INSERT OR IGNORE INTO message_sources (message_id, chunk_id, rank) VALUES (?, ?, ?)",
+                [
+                    (msg_id, s.get("chunk_id"), s.get("index"))
+                    for s in citation["sources"] if s.get("chunk_id")
+                ],
+            )
         await db.commit()
 
     # Compute how many of the available source chips the LLM actually
@@ -583,13 +450,29 @@ async def chat_stream_generator(
         )
         await db.commit()
 
-    # Build context
-    if request.include_context:
-        context = await build_rag_context(
+    # Fetch prior turns for the conversational query rewrite.
+    conversation_history: list = []
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT role, content FROM messages "
+            "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT 10",
+            (conversation_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        conversation_history = [
+            {"role": r["role"], "content": r["content"]} for r in reversed(rows)
+        ]
+
+    # Intent routing: chitchat / should_reject skip retrieval; only
+    # fact_retrieval pays for RAG. Failure falls back to fact_retrieval.
+    intent = await classify_intent(request.message)
+    if intent["intent"] == "fact_retrieval" and request.include_context:
+        from app.services.retriever import retrieve
+        context = await retrieve(
             request.message,
             user_id,
             use_graph_rag=request.use_graph_rag,
-            compare_mode=request.compare_mode,
+            conversation_history=conversation_history[:-1],
         )
     else:
         context = {"chunks": [], "entities": [], "relations": []}
@@ -676,10 +559,19 @@ Context:
     # Save complete response
     complete_response = "".join(full_response)
     async with get_db() as db:
-        await db.execute(
+        cur = await db.execute(
             "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
             (conversation_id, "assistant", complete_response)
         )
+        msg_id = cur.lastrowid
+        if msg_id and citation.get("sources"):
+            await db.executemany(
+                "INSERT OR IGNORE INTO message_sources (message_id, chunk_id, rank) VALUES (?, ?, ?)",
+                [
+                    (msg_id, s.get("chunk_id"), s.get("index"))
+                    for s in citation["sources"] if s.get("chunk_id")
+                ],
+            )
         await db.commit()
 
     # Compute citation coverage (same logic as the non-streaming path).
@@ -709,6 +601,8 @@ async def chat_stream(
 ):
     """Streaming chat with RAG."""
     user_id = current_user["id"]
+    # Throttle billable LLM work per user (no-op under test).
+    enforce_rate_limit(chat_limiter, f"chat:{user_id}")
 
     # Verify ownership (or create) BEFORE opening the stream, so a foreign
     # conversation_id returns a clean 404 instead of a half-opened response.

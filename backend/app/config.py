@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Upload
     UPLOAD_DIR: str = "./data/uploads"
     MAX_FILE_SIZE: int = 10485760  # 10MB
+    # Global request body size backstop. The upload endpoint enforces
+    # MAX_FILE_SIZE during streaming; this catches every other endpoint so
+    # a malformed JSON body can't be buffered into memory unbounded.
+    MAX_REQUEST_BODY: int = 15728640  # 15MB
 
     # Embedding
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
@@ -61,6 +65,30 @@ class Settings(BaseSettings):
     # the final top_k; 25 roughly halves rerank payload/latency vs 50 with no
     # measurable hit to top-5 quality.
     RERANK_RECALL_K: int = 25
+
+    # Retrieval architecture tuning (see services/retriever.py)
+    MULTI_QUERY_NUM_VARIANTS: int = 3
+    GRAPH_RRF_WEIGHT: float = 1.0
+    ENABLE_EXPANSION_RERERANK: bool = True
+    RETRIEVAL_CACHE_TTL: int = 300
+    BM25_PREWARM: bool = True
+    PARENT_SECTION_MAX_CHARS: int = 2000
+    PARENT_SECTION_SIBLING_LIMIT: int = 4
+    CONVERSATIONAL_REWRITE_HISTORY_TURNS: int = 4
+
+    # Intent routing: classify each query (fact_retrieval / chitchat /
+    # should_reject) before retrieval. should_reject is answered with a
+    # template, chitchat skips retrieval. Disabled or failed classification
+    # falls back to fact_retrieval so RAG always runs.
+    ENABLE_INTENT_ROUTING: bool = True
+    INTENT_CLASSIFY_TIMEOUT: float = 3.0
+    # Graph-RAG mode: "auto" (default) enables the graph channel only when
+    # the query matches >=2 of the user's entities; "on"/"off" force it.
+    GRAPH_RAG_MODE: str = "auto"
+    # Chunker overlap (chars): each split chunk is prefixed with the tail of
+    # the previous one so facts straddling a boundary stay retrievable from
+    # both sides. 0 disables. Only affects newly-uploaded documents.
+    CHUNK_OVERLAP: int = 50
 
     # Entity Extraction
     ENABLE_LLM_EXTRACTION: bool = True

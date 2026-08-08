@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  pytest:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run unit tests
+        env:
+          # conftest.py also sets a throwaway value via setdefault; this just
+          # makes it explicit. Never use a real production secret here.
+          JWT_SECRET: ci-throwaway-not-a-real-secret-AAAAAAAAAAAA
+          APP_ENV: test
+        run: pytest tests/ -q

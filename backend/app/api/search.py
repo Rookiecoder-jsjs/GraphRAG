@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import get_current_user
+from app.auth.rate_limit import enforce_rate_limit, search_limiter
 from app.models.chat import SearchRequest, SearchResponse
 from app.services.embedding import get_embedding_service
 from app.services.chroma_client import get_chroma_client
@@ -17,48 +18,25 @@ async def search(
     request: SearchRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Semantic search across documents."""
+    """Semantic search across documents (unified hybrid retrieval)."""
     user_id = current_user["id"]
+    # Throttle billable embedding/rerank work per user (no-op under test).
+    enforce_rate_limit(search_limiter, f"search:{user_id}")
 
-    # Generate query embedding
-    embedding_service = await get_embedding_service()
-    query_embedding = await embedding_service.embed_single(request.query)
-
-    # Search ChromaDB with larger recall
-    chroma = get_chroma_client()
-    chunks = chroma.search(query_embedding, user_id, top_k=request.top_k * 4)
-
-    # Rerank to get top_k most relevant
-    rerank_service = await get_rerank_service()
-    chunks = await rerank_service.rerank(request.query, chunks, top_k=request.top_k)
-
-    # Expand context if requested
-    if request.include_context and chunks:
-        expanded_chunks = []
-        for chunk in chunks:
-            expanded_chunks.append(chunk)
-            # Get context chunks
-            context = chroma.get_chunk_context(
-                chunk["chunk_id"], user_id, window_size=1
-            )
-            expanded_chunks.extend(context)
-        chunks = expanded_chunks
-
-    # Get entities from chunks
-    neo4j = await get_neo4j_client()
-    chunk_ids = [c["chunk_id"] for c in chunks]
-    entities = await neo4j.get_entities_from_chunks(chunk_ids, user_id)
-
-    # Get relations between entities
-    entity_names = [e["name"] for e in entities]
-    relations = []
-    if len(entity_names) >= 2:
-        graph_data = await neo4j.get_related_entities(entity_names[:5], user_id, depth=1)
-        relations = graph_data.get("relations", [])
+    # Delegate to the same hybrid + multi-query + rerank + expansion pipeline
+    # used by /api/chat, so the two entry points have consistent recall.
+    from app.services.retriever import retrieve
+    context = await retrieve(
+        request.query,
+        user_id,
+        top_k=request.top_k,
+        use_graph_rag=getattr(request, "use_graph_rag", False),
+        conversation_history=None,
+    )
 
     return {
         "query": request.query,
-        "chunks": chunks,
-        "entities": entities,
-        "relations": relations
+        "chunks": context["chunks"],
+        "entities": context["entities"],
+        "relations": context["relations"],
     }

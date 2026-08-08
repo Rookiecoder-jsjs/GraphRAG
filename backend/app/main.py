@@ -5,11 +5,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.database import init_db
+from app.database import get_db, init_db
 from app.logger import configure_logging
+from app.middleware import RequestBodyLimitMiddleware, RequestIDMiddleware
 from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.api import auth, documents, search, graph, chat, progress, tags, timeline, dashboard
@@ -33,6 +35,20 @@ async def lifespan(app: FastAPI):
 
     chroma = get_chroma_client()
     chroma.connect()
+
+    # Prewarm per-user BM25 indexes in the background so the first query
+    # doesn't pay a full-scan index build on the request path. Non-blocking:
+    # a failure here only logs, never prevents startup.
+    if settings.BM25_PREWARM:
+        import asyncio
+        from app.services.bm25 import prewarm_all_bm25
+        asyncio.create_task(prewarm_all_bm25())
+
+    # Reconcile documents abandoned in non-terminal states (e.g. the
+    # background pipeline crashed mid-flight). Non-blocking startup sweep.
+    import asyncio
+    from app.services.reconcile import reconcile_stuck_documents
+    asyncio.create_task(reconcile_stuck_documents())
 
     logger.info("Knowledge Graph System Started")
     yield
@@ -76,6 +92,11 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    # Global request body size backstop (upload endpoint enforces its own
+    # MAX_FILE_SIZE during streaming; this catches every other endpoint).
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.MAX_REQUEST_BODY)
+    # Per-request correlation id (X-Request-ID header), surfaced in logs.
+    app.add_middleware(RequestIDMiddleware)
 
     # Include routers
     app.include_router(auth.router)
@@ -98,7 +119,44 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
+        """Liveness: the process is up."""
         return {"status": "healthy"}
+
+    @app.get("/health/ready")
+    async def health_ready():
+        """Readiness: ping every backing store. 503 if any core store is down."""
+        checks: dict = {}
+        # SQLite
+        try:
+            async with get_db() as db:
+                async with db.execute("SELECT 1") as cur:
+                    await cur.fetchone()
+            checks["sqlite"] = "ok"
+        except Exception as e:
+            checks["sqlite"] = f"fail: {type(e).__name__}"
+        # ChromaDB
+        try:
+            get_chroma_client().heartbeat()
+            checks["chroma"] = "ok"
+        except Exception as e:
+            checks["chroma"] = f"fail: {type(e).__name__}"
+        # Neo4j
+        try:
+            neo4j = await get_neo4j_client()
+            async with neo4j.session() as s:
+                await s.run("RETURN 1")
+            checks["neo4j"] = "ok"
+        except Exception as e:
+            checks["neo4j"] = f"fail: {type(e).__name__}"
+        # BM25 prewarm status (informational, not gating).
+        from app.services.bm25 import get_prewarm_state
+        checks["bm25_prewarm"] = get_prewarm_state()
+        core = ("sqlite", "chroma", "neo4j")
+        ready = all(checks.get(k) == "ok" for k in core)
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={"status": "ready" if ready else "degraded", "checks": checks},
+        )
 
     return app
 
