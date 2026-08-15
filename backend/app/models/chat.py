@@ -12,7 +12,9 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     """Chat request model."""
-    message: str = Field(..., min_length=1)
+    # Upper bound so one oversized message can't be persisted verbatim and
+    # shipped whole into the LLM prompt (context overflow -> provider 400).
+    message: str = Field(..., min_length=1, max_length=8000)
     conversation_id: Optional[str] = None
     include_context: bool = True
     use_graph_rag: bool = False  # opt-in: graph-first candidate set
@@ -50,7 +52,7 @@ class Conversation(BaseModel):
 
 class SearchRequest(BaseModel):
     """Search request model."""
-    query: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
     include_context: bool = True
 

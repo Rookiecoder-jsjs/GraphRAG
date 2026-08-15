@@ -11,10 +11,14 @@ export const chatApi = {
     })
   },
 
-  stream: (message, conversationId, useGraphRag = false, compareMode = false, enableThinking = false) => {
+  // `signal` lets the caller abort an in-flight stream (e.g. when the page
+  // is deactivated) - without it a navigated-away chat keeps pulling tokens
+  // in the background until the provider finishes.
+  stream: (message, conversationId, useGraphRag = false, compareMode = false, enableThinking = false, signal = undefined) => {
     const token = localStorage.getItem('token')
     return fetch('/api/chat/stream', {
       method: 'POST',
+      signal,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`

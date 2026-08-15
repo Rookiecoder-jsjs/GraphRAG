@@ -78,10 +78,22 @@ async def register(user_data: UserCreate, request: Request = None):
         ) as cursor:
             user = await cursor.fetchone()
 
-        # Create user node in Neo4j
+        # Create user node in Neo4j. If the graph store is down, compensate
+        # by deleting the just-committed SQLite row: without the rollback the
+        # user would exist while registration "failed", and every retry
+        # would hit "Username already registered" forever.
         from app.services.neo4j_client import get_neo4j_client
-        neo4j = await get_neo4j_client()
-        await neo4j.create_user_node(user_id, user_data.username)
+        try:
+            neo4j = await get_neo4j_client()
+            await neo4j.create_user_node(user_id, user_data.username)
+        except Exception as e:
+            async with get_db() as db:
+                await db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Graph database unavailable, registration failed. Please retry.",
+            ) from e
 
         return dict(user)
 

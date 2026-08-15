@@ -36,10 +36,14 @@ class SlidingWindowLimiter:
         if len(dq) >= self.max_calls:
             return False
         dq.append(now)
-        # Opportunistic memory guard: drop fully-expired keys so an attacker
-        # spraying unique identifiers can't grow the dict without bound.
+        # Opportunistic memory guard: drop keys whose NEWEST hit has expired.
+        # Sprayed keys are never re-checked, so their deques never self-purge
+        # via _purge - without this an attacker spraying unique identifiers
+        # could grow the dict without bound. (Checking the newest hit is
+        # enough: it is the youngest, so if even it expired, all have.)
         if len(self._hits) > 10000:
-            for k in [k for k, v in self._hits.items() if not v]:
+            cutoff = now - self.window_seconds
+            for k in [k for k, v in self._hits.items() if v and v[-1] <= cutoff]:
                 del self._hits[k]
         return True
 

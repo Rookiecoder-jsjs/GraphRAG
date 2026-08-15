@@ -282,7 +282,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted, onActivated, onUnmounted, h } from 'vue'
+import { ref, watch, nextTick, onMounted, onActivated, onDeactivated, onUnmounted, h } from 'vue'
 import { chatApi } from '../api/chat'
 import { createSseParser } from '../utils/sse'
 import { PageHeader, Button, Tag, Dot, Switch, EmptyState } from '../components/ui'
@@ -353,6 +353,17 @@ onMounted(() => {
 
 onActivated(() => {
   loadConversations()
+})
+
+onDeactivated(() => {
+  // Layout keeps this page alive in cache, so route switches fire
+  // onDeactivated (NOT onUnmounted): abort the in-flight stream here or it
+  // keeps pulling tokens for minutes in the background. The sendMessage
+  // finally-block settles the stopwatch once the abort lands.
+  if (activeStreamAbort) {
+    activeStreamAbort.abort()
+    activeStreamAbort = null
+  }
 })
 
 onUnmounted(() => {
@@ -493,10 +504,11 @@ const CURSOR_HTML = '<span class="stream-cursor"></span>'
 //   event: sources   -> data: {"sources": [...]}   (sent FIRST, before text)
 //   event: thinking  -> data: {"text": "..."}       (reasoning, Deep Think on)
 //   (message)        -> data: {"chunk": "..."}      (streamed body tokens)
+//   event: error     -> data: {"error": "..."}      (terminal, provider failed)
 //   event: done      -> data: {"conversation_id","sources","citation_coverage"}
-const streamChat = async (body, handlers) => {
+const streamChat = async (body, handlers, signal) => {
   const response = await chatApi.stream(
-    body.message, body.conversationId, body.useGraphRag, body.compareMode, body.enableThinking
+    body.message, body.conversationId, body.useGraphRag, body.compareMode, body.enableThinking, signal
   )
   if (!response.ok || !response.body) {
     throw new Error(`Stream request failed with status ${response.status}`)
@@ -505,10 +517,11 @@ const streamChat = async (body, handlers) => {
   const decoder = new TextDecoder()
 
   // Frame parsing lives in utils/sse.js (unit-tested); here we just route the
-  // typed events to their handlers.
+  // typed events to our handlers.
   const parser = createSseParser((event, payload) => {
     if (event === 'sources') handlers.onSources(payload?.sources)
     else if (event === 'thinking') handlers.onThinking?.(payload?.text)
+    else if (event === 'error') handlers.onError?.(payload?.error)
     else if (event === 'done') handlers.onDone(payload)
     else if (payload && typeof payload.chunk === 'string') handlers.onChunk(payload.chunk)
   })
@@ -541,6 +554,9 @@ const scheduleScroll = () => {
 // Measured with performance.now(); purely presentational, never persisted.
 // ---------------------------------------------------------------------------
 let activeResponseTimer = null
+// AbortController of the in-flight chat stream (if any) - aborted when the
+// page is deactivated so a navigated-away chat stops pulling tokens.
+let activeStreamAbort = null
 
 const formatSeconds = (ms) => `${((ms ?? 0) / 1000).toFixed(2)}s`
 
@@ -607,6 +623,12 @@ const sendMessage = async () => {
 
   let gotChunk = false
   let hadError = false
+  // Typed provider-error frame from the backend (event: error): a FINAL
+  // state - don't retry via the non-streaming endpoint, it would re-bill
+  // and likely fail the same way.
+  let streamErred = false
+  const streamAbort = new AbortController()
+  activeStreamAbort = streamAbort
   try {
     await streamChat(
       {
@@ -654,13 +676,28 @@ const sendMessage = async () => {
           // trailing follow-up generation doesn't pad the number.
           settleTimer(false)
         },
-      }
+        onError: (err) => {
+          console.error('Chat stream error:', err)
+          streamErred = true
+          hadError = true
+        },
+      },
+      streamAbort.signal
     )
-    if (!gotChunk) throw new Error('stream produced no content')
+    if (!gotChunk && !streamErred) throw new Error('stream produced no content')
+    if (streamErred) {
+      // Terminal provider error: keep whatever partial answer rendered.
+      if (!gotChunk) assistantMsg.content = '抱歉，生成回答失败，请重试。'
+    }
   } catch (error) {
-    // If nothing has rendered yet, fall back to the non-streaming endpoint so
-    // a stream hiccup never leaves the user staring at an empty bubble.
-    if (!gotChunk) {
+    if (streamAbort.signal.aborted) {
+      // Page deactivated mid-stream: intentional, keep whatever rendered
+      // and do NOT retry via the non-streaming endpoint.
+      hadError = true
+      if (!gotChunk) assistantMsg.content = '回答已中断。'
+    } else if (!gotChunk) {
+      // If nothing has rendered yet, fall back to the non-streaming endpoint so
+      // a stream hiccup never leaves the user staring at an empty bubble.
       try {
         const { data } = await chatApi.send(
           message, currentConversationId.value, true, useGraphRag.value, useCompare.value
@@ -684,6 +721,7 @@ const sendMessage = async () => {
       hadError = true
     }
   } finally {
+    if (activeStreamAbort === streamAbort) activeStreamAbort = null
     settleTimer(hadError)
     assistantMsg.streaming = false
     assistantMsg.formattedHtml = formatMessage(assistantMsg.content)

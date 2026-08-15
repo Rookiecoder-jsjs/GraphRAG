@@ -79,8 +79,30 @@ class _RetrievalCache:
         while len(self._store) > self._max:
             self._store.popitem(last=False)
 
+    def invalidate_user(self, user_id: int) -> None:
+        """Drop every cached entry for a user.
+
+        Called on document upload/delete: the corpus that user queries
+        against changed, and TTL alone can't cover writes — a deleted
+        document's chunks would otherwise keep being returned for up to a
+        full TTL. Keys are ``(user_id, hash, top_k, graph)`` so we can
+        filter by the first element.
+        """
+        for key in [k for k in self._store if k[0] == user_id]:
+            self._store.pop(key, None)
+
 
 _cache = _RetrievalCache()
+
+
+def invalidate_retrieval_cache(user_id: int) -> None:
+    """Invalidate cached retrieval results for one user.
+
+    Invoked from the document lifecycle (upload completion / delete /
+    failure cleanup) so ``retrieve()`` never serves results that reference
+    chunks the user has since added or removed.
+    """
+    _cache.invalidate_user(user_id)
 
 
 async def _ensure_bm25_index(user_id: int) -> None:
@@ -100,7 +122,10 @@ async def _ensure_bm25_index(user_id: int) -> None:
         ) as cur:
             rows = await cur.fetchall()
     if rows:
-        bm25.build_user_index(
+        # jieba tokenisation + BM25 build is CPU-heavy; run it off the event
+        # loop so one cold user doesn't stall every concurrent request.
+        await asyncio.to_thread(
+            bm25.build_user_index,
             user_id,
             [r["content"] for r in rows],
             [r["chunk_id"] for r in rows],
@@ -274,12 +299,26 @@ async def retrieve(
     recall_k = settings.RERANK_RECALL_K
 
     # ---- 4. Per-query vector + BM25 retrieval (#3 multi-query) ----
+    # The chromadb HttpClient is synchronous and BM25 scoring is CPU-bound,
+    # so both go through asyncio.to_thread: calling them inline would block
+    # the event loop for the duration of every HTTP round-trip / scoring
+    # pass, silently serialising all concurrent requests behind one
+    # retrieval. Dispatch every channel first, then await them together.
     result_lists: List[List[Dict[str, Any]]] = []
     labels: List[str] = []
-    for i, (q, emb) in enumerate(zip(valid_queries, query_embeddings)):
-        result_lists.append(chroma.search(emb, user_id, top_k=recall_k))
+    recall_tasks = []
+    for q, emb in zip(valid_queries, query_embeddings):
+        recall_tasks.append(
+            asyncio.to_thread(chroma.search, emb, user_id, recall_k)
+        )
+        recall_tasks.append(
+            asyncio.to_thread(bm25.search, q, user_id, recall_k)
+        )
+    recall_results = await asyncio.gather(*recall_tasks)
+    for i in range(len(valid_queries)):
+        result_lists.append(recall_results[2 * i])
         labels.append("vector" if i == 0 else f"vector_{i}")
-        result_lists.append(bm25.search(q, user_id, top_k=recall_k))
+        result_lists.append(recall_results[2 * i + 1])
         labels.append("bm25" if i == 0 else f"bm25_{i}")
 
     # ---- 5. Graph channel as an RRF list (#5) ----
@@ -296,7 +335,9 @@ async def retrieve(
                     limit=max(top_k * 4, 20),
                 )
                 if graph_chunk_ids:
-                    graph_chunks = chroma.get_chunks_by_ids(graph_chunk_ids, user_id)
+                    graph_chunks = await asyncio.to_thread(
+                        chroma.get_chunks_by_ids, graph_chunk_ids, user_id
+                    )
                     if graph_chunks:
                         result_lists.append(graph_chunks)
                         labels.append("graph")
@@ -325,7 +366,14 @@ async def retrieve(
 
     # ---- 7. Rerank -> seeds ----
     rerank_service = await get_rerank_service()
-    seeds = await rerank_service.rerank(rewritten, fused, top_k=top_k)
+    try:
+        seeds = await rerank_service.rerank(rewritten, fused, top_k=top_k)
+    except Exception as e:
+        # Rerank is an optimisation, not a requirement: on any failure (HTTP
+        # error, unexpected payload shape, timeout) fall back to the fused
+        # RRF order instead of failing the whole chat/search request.
+        logger.warning("retrieve: rerank failed, falling back to RRF order: %s", e)
+        seeds = fused[:top_k]
     t_rerank = time.perf_counter()
 
     # ---- 8. Expand: neighbours (#1) + section siblings (#4), dedup ----
@@ -345,7 +393,10 @@ async def retrieve(
         if not cid:
             continue
         try:
-            for nb in chroma.get_chunk_context(cid, user_id, window_size=1):
+            neighbours = await asyncio.to_thread(
+                chroma.get_chunk_context, cid, user_id, 1
+            )
+            for nb in neighbours:
                 _add(nb)
         except Exception as e:
             logger.warning("retrieve: neighbour expand failed for %s: %s", cid, e)

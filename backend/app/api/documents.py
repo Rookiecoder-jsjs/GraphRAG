@@ -1,4 +1,5 @@
 """Document management API endpoints."""
+import asyncio
 import logging
 import os
 import time
@@ -22,6 +23,7 @@ from app.services.bm25 import get_bm25_service
 from app.services.entity_extractor import get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
 from app.services.doc_status import DocStatus, set_document_status
+from app.services.retriever import invalidate_retrieval_cache
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +218,55 @@ async def upload_document(
     return dict(doc)
 
 
+async def _cleanup_partial_document(doc_id: str, user_id: int) -> None:
+    """Best-effort rollback of partial ingestion data after a failure.
+
+    A failed pipeline may have written any subset of Chroma vectors, SQLite
+    chunks, BM25 index entries, and Neo4j document/chunk/entity nodes.
+    Without cleanup those orphans stay searchable and pollute the user's
+    graph for a document the UI correctly shows as failed. Never raises:
+    each store is wrapped so a cleanup failure is logged, never allowed to
+    mask the original error.
+    """
+    # Chroma vectors for this document.
+    try:
+        await asyncio.to_thread(
+            get_chroma_client().delete_document_chunks, doc_id, user_id
+        )
+    except Exception as e:
+        logger.warning("cleanup: Chroma delete failed for doc %s: %s", doc_id, e)
+    # Neo4j document node + its chunks/mentions/relations (all keyed by doc_id).
+    try:
+        neo4j = await get_neo4j_client()
+        await neo4j.delete_document(doc_id, user_id)
+    except Exception as e:
+        logger.warning("cleanup: Neo4j delete failed for doc %s: %s", doc_id, e)
+    # SQLite chunks + the matching in-memory BM25 index entries.
+    try:
+        chunk_ids: set = set()
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT chunk_id FROM chunks WHERE document_id = ? AND user_id = ?",
+                (doc_id, user_id),
+            ) as cur:
+                rows = await cur.fetchall()
+            chunk_ids = {r["chunk_id"] for r in rows}
+            await db.execute(
+                "DELETE FROM chunks WHERE document_id = ? AND user_id = ?",
+                (doc_id, user_id),
+            )
+            await db.commit()
+        if chunk_ids:
+            await asyncio.to_thread(
+                get_bm25_service().remove_from_index, user_id, chunk_ids
+            )
+    except Exception as e:
+        logger.warning("cleanup: SQLite/BM25 delete failed for doc %s: %s", doc_id, e)
+    # Invalidate in-memory caches — the user's corpus changed.
+    invalidate_retrieval_cache(user_id)
+    _cluster_cache.pop(user_id, None)
+
+
 async def process_document_background(doc_id: str, user_id: int, markdown: str, title: str):
     """Process document in background: chunk, embed, extract entities."""
     import time
@@ -247,6 +298,7 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
                 doc_id, DocStatus.FAILED,
                 error_message="No content could be extracted from the document",
             )
+            await _cleanup_partial_document(doc_id, user_id)
             await progress.emit_and_save(doc_id, user_id, "error", "No content could be extracted from the document", {"stage": "error"})
             return
 
@@ -270,6 +322,7 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
                 doc_id, DocStatus.FAILED,
                 error_message=f"Embedding failed: {embed_err}",
             )
+            await _cleanup_partial_document(doc_id, user_id)
             await progress.emit_and_save(
                 doc_id, user_id, "error",
                 f"Embedding failed: {embed_err}",
@@ -296,14 +349,16 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
                 "next_chunk_id": chunk.position.next_chunk_id or ""
             })
 
-        # Store in ChromaDB
+        # Store in ChromaDB (sync client -> off the event loop)
         chroma = get_chroma_client()
-        chroma.add_chunks(chunk_ids, chunk_contents, embeddings, metadatas)
+        await asyncio.to_thread(
+            chroma.add_chunks, chunk_ids, chunk_contents, embeddings, metadatas
+        )
         await progress.emit_and_save(doc_id, user_id, "stored", "Stored in vector database", {"stage": "stored", "percent": 50})
 
-        # Build BM25 index for user (hybrid search)
+        # Build BM25 index for user (hybrid search). Rebuild is CPU-heavy.
         bm25 = get_bm25_service()
-        bm25.add_to_index(user_id, chunk_contents, chunk_ids)
+        await asyncio.to_thread(bm25.add_to_index, user_id, chunk_contents, chunk_ids)
 
         # Store chunks in SQLite. INSERT OR IGNORE keeps a re-run idempotent:
         # chunk_ids are deterministic (derived from doc_id + position), so a
@@ -519,8 +574,10 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         duration = time.time() - start_time
         duration_str = format_duration(duration)
 
-        # Invalidate the user's cluster-map cache (a new doc changed the set).
+        # Invalidate the user's cluster-map + retrieval caches (a new doc
+        # changed the corpus they search against).
         _cluster_cache.pop(user_id, None)
+        invalidate_retrieval_cache(user_id)
 
         # Emit completion
         await progress.emit_and_save(
@@ -541,6 +598,13 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
             await set_document_status(doc_id, DocStatus.FAILED, error_message=str(e))
         except Exception as status_error:
             logger.warning("Failed to mark doc %s as failed: %s", doc_id, status_error)
+        # Roll back any partial writes so the failed doc leaves no orphan
+        # vectors/entities behind. Best-effort: cleanup errors are logged
+        # inside the helper and never mask the original error.
+        try:
+            await _cleanup_partial_document(doc_id, user_id)
+        except Exception as cleanup_error:
+            logger.warning("cleanup failed for doc %s: %s", doc_id, cleanup_error)
         # Emit error event
         try:
             progress = get_progress_emitter()
@@ -911,7 +975,7 @@ async def delete_document(
 
     # Delete from ChromaDB
     chroma = get_chroma_client()
-    chroma.delete_document_chunks(doc_id, user_id)
+    await asyncio.to_thread(chroma.delete_document_chunks, doc_id, user_id)
     # Invalidate the user's cluster-map cache (their doc set changed).
     _cluster_cache.pop(user_id, None)
 
@@ -919,8 +983,17 @@ async def delete_document(
     neo4j = await get_neo4j_client()
     await neo4j.delete_document(doc_id, user_id)
 
-    # Delete from SQLite
+    # Delete from SQLite. Capture the chunk_ids BEFORE deleting them so the
+    # in-memory BM25 index can be purged too — otherwise the deleted
+    # document's chunks keep being returned by BM25 until a restart.
+    chunk_ids: set = set()
     async with get_db() as db:
+        async with db.execute(
+            "SELECT chunk_id FROM chunks WHERE document_id = ? AND user_id = ?",
+            (doc_id, user_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        chunk_ids = {r["chunk_id"] for r in rows}
         # First delete chunks for this document
         await db.execute(
             "DELETE FROM chunks WHERE document_id = ? AND user_id = ?",
@@ -932,6 +1005,14 @@ async def delete_document(
             (doc_id, user_id)
         )
         await db.commit()
+
+    # Purge this document from the user's BM25 index (no-op if absent) and
+    # drop cached retrieval results so no query can still surface it.
+    if chunk_ids:
+        await asyncio.to_thread(
+            get_bm25_service().remove_from_index, user_id, chunk_ids
+        )
+    invalidate_retrieval_cache(user_id)
 
     return {"message": "Document deleted successfully"}
 

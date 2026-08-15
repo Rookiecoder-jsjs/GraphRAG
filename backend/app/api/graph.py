@@ -1,4 +1,5 @@
 """Knowledge graph API endpoints."""
+import asyncio
 import logging
 from typing import List, Dict, Any
 from urllib.parse import unquote
@@ -50,7 +51,10 @@ async def query_graph(
     query_embedding = await embedding_service.embed_single(request.query)
 
     chroma = get_chroma_client()
-    related_chunks = chroma.search(query_embedding, user_id, top_k=10)
+    # Sync chromadb client -> off the event loop.
+    related_chunks = await asyncio.to_thread(
+        chroma.search, query_embedding, user_id, 10
+    )
     logger.info("Found %d semantically related chunks", len(related_chunks))
 
     neo4j = await get_neo4j_client()

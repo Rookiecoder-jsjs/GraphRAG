@@ -1,7 +1,10 @@
 """BM25 retrieval service for hybrid search with multi-user support."""
+import asyncio
 import logging
 import re
 from typing import List, Dict, Any, Optional, Set
+
+import jieba
 from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
@@ -158,11 +161,28 @@ class BM25Service:
         return results
 
     def _tokenize(self, text: str) -> List[str]:
-        """Simple tokenization: lowercase, extract alphanumeric tokens."""
-        # Extract alphanumeric tokens (supports Chinese, English)
-        tokens = re.findall(r'[\w\u4e00-\u9fff]+', text.lower())
-        # Filter out very short tokens
-        tokens = [t for t in tokens if len(t) >= 2]
+        """Tokenize for BM25.
+
+        Uses jieba word segmentation so Chinese text is split into real
+        words. The old regex grabbed the longest run of Unicode word chars,
+        which lumped an entire contiguous Chinese sentence into ONE token \u2014
+        a query then only matched on near-exact substrings, gutting Chinese
+        recall in the keyword channel. Pure punctuation/separator segments
+        are dropped; single-char tokens are noise.
+        """
+        tokens: List[str] = []
+        for seg in jieba.lcut(text or ""):
+            seg = seg.strip().lower()
+            if not seg:
+                continue
+            # CJK ideographs count as \w in Unicode mode, so real Chinese
+            # words fall through this check; only pure punctuation/space/
+            # underscore segments are dropped.
+            if re.fullmatch(r"[\W_]+", seg):
+                continue
+            if len(seg) < 2:
+                continue
+            tokens.append(seg)
         return tokens
 
     def clear_user(self, user_id: int):
@@ -211,7 +231,10 @@ async def prewarm_all_bm25() -> None:
                 ) as cur:
                     rows = await cur.fetchall()
             if rows:
-                bm25.build_user_index(
+                # Index building (tokenise + BM25 stats) is CPU-bound - run
+                # it off the event loop so prewarm never blocks startup I/O.
+                await asyncio.to_thread(
+                    bm25.build_user_index,
                     uid,
                     [r["content"] for r in rows],
                     [r["chunk_id"] for r in rows],

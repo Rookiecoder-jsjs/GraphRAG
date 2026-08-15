@@ -177,6 +177,14 @@ async def init_db():
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
         """)
+        # The chat hot path reads a conversation's latest turns on EVERY
+        # message send (and the client pulls full transcripts). Without this
+        # index each read is a full-table scan plus sort over all users'
+        # messages.
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation
+                ON messages (conversation_id, created_at, id)
+        """)
 
         # Create progress history table
         await db.execute("""
@@ -265,7 +273,15 @@ async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
     settings = get_settings()
     async with aiosqlite.connect(settings.SQLITE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # PRAGMA is per-connection; enable FK enforcement on every connection
-        # so cascade deletes (messages, tags, feedback) work app-wide.
+        # PRAGMAs are per-connection (journal_mode is persistent in the file,
+        # the rest are not), so set them on every connection:
+        #   * WAL lets readers and the many short-lived writers (chat turns,
+        #     embedding cache, progress events) proceed concurrently instead
+        #     of blocking each other.
+        #   * busy_timeout makes a writer WAIT for a lock (up to 5s) instead
+        #     of failing instantly with "database is locked".
+        #   * foreign_keys enables cascade deletes for messages/tags/feedback.
+        await db.execute("PRAGMA journal_mode = WAL")
+        await db.execute("PRAGMA busy_timeout = 5000")
         await db.execute("PRAGMA foreign_keys = ON")
         yield db

@@ -260,7 +260,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, reactive, h } from 'vue'
+import { ref, onMounted, onUnmounted, onDeactivated, reactive, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { documentApi } from '../api/documents'
 import { tagApi } from '../api/tags'
@@ -748,6 +748,19 @@ onUnmounted(() => {
     eventSource.close()
   }
   document.removeEventListener('paste', onPaste)
+  isDragging.value = false
+  dragDepth = 0
+})
+
+onDeactivated(() => {
+  // Layout keeps this page alive in cache, so route switches fire
+  // onDeactivated (NOT onUnmounted): close the progress stream here or it
+  // lingers - and after "complete" the browser auto-reconnects against the
+  // finished doc in a request loop.
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
   isDragging.value = false
   dragDepth = 0
 })
