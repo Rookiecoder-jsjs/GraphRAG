@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import re
+import threading
 from typing import List, Dict, Any, Optional, Set
 
 import jieba
@@ -19,6 +20,13 @@ class BM25Service:
     def __init__(self):
         # User-specific indexes: user_id -> (BM25Okapi, doc_ids, doc_contents)
         self._user_indexes: Dict[int, Dict[str, Any]] = {}
+        # Mutations (build/add/remove) read the old index, rebuild, then swap
+        # the dict entry - concurrent calls would race and one side's update
+        # would be silently lost. They run on worker threads (asyncio.to_thread
+        # in the upload pipeline and the startup prewarm), so a plain
+        # threading.Lock serialises them. `search` deliberately does NOT take
+        # the lock: it grabs a snapshot reference and the swap is atomic.
+        self._lock = threading.Lock()
 
     def build_user_index(
         self,
@@ -39,11 +47,12 @@ class BM25Service:
 
         tokenized_docs = [self._tokenize(doc) for doc in documents]
 
-        self._user_indexes[user_id] = {
-            "index": BM25Okapi(tokenized_docs),
-            "doc_ids": doc_ids,
-            "doc_contents": {id_: doc for id_, doc in zip(doc_ids, documents)}
-        }
+        with self._lock:
+            self._user_indexes[user_id] = {
+                "index": BM25Okapi(tokenized_docs),
+                "doc_ids": doc_ids,
+                "doc_contents": {id_: doc for id_, doc in zip(doc_ids, documents)}
+            }
 
     def add_to_index(
         self,
@@ -52,31 +61,41 @@ class BM25Service:
         doc_ids: List[str]
     ):
         """Add documents to existing user index."""
-        if user_id not in self._user_indexes:
-            self.build_user_index(user_id, documents, doc_ids)
-            return
+        # Tokenise outside the lock (CPU-bound, no shared state) so the
+        # critical section stays short. The existence check happens INSIDE
+        # the lock: two cold-start threads racing here would otherwise both
+        # build from scratch and the second build would drop the first's docs.
+        tokenized_new = [self._tokenize(doc) for doc in documents]
 
-        user_index = self._user_indexes[user_id]
+        with self._lock:
+            if user_id not in self._user_indexes:
+                self._user_indexes[user_id] = {
+                    "index": BM25Okapi(tokenized_new),
+                    "doc_ids": list(doc_ids),
+                    "doc_contents": {
+                        id_: doc for id_, doc in zip(doc_ids, documents)
+                    },
+                }
+                return
 
-        # Add new documents to existing index
-        tokenized_docs = [self._tokenize(doc) for doc in documents]
+            user_index = self._user_indexes[user_id]
 
-        # Rebuild index with new documents
-        all_doc_ids = user_index["doc_ids"] + doc_ids
-        all_contents = {**user_index["doc_contents"]}
-        all_contents.update({id_: doc for id_, doc in zip(doc_ids, documents)})
+            # Add new documents to existing index
+            all_doc_ids = user_index["doc_ids"] + doc_ids
+            all_contents = {**user_index["doc_contents"]}
+            all_contents.update({id_: doc for id_, doc in zip(doc_ids, documents)})
 
-        # Rebuild BM25 index
-        all_tokenized = [
-            self._tokenize(all_contents[id_])
-            for id_ in all_doc_ids
-        ]
+            # Rebuild BM25 index
+            all_tokenized = [
+                self._tokenize(all_contents[id_])
+                for id_ in all_doc_ids
+            ]
 
-        self._user_indexes[user_id] = {
-            "index": BM25Okapi(all_tokenized),
-            "doc_ids": all_doc_ids,
-            "doc_contents": all_contents
-        }
+            self._user_indexes[user_id] = {
+                "index": BM25Okapi(all_tokenized),
+                "doc_ids": all_doc_ids,
+                "doc_contents": all_contents
+            }
 
     def remove_from_index(
         self,
@@ -87,32 +106,33 @@ class BM25Service:
         if user_id not in self._user_indexes:
             return
 
-        user_index = self._user_indexes[user_id]
+        with self._lock:
+            user_index = self._user_indexes[user_id]
 
-        # Filter out removed documents
-        new_doc_ids = [id_ for id_ in user_index["doc_ids"] if id_ not in doc_ids]
-        new_contents = {
-            id_: content
-            for id_, content in user_index["doc_contents"].items()
-            if id_ not in doc_ids
-        }
+            # Filter out removed documents
+            new_doc_ids = [id_ for id_ in user_index["doc_ids"] if id_ not in doc_ids]
+            new_contents = {
+                id_: content
+                for id_, content in user_index["doc_contents"].items()
+                if id_ not in doc_ids
+            }
 
-        if not new_doc_ids:
-            # Remove entire user index
-            del self._user_indexes[user_id]
-            return
+            if not new_doc_ids:
+                # Remove entire user index
+                del self._user_indexes[user_id]
+                return
 
-        # Rebuild index
-        all_tokenized = [
-            self._tokenize(new_contents[id_])
-            for id_ in new_doc_ids
-        ]
+            # Rebuild index
+            all_tokenized = [
+                self._tokenize(new_contents[id_])
+                for id_ in new_doc_ids
+            ]
 
-        self._user_indexes[user_id] = {
-            "index": BM25Okapi(all_tokenized),
-            "doc_ids": new_doc_ids,
-            "doc_contents": new_contents
-        }
+            self._user_indexes[user_id] = {
+                "index": BM25Okapi(all_tokenized),
+                "doc_ids": new_doc_ids,
+                "doc_contents": new_contents
+            }
 
     def search(
         self,
@@ -187,12 +207,13 @@ class BM25Service:
 
     def clear_user(self, user_id: int):
         """Clear index for a specific user."""
-        if user_id in self._user_indexes:
-            del self._user_indexes[user_id]
+        with self._lock:
+            self._user_indexes.pop(user_id, None)
 
     def clear_all(self):
         """Clear all user indexes."""
-        self._user_indexes = {}
+        with self._lock:
+            self._user_indexes = {}
 
     def has_index(self, user_id: int) -> bool:
         """Check if user has BM25 index."""

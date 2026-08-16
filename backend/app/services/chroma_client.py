@@ -115,46 +115,55 @@ class ChromaClient:
         user_id: int,
         window_size: int = 1
     ) -> List[Dict[str, Any]]:
-        """Get context chunks around a given chunk."""
+        """Get up to ``window_size`` chunks of context on each side.
+
+        Walks outward hop by hop: each hop fetches the metadata of the current
+        frontier and collects its prev/next pointers. The old implementation
+        re-read the SAME seed pointers in every iteration, so window_size > 1
+        returned the immediate neighbours duplicated instead of walking
+        further out.
+        """
         if self._collection is None:
             self.connect()
 
-        result = self._collection.get(
-            ids=[chunk_id],
-            where={"user_id": str(user_id)}
-        )
+        visited = {chunk_id}
+        frontier = [chunk_id]
+        context_by_id: Dict[str, Dict[str, Any]] = {}
 
-        if not result["ids"]:
-            return []
+        for _ in range(window_size):
+            # Fetch the frontier's metadata to discover the next ring.
+            result = self._collection.get(
+                ids=frontier,
+                where={"user_id": str(user_id)}
+            )
+            next_ring: List[str] = []
+            ring_ids: List[str] = []
+            for i, cid in enumerate(result["ids"]):
+                metadata = result["metadatas"][i] or {}
+                for key in ("prev_chunk_id", "next_chunk_id"):
+                    neighbour = metadata.get(key)
+                    if neighbour and neighbour not in visited:
+                        visited.add(neighbour)
+                        next_ring.append(neighbour)
+                ring_ids.append(cid)
 
-        metadata = result["metadatas"][0]
-        related_ids = []
+            if not next_ring:
+                break
 
-        for i in range(1, window_size + 1):
-            prev_key = f"prev_chunk_id"
-            next_key = f"next_chunk_id"
-            if prev_key in metadata and metadata[prev_key]:
-                related_ids.append(metadata[prev_key])
-            if next_key in metadata and metadata[next_key]:
-                related_ids.append(metadata[next_key])
+            # Materialise the newly discovered ring (content lives in Chroma).
+            related = self._collection.get(
+                ids=next_ring,
+                where={"user_id": str(user_id)}
+            )
+            for i, cid in enumerate(related["ids"]):
+                context_by_id[cid] = {
+                    "chunk_id": cid,
+                    "content": related["documents"][i],
+                    "metadata": related["metadatas"][i]
+                }
+            frontier = next_ring
 
-        if not related_ids:
-            return []
-
-        related = self._collection.get(
-            ids=related_ids,
-            where={"user_id": str(user_id)}
-        )
-
-        context_chunks = []
-        for i in range(len(related["ids"])):
-            context_chunks.append({
-                "chunk_id": related["ids"][i],
-                "content": related["documents"][i],
-                "metadata": related["metadatas"][i]
-            })
-
-        return context_chunks
+        return list(context_by_id.values())
 
     def get_chunks_by_ids(
         self,

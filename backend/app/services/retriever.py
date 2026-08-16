@@ -117,7 +117,8 @@ async def _ensure_bm25_index(user_id: int) -> None:
         return
     async with get_db() as db:
         async with db.execute(
-            "SELECT chunk_id, content FROM chunks WHERE user_id = ? ORDER BY created_at",
+            "SELECT chunk_id, content FROM chunks WHERE user_id = ? "
+            "ORDER BY created_at, chunk_id",
             (user_id,),
         ) as cur:
             rows = await cur.fetchall()
@@ -155,7 +156,8 @@ async def _get_section_siblings(
 
         async with db.execute(
             "SELECT chunk_id, content, hierarchy_path FROM chunks "
-            "WHERE document_id = ? AND user_id = ? ORDER BY created_at",
+            "WHERE document_id = ? AND user_id = ? "
+            "ORDER BY created_at, chunk_id",
             (doc_id, user_id),
         ) as cur:
             rows = await cur.fetchall()

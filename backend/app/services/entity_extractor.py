@@ -156,14 +156,22 @@ class EntityExtractor:
         return rule_entities
 
     async def extract_relations(self, text: str, entities: List[ExtractedEntity]) -> List[ExtractedRelation]:
-        """Extract relations between entities."""
+        """Extract relations between entities (co-occurrence heuristic).
+
+        Not used by the main ingestion pipeline - ``process_chunks`` runs the
+        combined LLM path (``_extract_entities_and_relations_llm``) instead.
+        Kept for callers that want a cheap non-LLM relation pass.
+        """
         relations = []
 
         if len(entities) < 2:
-            print(f"   Not enough entities for relations: {len(entities)}")
+            logger.debug("Not enough entities for relations: %d", len(entities))
             return relations
 
-        print(f"   Extracting relations from text ({len(text)} chars) for {len(entities)} entities")
+        logger.debug(
+            "Extracting relations from text (%d chars) for %d entities",
+            len(text), len(entities),
+        )
 
         # Simple co-occurrence based relations
         entity_names = [e.name for e in entities]
@@ -176,10 +184,10 @@ class EntityExtractor:
             except re.error:
                 continue
 
-        # Debug: print positions found
+        # Debug: log positions found
         for name, positions in entity_positions.items():
             if positions:
-                print(f"   Found '{name}' at positions: {positions[:3]}")  # First 3 positions
+                logger.debug("Found '%s' at positions: %s", name, positions[:3])
 
         # Create relations for entities that appear close together
         created_pairs = set()
@@ -208,13 +216,13 @@ class EntityExtractor:
                                 relation_type="MENTIONS"
                             ))
                             created_pairs.add(pair_key)
-                            print(f"   Created relation: {name1} -> {name2}")
+                            logger.debug("Created relation: %s -> %s", name1, name2)
                             break
                     else:
                         continue
                     break
 
-        print(f"   Total relations extracted: {len(relations)}")
+        logger.debug("Total relations extracted: %d", len(relations))
         return relations
 
     async def _extract_entities_and_relations_llm(
