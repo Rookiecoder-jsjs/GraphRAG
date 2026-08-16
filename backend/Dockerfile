@@ -1,3 +1,6 @@
+# Build from the REPOSITORY ROOT:  docker build -f backend/Dockerfile .
+# (requirements.txt is at the repo root, app code under backend/app — no
+# single backend-only context can satisfy both.)
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -16,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m spacy download zh_core_web_sm || true
 
 # Copy application code
-COPY app/ ./app/
+COPY backend/app/ ./app/
 
 # Create data directories
 RUN mkdir -p /app/data/sqlite /app/data/uploads

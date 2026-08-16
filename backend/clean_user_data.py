@@ -13,6 +13,7 @@ confirmation unless --yes is passed.
 """
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,20 @@ from pathlib import Path
 # from inside backend/ or `python backend/clean_user_data.py` from the repo root.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+
+
+def _resolve_sqlite_path(raw: str) -> str:
+    """Anchor a relative SQLITE_PATH to the backend directory.
+
+    The app resolves ``SQLITE_PATH=./data/sqlite/app.db`` against its CWD
+    (backend/), so running this script from the repo root used to open the
+    0-byte root ``data/sqlite/app.db`` stub and report "0 tables cleaned"
+    while the real DB was untouched. Mirror rebuild_chroma.py's anchoring.
+    """
+    path = Path(raw)
+    if not path.is_absolute():
+        path = (HERE / path).resolve()
+    return str(path)
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -55,7 +70,9 @@ def _confirm(user_id: int) -> bool:
     return answer in ("y", "yes")
 
 
-async def clean_all_user_data(user_id: int, dry_run: bool = False) -> None:
+async def clean_all_user_data(user_id: int, dry_run: bool = False) -> int:
+    """Clean one user across all stores. Returns a non-zero exit code on
+    failure so the CLI can abort loudly instead of reporting false success."""
     from app.config import get_settings
     from app.services.neo4j_client import get_neo4j_client
     from app.services.chroma_client import get_chroma_client
@@ -63,9 +80,20 @@ async def clean_all_user_data(user_id: int, dry_run: bool = False) -> None:
     import aiosqlite
 
     settings = get_settings()
+    sqlite_path = _resolve_sqlite_path(settings.SQLITE_PATH)
     label = "(dry-run) " if dry_run else ""
     print(f"{label}Cleaning all data for user {user_id}...")
     print("=" * 50)
+
+    # Refuse to proceed against a database that doesn't exist yet: the real
+    # DB (backend/data/sqlite/app.db) is created on first app start, so a
+    # missing/empty file here means we'd be about to wipe Neo4j/Chroma/BM25
+    # while reporting "SQLite cleaned (0 tables)" against the wrong path.
+    if not os.path.exists(sqlite_path) or os.path.getsize(sqlite_path) == 0:
+        print(f"ERROR: SQLite database missing or empty at {sqlite_path}", file=sys.stderr)
+        print("  Refusing to run (stores would be left inconsistent).", file=sys.stderr)
+        print("  Set SQLITE_PATH if your data lives elsewhere.", file=sys.stderr)
+        return 1
 
     # 1. Neo4j
     print(f"\n[1/4] {label}Neo4j...")
@@ -88,21 +116,28 @@ async def clean_all_user_data(user_id: int, dry_run: bool = False) -> None:
     #    Each table is filtered against sqlite_master so the script works
     #    on databases that haven't been bootstrapped by the latest
     #    init_db() yet (e.g. running the script against a stale dev DB).
-    print(f"[3/4] {label}SQLite ({settings.SQLITE_PATH})...")
+    print(f"[3/4] {label}SQLite ({sqlite_path})...")
+    # `messages` has NO user_id column — it is only reachable via the
+    # conversations FK (ON DELETE CASCADE), which also cascades down to
+    # message_feedback. We delete them implicitly through `conversations`;
+    # message_feedback is kept explicit only as belt-and-braces.
     candidate_tables = [
         "message_feedback",
-        "messages",        # via cascade when conversations deleted, but safe to be explicit
         "conversations",
         "progress_history",
         "chunks",
         "documents",
     ]
-    async with aiosqlite.connect(settings.SQLITE_PATH) as db:
+    async with aiosqlite.connect(sqlite_path) as db:
         await db.execute("PRAGMA foreign_keys = ON")
         async with db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ) as cursor:
             existing = {row[0] for row in await cursor.fetchall()}
+        if not existing:
+            print(f"ERROR: no tables found in {sqlite_path}", file=sys.stderr)
+            print("  Refusing to report success (stores would be inconsistent).", file=sys.stderr)
+            return 1
         cleaned = []
         for table in candidate_tables:
             if table not in existing:
@@ -123,8 +158,14 @@ async def clean_all_user_data(user_id: int, dry_run: bool = False) -> None:
         get_bm25_service().clear_user(user_id)
     print("OK: BM25 index cleared")
 
+    # 5. In-memory caches of a RUNNING server are NOT touched by this script
+    #    (separate process): retrieval results and the cluster map can keep
+    #    serving the wiped user's data for up to RETRIEVAL_CACHE_TTL (300s).
+    #    Nothing to do here but warn — a restart clears them.
     print("\n" + "=" * 50)
     print(f"{label}DONE: All data for user {user_id} cleaned!")
+    print("NOTE: if the app is running, restart it to clear its in-memory")
+    print("      retrieval/cluster caches for this user.")
 
 
 def main() -> int:
@@ -135,8 +176,8 @@ def main() -> int:
             print("Aborted.")
             return 1
 
-    asyncio.run(clean_all_user_data(args.user_id, dry_run=args.dry_run))
-    return 0
+    code = asyncio.run(clean_all_user_data(args.user_id, dry_run=args.dry_run))
+    return code
 
 
 if __name__ == "__main__":

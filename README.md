@@ -85,8 +85,10 @@ D:/NC/
 │   │   └── main.py              # FastAPI 入口（lifespan：预热 / 对账 / 就绪探针）
 │   ├── migrations/001_baseline.sql  # 迁移基线（stamp version 1，未来增量迁移按序应用）
 │   ├── scripts/rebuild_chroma.py # 向量索引零成本重建（SQLite chunks + embedding 缓存 → Chroma）
-│   ├── requirements.txt
-│   └── Dockerfile
+│   ├── clean_user_data.py        # 跨 SQLite/Chroma/Neo4j/BM25 清理单个用户数据（破坏性，需确认）
+│   └── Dockerfile                # 从仓库根构建：docker build -f backend/Dockerfile .
+├── requirements.txt              # Python 依赖清单（backend 与脚本共用，CI 也从根目录安装）
+├── docker-compose.yml            # Neo4j + ChromaDB 服务定义
 ├── frontend/                     # Vue 3 + d3 前端（学术雅致派双主题）
 │   ├── src/
 │   │   ├── components/
@@ -168,9 +170,9 @@ cp .env.example .env
 ### 3. 📦 安装后端依赖
 
 ```bash
-# 推荐：使用根目录 .venv
+# 推荐：使用根目录 .venv（依赖清单在仓库根 requirements.txt）
 cd ..
-.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
+.venv/Scripts/python.exe -m pip install -r requirements.txt
 .venv/Scripts/python.exe -m spacy download zh_core_web_sm
 ```
 
@@ -473,8 +475,21 @@ docker-compose up -d
 
 ```bash
 # 全量备份（SQLite 在线 .backup + Neo4j/Chroma/uploads 打包）
+# 默认数据根是 backend/data（应用的所有启动方式 CWD=backend，相对路径
+# ./data/... 实际落在 backend/data/），备份产物在 backend/data/backups/
 ./scripts/backup.sh
-# 自定义路径：DATA_DIR=./data OUT_DIR=/tmp ./scripts/backup.sh
+# 自定义路径：DATA_DIR=/var/lib/kg OUT_DIR=/tmp ./scripts/backup.sh
+# 注意：脚本会拒绝备份缺失或 0 字节的 SQLite 文件（历史上曾静默备份空库）
+```
+
+### 🧹 清理单个用户数据（运维，破坏性）
+
+```bash
+# 从仓库根或 backend/ 运行均可（SQLite 路径自动锚定到 backend/data）
+cd backend
+../.venv/Scripts/python.exe clean_user_data.py 3 --dry-run   # 预览
+../.venv/Scripts/python.exe clean_user_data.py 3 --yes       # 真删
+# 若应用正在运行，清理后需重启以清空内存中的检索/聚类缓存
 ```
 
 ### ♻️ 向量索引重建（运维）
@@ -493,13 +508,12 @@ cd backend
 ### 🐳 Docker 部署
 
 ```bash
-# 构建并运行所有服务
+# 构建并运行基础设施（Neo4j + ChromaDB；后端本身不在此 compose 内）
 docker-compose up -d
 
-# 单独构建后端镜像
-cd backend
-docker build -t kg-backend .
-docker run -p 8001:8001 --env-file .env kg-backend
+# 单独构建后端镜像 —— 必须从仓库根构建（requirements.txt 在根、app 在 backend/）
+docker build -f backend/Dockerfile -t kg-backend .
+docker run -p 8001:8001 --env-file backend/.env kg-backend
 ```
 
 ## 📦 关键依赖版本
