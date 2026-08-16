@@ -5,12 +5,16 @@
   error text is never persisted to chat history
 - unexpected generator failures still produce a terminal error frame
 - should_reject intent streams a typed refusal instead of free-generating
+- chitchat intent uses a dedicated light prompt (no <context>, no citations)
+- chat_complete normalizes content=null to "" and only retries retryable
+  HTTP errors (4xx fails fast, no blind retry)
 - ChatRequest enforces a max message length
 - rate limiter purges stale sprayed keys
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -18,6 +22,7 @@ from collections import deque
 from pathlib import Path
 from unittest import mock
 
+import httpx
 import pytest
 
 _BACKEND = Path(__file__).resolve().parent.parent
@@ -30,6 +35,7 @@ os.environ.setdefault("APP_ENV", "test")
 from app.api import chat  # noqa: E402
 from app.auth.rate_limit import SlidingWindowLimiter  # noqa: E402
 from app.models.chat import ChatRequest  # noqa: E402
+from app.services.llm import LLMService  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
 
@@ -104,6 +110,68 @@ class _FakeStreamLLM:
         self.captured_messages.append(messages)
         for kind, text in self._deltas:
             yield (kind, text)
+
+
+class _FakeChatLLM:
+    """Records non-streaming chat_complete calls; returns a canned answer."""
+
+    def __init__(self, response="canned"):
+        self._response = response
+        self.captured_messages = []
+
+    async def chat_complete(
+        self, messages, model=None, temperature=None, max_tokens=None, stream=False
+    ):
+        self.captured_messages.append(messages)
+        return self._response
+
+
+class _FakeResponse:
+    """httpx.Response stand-in: json() returns canned data, raise_for_status
+    honors the status code."""
+
+    def __init__(self, data, status_code=200):
+        self._data = data
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "http://test/chat/completions")
+        self.text = json.dumps(data) if data is not None else ""
+
+    def json(self):
+        return self._data
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"status {self.status_code}", request=self.request, response=self
+            )
+
+
+class _FakeHTTPClient:
+    """Records post calls; each call pops the next outcome, which is either a
+    _FakeResponse to return or an Exception to raise (last one reused)."""
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self.calls = 0
+
+    async def post(self, url, headers=None, json=None):
+        outcome = (
+            self._outcomes[self.calls]
+            if self.calls < len(self._outcomes)
+            else self._outcomes[-1]
+        )
+        self.calls += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+def _make_llm_service(client) -> LLMService:
+    """An LLMService wired to the fake HTTP client (skips network + key check)."""
+    svc = LLMService()
+    svc.api_key = "test-key"
+    svc._client = client
+    return svc
 
 
 def _collect(gen):
@@ -210,6 +278,81 @@ def test_should_reject_streams_template_without_calling_llm():
     # The refusal is persisted as an assistant turn.
     inserted = [p for sql, p in db.statements if "INSERT INTO messages" in sql]
     assert any(chat._REJECTION_TEMPLATE in p for p in inserted)
+
+
+# ---------- chitchat intent: dedicated light prompt --------------------------
+
+def test_stream_chitchat_uses_light_prompt_without_context():
+    llm = _FakeStreamLLM([("content", "你好！")])
+    db = _FakeDB([])
+    frames = _run_stream(llm, db, intent="chitchat")
+
+    msgs = llm.captured_messages[0]
+    assert msgs[0]["role"] == "system"
+    system_prompt = msgs[0]["content"]
+    # No <context> block and no citation instruction on the chitchat prompt.
+    assert "<context>" not in system_prompt
+    assert "CITATIONS" not in system_prompt
+    assert msgs[-1]["role"] == "user"
+    assert msgs[-1]["content"] == "what about it?"
+    # No sources event for chitchat; the turn still ends with done.
+    assert not any(f.startswith("event: sources") for f in frames)
+    assert frames[-1].startswith("event: done")
+
+
+def test_non_streaming_chitchat_uses_light_prompt():
+    llm = _FakeChatLLM("你好！")
+    db = _FakeDB([])
+    with mock.patch.object(chat, "get_db", _fake_get_db(db)), \
+         mock.patch.object(chat, "classify_intent", _intent("chitchat")), \
+         mock.patch.object(chat, "get_llm_service", mock.AsyncMock(return_value=llm)):
+        result = asyncio.run(chat.chat(ChatRequest(message="你好"), {"id": 1}))
+
+    msgs = llm.captured_messages[0]
+    assert msgs[0]["role"] == "system"
+    assert "<context>" not in msgs[0]["content"]
+    assert "CITATIONS" not in msgs[0]["content"]
+    assert msgs[-1]["role"] == "user"
+    assert result["message"] == "你好！"
+    assert result["sources"] == []
+    assert result["citation_coverage"] == 0.0
+    # The chitchat reply is persisted as one assistant turn.
+    inserted = [p for sql, p in db.statements if "INSERT INTO messages" in sql]
+    assert any("你好！" in p for p in inserted)
+
+
+# ---------- chat_complete robustness (content=null, retry policy) ------------
+
+def test_chat_complete_content_null_returns_empty_string():
+    client = _FakeHTTPClient([
+        _FakeResponse({"choices": [{"message": {"content": None}}]}),
+    ])
+    svc = _make_llm_service(client)
+
+    result = asyncio.run(svc.chat_complete([{"role": "user", "content": "hi"}]))
+    assert result == ""
+    assert client.calls == 1  # a successful response is never retried
+
+
+def test_chat_complete_4xx_not_retried():
+    client = _FakeHTTPClient([_FakeResponse({}, status_code=400)])
+    svc = _make_llm_service(client)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(svc.chat_complete([{"role": "user", "content": "hi"}]))
+    assert client.calls == 1  # 400 fails fast, no retry
+
+
+def test_chat_complete_retries_once_on_retryable_status():
+    client = _FakeHTTPClient([
+        _FakeResponse({}, status_code=503),
+        _FakeResponse({"choices": [{"message": {"content": "ok"}}]}),
+    ])
+    svc = _make_llm_service(client)
+
+    result = asyncio.run(svc.chat_complete([{"role": "user", "content": "hi"}]))
+    assert result == "ok"
+    assert client.calls == 2  # one retry succeeded
 
 
 # ---------- request validation ---------------------------------------------

@@ -499,6 +499,28 @@ const scrollToBottom = async () => {
 // Blinking caret appended to the assistant bubble while tokens stream in.
 const CURSOR_HTML = '<span class="stream-cursor"></span>'
 
+// Two stream-failure classes drive sendMessage's fallback decision:
+//   - StreamConnectError (retryable): the backend generator NEVER started
+//     (fetch threw or the HTTP response wasn't ok), so the user message was
+//     NOT saved — falling back to the non-streaming endpoint is safe.
+//   - StreamInterruptedError (non-retryable): the stream WAS established
+//     (HTTP 200 + body) but died before producing content — the backend
+//     already saved the user message, so a fallback would double-save it.
+class StreamConnectError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'StreamConnectError'
+    this.retryable = true
+  }
+}
+class StreamInterruptedError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'StreamInterruptedError'
+    this.retryable = false
+  }
+}
+
 // Parse the SSE byte stream from /api/chat/stream into typed callbacks.
 // Protocol (see backend app/api/chat.py):
 //   event: sources   -> data: {"sources": [...]}   (sent FIRST, before text)
@@ -507,31 +529,68 @@ const CURSOR_HTML = '<span class="stream-cursor"></span>'
 //   event: error     -> data: {"error": "..."}      (terminal, provider failed)
 //   event: done      -> data: {"conversation_id","sources","citation_coverage"}
 const streamChat = async (body, handlers, signal) => {
-  const response = await chatApi.stream(
-    body.message, body.conversationId, body.useGraphRag, body.compareMode, body.enableThinking, signal
-  )
+  let response
+  try {
+    response = await chatApi.stream(
+      body.message, body.conversationId, body.useGraphRag, body.compareMode, body.enableThinking, signal
+    )
+  } catch (error) {
+    // fetch itself failed (network down, server unreachable, ...) — the
+    // backend generator never started, so the user message was NOT saved.
+    // Tag it retryable so sendMessage can safely fall back.
+    throw new StreamConnectError(`Connection failed: ${error?.message || error}`)
+  }
   if (!response.ok || !response.body) {
-    throw new Error(`Stream request failed with status ${response.status}`)
+    // HTTP error before any SSE frame — same as above: the backend never ran.
+    throw new StreamConnectError(`Stream request failed with status ${response.status}`)
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
 
   // Frame parsing lives in utils/sse.js (unit-tested); here we just route the
-  // typed events to our handlers.
+  // typed events to our handlers. Track whether we ever saw real content or a
+  // done frame so an established-but-empty stream can be detected below.
+  let sawContent = false
+  let sawDone = false
+  let sawError = false
   const parser = createSseParser((event, payload) => {
     if (event === 'sources') handlers.onSources(payload?.sources)
     else if (event === 'thinking') handlers.onThinking?.(payload?.text)
-    else if (event === 'error') handlers.onError?.(payload?.error)
-    else if (event === 'done') handlers.onDone(payload)
-    else if (payload && typeof payload.chunk === 'string') handlers.onChunk(payload.chunk)
+    else if (event === 'error') {
+      sawError = true
+      handlers.onError?.(payload?.error)
+    }
+    else if (event === 'done') {
+      sawDone = true
+      handlers.onDone(payload)
+    }
+    else if (payload && typeof payload.chunk === 'string') {
+      if (payload.chunk) sawContent = true
+      handlers.onChunk(payload.chunk)
+    }
   })
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    parser.feed(decoder.decode(value, { stream: true }))
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parser.feed(decoder.decode(value, { stream: true }))
+    }
+    parser.flush()
+  } catch (error) {
+    // The stream WAS established (backend already saved the user message)
+    // but the connection dropped mid-stream. NOT retryable — falling back to
+    // the non-streaming endpoint would double-save the user message.
+    throw new StreamInterruptedError(`Stream interrupted: ${error?.message || error}`)
   }
-  parser.flush()
+
+  // Established stream that ended without content AND without a done frame:
+  // the backend saved the user turn but produced nothing. Same rule as above.
+  // A terminal `event: error` frame is an exception: it IS the backend's
+  // typed end-of-stream, and sendMessage's streamErred branch owns the UX.
+  if (!sawContent && !sawDone && !sawError) {
+    throw new StreamInterruptedError('Stream ended before producing content')
+  }
 }
 
 // Coalesce per-token scrolls into one per animation frame so fast streams
@@ -684,7 +743,6 @@ const sendMessage = async () => {
       },
       streamAbort.signal
     )
-    if (!gotChunk && !streamErred) throw new Error('stream produced no content')
     if (streamErred) {
       // Terminal provider error: keep whatever partial answer rendered.
       if (!gotChunk) assistantMsg.content = '抱歉，生成回答失败，请重试。'
@@ -695,9 +753,11 @@ const sendMessage = async () => {
       // and do NOT retry via the non-streaming endpoint.
       hadError = true
       if (!gotChunk) assistantMsg.content = '回答已中断。'
-    } else if (!gotChunk) {
-      // If nothing has rendered yet, fall back to the non-streaming endpoint so
-      // a stream hiccup never leaves the user staring at an empty bubble.
+    } else if (error && error.retryable) {
+      // Connection/HTTP failure BEFORE the backend generator started — the
+      // user message was NOT saved, so falling back to the non-streaming
+      // endpoint is safe (and needed so the user isn't left staring at an
+      // empty bubble).
       try {
         const { data } = await chatApi.send(
           message, currentConversationId.value, true, useGraphRag.value, useCompare.value
@@ -715,8 +775,17 @@ const sendMessage = async () => {
         assistantMsg.sources = []
         hadError = true
       }
+    } else if (!gotChunk) {
+      // The stream WAS established (backend already saved the user message)
+      // but died before any content arrived. A non-streaming fallback would
+      // double-save the user message into history — surface the interruption
+      // and let the user resend instead.
+      console.error('Chat stream interrupted:', error)
+      hadError = true
+      assistantMsg.content = '网络连接中断，请重新发送。'
     } else {
-      // Mid-stream failure: keep whatever already rendered.
+      // Mid-stream failure after partial content: keep whatever already
+      // rendered.
       console.error('Chat stream interrupted:', error)
       hadError = true
     }

@@ -11,6 +11,20 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+# Retry policy for chat_complete: only 5xx / 429 / transport-timeout errors
+# are worth a single retry; other 4xx (auth, bad request) won't fix themselves
+# and fail fast. Mirrors embedding.py's RETRYABLE classification.
+_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+_RETRYABLE_EXCEPTIONS = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.LocalProtocolError,
+)
+
+
 class LLMService:
     """Service for interacting with Bailian (百炼) API."""
 
@@ -61,46 +75,67 @@ class LLMService:
         # literal default in the signature silently overrode the config.
         model = model or self.default_model
 
-        try:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
 
-        except httpx.HTTPError as e:
-            # Retry with delay
-            await asyncio.sleep(1)
-            try:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens
-                    }
+        def _extract_content(data: Dict[str, Any]) -> str:
+            """Pull the answer text out of a chat completion response.
+
+            Some providers return ``content: null`` (safety-blocked or
+            usage-only responses). Callers persist the answer and the
+            messages.content column is NOT NULL, so a null would crash the
+            save with an IntegrityError — normalize to "" with a warning.
+            """
+            content = data["choices"][0]["message"]["content"]
+            if content is None:
+                logger.warning(
+                    "chat_complete returned content=null (model=%s); returning empty string",
+                    model,
                 )
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"]
-            except Exception as retry_error:
+                return ""
+            return content
+
+        async def _post_once() -> str:
+            """POST once and return the parsed answer text."""
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            return _extract_content(response.json())
+
+        last_error: Optional[BaseException] = None
+        try:
+            return await _post_once()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status is not None and status not in _RETRYABLE_STATUS_CODES:
+                # 4xx (except 429) won't fix themselves — fail fast, no retry.
                 raise
+            last_error = e
+            logger.warning(
+                "chat_complete got HTTP %s, retrying once: %.200s",
+                status,
+                e.response.text if e.response is not None else "",
+            )
+        except _RETRYABLE_EXCEPTIONS as e:
+            last_error = e
+            logger.warning("chat_complete transport error, retrying once: %s", e)
+
+        # Single retry for retryable failures (5xx / 429 / transport
+        # timeout). Chained via `from` so the original exception stays visible
+        # in logs even when the retry fails too.
+        await asyncio.sleep(1)
+        try:
+            return await _post_once()
+        except Exception as retry_error:
+            raise retry_error from last_error
 
     async def chat_complete_stream(
         self,
