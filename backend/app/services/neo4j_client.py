@@ -1222,12 +1222,15 @@ class Neo4jClient:
             record = await result.single()
             logger.debug(f"[neo4j] BEFORE DELETE: Total chunks in DB: {record['count'] if record else 0}")
 
-            # Step 1: Check if Document exists, collect chunk IDs
+            # Step 1: Check if Document exists, collect chunk IDs.
+            #         Scoped to user_id — the API layer already checks
+            #         ownership; this is defence in depth so a wrong
+            #         doc_id can never touch another user's graph.
             result = await session.run("""
-                MATCH (d:Document {doc_id: $doc_id})
+                MATCH (d:Document {doc_id: $doc_id, user_id: $user_id})
                 OPTIONAL MATCH (d)-[:CONTAINS]->(c:Chunk)
                 RETURN d, collect(DISTINCT c.chunk_id) as chunk_ids
-            """, doc_id=doc_id)
+            """, doc_id=doc_id, user_id=user_id)
             record = await result.single()
             doc_exists = record and record.get("d") is not None
             chunk_ids = record["chunk_ids"] if record else []
@@ -1256,20 +1259,31 @@ class Neo4jClient:
             entity_names = record["entity_names"] if record else []
             logger.debug(f"[neo4j] Entities in THIS document: {len(entity_names)}")
 
-            # Step 3: Delete MENTIONS relations from chunks
+            # Step 3: Delete MENTIONS relations from chunks.
+            #         Scoped to user_id (defence in depth, same rationale
+            #         as Step 1) so we never sever another user's MENTIONS.
             if chunk_ids:
                 result = await session.run("""
                     MATCH (c:Chunk)-[r:MENTIONS]->(e:Entity)
-                    WHERE c.chunk_id IN $chunk_ids
+                    WHERE c.chunk_id IN $chunk_ids AND c.user_id = $user_id
                     DELETE r
                     RETURN count(r) as deleted
-                """, chunk_ids=chunk_ids)
+                """, chunk_ids=chunk_ids, user_id=user_id)
                 record = await result.single()
                 logger.debug(f"[neo4j] Step 3: Deleted {record['deleted'] if record else 0} MENTIONS relations")
 
-            # Step 4: Delete entities that were IN THIS DOCUMENT only if no
-            # remaining chunk (of the SAME user) still mentions them. The
-            # optional match MUST be filtered by user_id - otherwise a
+            # Step 4 (was Steps 4+5): delete entities that became orphaned
+            # by this deletion — those mentioned in THIS DOCUMENT and no
+            # longer mentioned by ANY remaining chunk (of the SAME user).
+            # Step 3 already removed this doc's MENTIONS edges, so an entity
+            # whose only mentions came from this doc now has zero referencing
+            # chunks. DETACH DELETE clears the entity AND its RELATES_TO
+            # edges together — no dangling relationships are left behind —
+            # but unlike the old unconditional "delete all RELATES_TO for
+            # this doc's entities" step, an entity still mentioned by OTHER
+            # documents keeps its node AND its relationships intact.
+            #
+            # The OPTIONAL MATCH must be filtered by user_id - otherwise a
             # mention from another user would block the delete (data leak)
             # and one orphan entity could produce multiple rows.
             if entity_names:
@@ -1284,27 +1298,21 @@ class Neo4jClient:
                     RETURN count(*) AS deleted
                 """, user_id=user_id, entity_names=entity_names)
                 record = await result.single()
-                logger.info("Step 4: Deleted %d orphaned entities", record["deleted"] if record else 0)
+                logger.info(
+                    "Step 4: Deleted %d orphaned entities (with their RELATES_TO edges)",
+                    record["deleted"] if record else 0,
+                )
 
-            # Step 5: Delete RELATES_TO relations ONLY for entities that were in this document
-            if entity_names:
-                result = await session.run("""
-                    MATCH (e1:Entity)-[r:RELATES_TO]->(e2:Entity)
-                    WHERE e1.user_id = $user_id AND e2.user_id = $user_id
-                    AND (e1.name IN $entity_names OR e2.name IN $entity_names)
-                    DELETE r
-                    RETURN count(r) as deleted
-                """, user_id=user_id, entity_names=entity_names)
-                record = await result.single()
-                logger.debug(f"[neo4j] Step 5: Deleted {record['deleted'] if record else 0} RELATES_TO relations")
-
-            # Step 6: Delete Document and Chunk nodes
+            # Step 6: Delete Document and Chunk nodes.
+            #         Scoped to user_id (defence in depth, same rationale
+            #         as Step 1) so a wrong doc_id can't detach another
+            #         user's chunks.
             result = await session.run("""
-                MATCH (d:Document {doc_id: $doc_id})
+                MATCH (d:Document {doc_id: $doc_id, user_id: $user_id})
                 OPTIONAL MATCH (d)-[:CONTAINS]->(c:Chunk)
                 DETACH DELETE d, c
                 RETURN count(d) as deleted
-            """, doc_id=doc_id)
+            """, doc_id=doc_id, user_id=user_id)
             record = await result.single()
             logger.debug(f"[neo4j] Step 6: Deleted {record['deleted'] if record else 0} documents")
 

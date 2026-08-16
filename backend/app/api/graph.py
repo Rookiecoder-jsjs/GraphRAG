@@ -14,6 +14,7 @@ from app.models.graph import (
     UpdateEntityRequest, MergeEntityRequest,
 )
 from app.services.neo4j_client import get_neo4j_client
+from app.services.retriever import invalidate_retrieval_cache
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +212,9 @@ async def update_entity(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"entity not found: {name!r}",
         )
+    # The retrieval cache's graph channel depends on the entity graph; an
+    # edit would otherwise serve stale chunks for up to the full TTL.
+    invalidate_retrieval_cache(user_id)
     return updated
 
 
@@ -236,6 +240,9 @@ async def delete_entity(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"entity not found: {name!r}",
         )
+    # Deleting an entity rewires the graph the retrieval cache's graph
+    # channel reads from — drop this user's cached results.
+    invalidate_retrieval_cache(user_id)
     # 204 No Content — body must be empty.
     return None
 
@@ -278,6 +285,9 @@ async def merge_entities(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    # Merging renames/removes entities and rewires RELATES_TO edges — the
+    # retrieval cache's graph channel must not keep serving the old shape.
+    invalidate_retrieval_cache(user_id)
     return result
 
 
