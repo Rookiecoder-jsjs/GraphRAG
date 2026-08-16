@@ -35,7 +35,7 @@
 | 🧩 嵌入模型 | 硅基流动 Qwen3-Embedding-8B (API) |
 | 🎯 重排序 | 硅基流动 Qwen3-Reranker-8B (API) |
 | 🤖 大模型 | Kimi API (Moonshot, kimi-k2) / 百炼 qwen3.7-flash (阿里云 DashScope) / 硅基流动 Qwen3-8B |
-| 🔑 密码哈希 | bcrypt 3.2.2（原生） |
+| 🔑 密码哈希 | bcrypt 4.1.3（原生） |
 | 📝 日志 | Python `logging` + RotatingFileHandler（统一在 `app/logger.py`） |
 
 ## 项目目录结构
@@ -523,7 +523,7 @@ docker run -p 8001:8001 --env-file backend/.env kg-backend
 fastapi==0.115.0
 uvicorn==0.32.0
 python-jose[cryptography]==3.3.0
-bcrypt==3.2.2
+bcrypt==4.1.3
 python-multipart==0.0.17
 neo4j==6.1.0
 chromadb==0.4.18
@@ -557,7 +557,7 @@ axios ^1.7.9
 vite ^7.2.4
 ```
 
-> **注意**：原 `passlib[bcrypt]==1.7.4` 已移除，改为原生 `bcrypt==3.2.2`（passlib 与新版 bcrypt 存在兼容问题）。
+> **注意**：原 `passlib[bcrypt]==1.7.4` 已移除，改为原生 `bcrypt==4.1.3`（passlib 与新版 bcrypt 存在兼容问题；且 chromadb 0.4.18 依赖 `bcrypt>=4.0.1`，钉 3.x 会让全新环境的 pip 解析直接失败——CI 曾因此一直红）。`app/auth/security.py` 在哈希前主动截断 72 字节、验证时捕获 ValueError，兼容 4.x 行为；存量 `$2b$` 哈希可直接验证。
 
 ## 📌 注意事项
 
