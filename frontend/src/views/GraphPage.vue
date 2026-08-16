@@ -333,13 +333,31 @@ const confirmDelete = ref(false)
 const deleteSaving = ref(false)
 
 let mergeLookupTimer = null
+// Superseded-lookup guard: the 350ms debounce clears the timer, but an
+// ALREADY in-flight lookupEntity response would still land afterwards and
+// could set mergePill for a stale input string — confirmMerge then merges
+// into the pill's (wrong) entity instead of the current input. A request
+// discards its result unless it is still the latest AND the input it was
+// sent for still matches the field.
+let mergeLookupSeq = 0
+
+// Monotonic request sequence: loadFullGraph / handleSearch / handleReset all
+// write the same nodes/edges/stats/isShowingFullGraph. Without a sequence
+// guard, the SLOWER response wins regardless of which action came last (a
+// slow search resolving after the user already reset would replace the full
+// graph with stale results and flip the mode flag). Each request captures
+// the current seq at send time and discards its result if a newer request
+// has since been issued.
+let graphRequestSeq = 0
 
 const graphData = computed(() => ({ nodes: nodes.value, edges: edges.value }))
 
 const loadFullGraph = async () => {
+  const seq = ++graphRequestSeq
   loading.value = true
   try {
     const { data } = await graphApi.getFullGraph()
+    if (seq !== graphRequestSeq) return
     nodes.value = data.nodes || []
     edges.value = data.edges || []
     // 后端 stats 字段缺失或为 0 时，用 nodes/edges 长度兜底
@@ -349,21 +367,24 @@ const loadFullGraph = async () => {
       : { entities: nodes.value.length, relations: edges.value.length }
     isShowingFullGraph.value = true
   } catch (err) {
+    if (seq !== graphRequestSeq) return
     console.error('Failed to load full graph:', err)
     nodes.value = []
     edges.value = []
     stats.value = { entities: 0, relations: 0 }
   } finally {
-    loading.value = false
+    if (seq === graphRequestSeq) loading.value = false
   }
 }
 
 const handleSearch = async () => {
   const q = query.value.trim()
   if (!q) return
+  const seq = ++graphRequestSeq
   loading.value = true
   try {
     const { data } = await graphApi.search(q)
+    if (seq !== graphRequestSeq) return
     nodes.value = data.nodes || []
     edges.value = data.edges || []
     const backendStats = data.stats || {}
@@ -372,9 +393,10 @@ const handleSearch = async () => {
       : { entities: nodes.value.length, relations: edges.value.length }
     isShowingFullGraph.value = false
   } catch (err) {
+    if (seq !== graphRequestSeq) return
     console.error('Search failed:', err)
   } finally {
-    loading.value = false
+    if (seq === graphRequestSeq) loading.value = false
   }
 }
 
@@ -457,15 +479,20 @@ const onMergeTargetInput = (val) => {
   mergeError.value = ''
   if (mergeLookupTimer) clearTimeout(mergeLookupTimer)
   if (!val || val === selectedEntity.value?.name) return
+  const seq = ++mergeLookupSeq
   mergeLookupTimer = setTimeout(async () => {
     try {
       const { data } = await graphApi.lookupEntity(val)
+      // Discard stale responses: a newer input typed meanwhile, or the field
+      // changed since this request was sent.
+      if (seq !== mergeLookupSeq || mergeTargetName.value !== val) return
       if (data?.found && data.entity) {
         mergePill.value = data.entity
       } else {
         mergeError.value = `No entity named "${val}" found.`
       }
     } catch (err) {
+      if (seq !== mergeLookupSeq) return
       mergeError.value = 'Lookup failed.'
     }
   }, 350)

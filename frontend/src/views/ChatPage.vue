@@ -360,11 +360,26 @@ onDeactivated(() => {
   // onDeactivated (NOT onUnmounted): abort the in-flight stream here or it
   // keeps pulling tokens for minutes in the background. The sendMessage
   // finally-block settles the stopwatch once the abort lands.
+  abortActiveStream()
+})
+
+// Abort any in-flight stream. Called on route leave AND on in-page switches
+// (loadConversation / startNewChat): without the latter, switching to
+// another conversation mid-stream would let the old stream keep mutating a
+// detached message object, keep `loading` stuck until the stream finishes,
+// and — after "new chat" — even overwrite currentConversationId back to the
+// old conversation on its `done` frame, routing the next message into the
+// wrong conversation.
+const abortActiveStream = () => {
   if (activeStreamAbort) {
     activeStreamAbort.abort()
     activeStreamAbort = null
   }
-})
+  if (activeResponseTimer) {
+    clearInterval(activeResponseTimer)
+    activeResponseTimer = null
+  }
+}
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
@@ -401,6 +416,8 @@ const loadConversations = async () => {
 }
 
 const loadConversation = async (conversationId) => {
+  // Abort any in-flight stream first — see abortActiveStream().
+  abortActiveStream()
   try {
     const { data: msgs } = await chatApi.getMessages(conversationId)
     const hydrated = (msgs || []).map(m => ({
@@ -458,6 +475,8 @@ const onFeedback = async (msg, rating) => {
 }
 
 const startNewChat = () => {
+  // Abort any in-flight stream first — see abortActiveStream().
+  abortActiveStream()
   messages.value = []
   currentConversationId.value = null
   showDropdown.value = false

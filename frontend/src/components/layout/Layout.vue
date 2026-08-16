@@ -8,7 +8,10 @@
     <Sidebar />
     <main class="main-content">
       <router-view v-slot="{ Component }">
-        <keep-alive>
+        <!-- keep-alive caches every visited page; :max bounds it so long
+             sessions don't accumulate large page trees (graph nodes, chat
+             transcripts, doc lists) in memory forever. -->
+        <keep-alive :max="6">
           <component :is="Component" />
         </keep-alive>
       </router-view>

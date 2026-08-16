@@ -129,6 +129,12 @@ class ProgressEmitter:
         settings = get_settings()
         try:
             async with aiosqlite.connect(settings.SQLITE_PATH) as db:
+                # This write races chat/upload writers on the same SQLite
+                # file; without a busy_timeout a contended INSERT fails
+                # instantly with "database is locked" and the progress row
+                # is silently dropped (the SSE side still works, but the
+                # history panel shows gaps).
+                await db.execute("PRAGMA busy_timeout = 5000")
                 await db.execute("""
                     INSERT INTO progress_history
                     (doc_id, user_id, stage, message, percent, is_complete, is_error, error_message, entity_count, relation_count)

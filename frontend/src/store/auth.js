@@ -23,8 +23,14 @@ export const useAuthStore = defineStore('auth', () => {
         const { data } = await authApi.me()
         user.value = data
       } catch (error) {
-        console.error('Failed to fetch user:', error)
-        logout()
+        // Only a 401 proves the stored token is invalid. A transient network
+        // blip or a backend restart would otherwise clear a still-valid
+        // token and silently log the user out.
+        if (error?.response?.status === 401) {
+          logout()
+        } else {
+          console.error('Failed to fetch user:', error)
+        }
       }
     }
     initialized.value = true

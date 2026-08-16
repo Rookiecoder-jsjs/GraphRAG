@@ -10,5 +10,7 @@ export const dashboardApi = {
   //   top_tags:         [{ tag, count }, ...] (max 10)
   //   growth:           [{ month, count }, ...] (always 6 buckets,
   //                       contiguous, oldest first; missing months = 0)
-  getSummary: () => service.get('/dashboard/summary')
+  // Accepts an optional axios config (e.g. { signal }) — DashboardPage uses
+  // it to abort stale requests on unmount / re-entry.
+  getSummary: (config) => service.get('/dashboard/summary', config)
 }

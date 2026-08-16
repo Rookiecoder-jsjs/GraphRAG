@@ -204,11 +204,16 @@ const goBack = () => {
 }
 
 const goEntity = (name) => {
-  router.push({ name: 'EntityDetail', params: { name } })
+  // LLM-extracted entity names are unconstrained (?/#//…); the route is
+  // `entities/:name(.*)*` and the router decodes the encoded segment back,
+  // so encode on push (same convention as GraphPage / Timeline).
+  router.push({ name: 'EntityDetail', params: { name: encodeURIComponent(name) } })
 }
 
 const openDoc = (doc) => {
-  router.push({ path: '/documents', query: { doc: doc.doc_id } })
+  // DocumentsPage never reads `route.query.doc`, so the old `/documents?doc=`
+  // navigation was a no-op. Point it at the real per-document detail page.
+  router.push({ name: 'DocumentDetail', params: { id: doc.doc_id } })
 }
 
 const formatDate = (s) => {

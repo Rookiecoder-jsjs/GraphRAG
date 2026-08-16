@@ -25,7 +25,10 @@ service.interceptors.request.use(
 )
 
 // 401 handling: de-duplicated + dispatched as an event so the auth store can
-// reset state in a single place. Avoids redirect-loop if /login itself 401s.
+// reset state in a single place (see main.js listener → soft router redirect).
+// No hard `window.location.href` reload here: a full reload would tear down
+// any in-flight state (e.g. an active chat SSE stream) on a background 401.
+// Avoids redirect-loop if /login itself 401s.
 let isRedirecting = false
 service.interceptors.response.use(
   response => response,
@@ -34,10 +37,7 @@ service.interceptors.response.use(
       const onLoginPage = window.location.pathname === '/login'
       if (!onLoginPage) {
         isRedirecting = true
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
         window.dispatchEvent(new CustomEvent('auth:logout'))
-        window.location.href = '/login'
         setTimeout(() => { isRedirecting = false }, 2000)
       }
     }

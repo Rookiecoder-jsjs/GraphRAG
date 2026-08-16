@@ -130,6 +130,21 @@ def main() -> int:
         total += len(batch)
         print(f"[info] upserted batch {i // BATCH + 1}: {total}/{len(ready)}")
 
+    # Purge stale vectors: upsert only writes/updates ids we feed it, so a
+    # chunk that was deleted from SQLite OUTSIDE the API (or whose embed is
+    # now missing) would linger in the collection forever. Delete every id
+    # the collection holds that is not part of the ready set, so the store
+    # mirrors the SQLite chunk table exactly.
+    ready_ids = {b["chunk_id"] for b in ready}
+    try:
+        existing_ids = chroma._collection.get()["ids"]
+        stale = [cid for cid in existing_ids if cid not in ready_ids]
+        if stale:
+            chroma._collection.delete(ids=stale)
+            print(f"[info] purged {len(stale)} stale vector(s) not in SQLite")
+    except Exception as e:
+        print(f"[warn] stale-vector purge skipped: {e}")
+
     count = chroma._collection.count()
     print(f"[done] upserted {total} chunks; collection now holds {count} vectors")
     return 0

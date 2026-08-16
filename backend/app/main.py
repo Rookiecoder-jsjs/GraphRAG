@@ -1,4 +1,5 @@
 """FastAPI main application entry point."""
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -17,6 +18,12 @@ from app.services.chroma_client import get_chroma_client
 from app.api import auth, documents, search, graph, chat, progress, tags, timeline, dashboard
 
 logger = logging.getLogger(__name__)
+
+# Strong references to startup background tasks. asyncio keeps only weak
+# references to tasks; without this, a task can be garbage-collected (and
+# silently cancelled) at its first await — prewarm/reconcile would never run
+# and nothing would log it.
+_background_tasks: list[asyncio.Task] = []
 
 
 @asynccontextmanager
@@ -40,15 +47,13 @@ async def lifespan(app: FastAPI):
     # doesn't pay a full-scan index build on the request path. Non-blocking:
     # a failure here only logs, never prevents startup.
     if settings.BM25_PREWARM:
-        import asyncio
         from app.services.bm25 import prewarm_all_bm25
-        asyncio.create_task(prewarm_all_bm25())
+        _background_tasks.append(asyncio.create_task(prewarm_all_bm25()))
 
     # Reconcile documents abandoned in non-terminal states (e.g. the
     # background pipeline crashed mid-flight). Non-blocking startup sweep.
-    import asyncio
     from app.services.reconcile import reconcile_stuck_documents
-    asyncio.create_task(reconcile_stuck_documents())
+    _background_tasks.append(asyncio.create_task(reconcile_stuck_documents()))
 
     logger.info("Knowledge Graph System Started")
     yield
@@ -134,9 +139,11 @@ def create_app() -> FastAPI:
             checks["sqlite"] = "ok"
         except Exception as e:
             checks["sqlite"] = f"fail: {type(e).__name__}"
-        # ChromaDB
+        # ChromaDB (heartbeat is a synchronous HTTP round-trip; run it off
+        # the event loop so a slow/unreachable server can't stall readiness
+        # requests for other healthy checks).
         try:
-            get_chroma_client().heartbeat()
+            await asyncio.to_thread(get_chroma_client().heartbeat)
             checks["chroma"] = "ok"
         except Exception as e:
             checks["chroma"] = f"fail: {type(e).__name__}"

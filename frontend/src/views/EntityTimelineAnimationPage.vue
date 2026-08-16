@@ -396,6 +396,10 @@ const goToEntity = (name) => {
 }
 
 onMounted(loadAll)
+// Layout keep-alive caches this page: onUnmounted never fires on route
+// switch, so a running playback would keep setInterval-ing a hidden
+// component. Stop it on deactivate.
+onDeactivated(stopPlay)
 onUnmounted(stopPlay)
 </script>
 

@@ -259,16 +259,18 @@ const renderGraph = () => {
   const edges = tempEdges.map(e => {
     const isSelfLoop = e.source === e.target
     let curvature = 0
+    let pairTotal = 1
+    let edgeIndex = 0
 
     if (!isSelfLoop) {
       const pairKey = [e.source, e.target].sort().join('_')
-      const totalCount = edgePairCount[pairKey] || 1
-      const currentIndex = edgePairIndex[pairKey] || 0
-      edgePairIndex[pairKey] = currentIndex + 1
+      pairTotal = edgePairCount[pairKey] || 1
+      edgeIndex = edgePairIndex[pairKey] || 0
+      edgePairIndex[pairKey] = edgeIndex + 1
 
-      if (totalCount > 1) {
-        const curvatureRange = Math.min(1.2, 0.6 + totalCount * 0.15)
-        curvature = ((currentIndex / (totalCount - 1)) - 0.5) * curvatureRange * 2
+      if (pairTotal > 1) {
+        const curvatureRange = Math.min(1.2, 0.6 + pairTotal * 0.15)
+        curvature = ((edgeIndex / (pairTotal - 1)) - 0.5) * curvatureRange * 2
 
         const isReversed = e.source > e.target
         if (isReversed) {
@@ -284,6 +286,12 @@ const renderGraph = () => {
       name: e.label || e.type || 'RELATED',
       curvature,
       isSelfLoop,
+      // Parallel-edge metadata consumed by the force-link distance, link
+      // path offset, and label position — was previously never set, so all
+      // three fell back to `pairTotal = 1` and multi-edge spacing never
+      // actually happened.
+      pairTotal,
+      edgeIndex,
       rawData: {
         ...e,
         source_label: nodeMap[e.source]?.label,

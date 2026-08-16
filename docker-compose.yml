@@ -14,6 +14,14 @@ services:
       - ./data/neo4j/data:/data
       - ./data/neo4j/logs:/logs
       - ./data/neo4j/plugins:/plugins
+    healthcheck:
+      # cypher-shell ships with the image; compose substitutes NEO4J_PASSWORD
+      # at parse time (keep it in sync with NEO4J_AUTH above).
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-12345678} 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       - kg_network
     restart: unless-stopped
@@ -48,6 +56,14 @@ services:
       - ANONYMIZED_TELEMETRY=FALSE
     volumes:
       - ./data/chromadb:/chroma/chroma
+    healthcheck:
+      # The image is python-based (no curl/wget guaranteed); heartbeat is the
+      # documented liveness endpoint.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
     networks:
       - kg_network
     restart: unless-stopped

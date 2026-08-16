@@ -281,7 +281,10 @@ async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
         #   * busy_timeout makes a writer WAIT for a lock (up to 5s) instead
         #     of failing instantly with "database is locked".
         #   * foreign_keys enables cascade deletes for messages/tags/feedback.
-        await db.execute("PRAGMA journal_mode = WAL")
+        # busy_timeout must be set BEFORE journal_mode: switching to WAL takes
+        # a brief exclusive lock, and a writer contending for it would fail
+        # instantly (rather than wait) if the timeout isn't armed yet.
         await db.execute("PRAGMA busy_timeout = 5000")
+        await db.execute("PRAGMA journal_mode = WAL")
         await db.execute("PRAGMA foreign_keys = ON")
         yield db

@@ -314,14 +314,19 @@ class Neo4jClient:
                 raise LookupError(f"target entity not found: {target_name!r}")
 
             # 1. MENTIONS: re-point from source → target, deduping.
+            #    The dedup branch merges against an explicit node pattern,
+            #    NOT the `tgt` variable: `tgt` is bound only when the optional
+            #    MENTIONS edge already exists, so for a chunk that mentions
+            #    source but never target, `tgt` is null and `MERGE ... ->(tgt)`
+            #    would raise "Cannot merge relationship using null node".
             result = await session.run(
                 """
                 MATCH (c:Chunk)-[r:MENTIONS]->(src:Entity {name: $source, user_id: $user_id})
                 OPTIONAL MATCH (c)-[existing:MENTIONS]->(tgt:Entity {name: $target, user_id: $user_id})
-                WITH c, r, existing, tgt
+                WITH c, r, existing
                 DELETE r
                 FOREACH (_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
-                    MERGE (c)-[:MENTIONS]->(tgt)
+                    MERGE (c)-[:MENTIONS]->(:Entity {name: $target, user_id: $user_id})
                 )
                 RETURN count(r) AS removed
                 """,

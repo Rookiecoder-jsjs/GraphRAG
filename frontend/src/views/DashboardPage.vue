@@ -267,7 +267,11 @@ const formatTimeAgo = (input) => {
 const goUpload = () => router.push('/documents')
 const onTagClick = (tag) => router.push({ path: '/documents', query: { tag } })
 
+// Layout keep-alive caches this page, so onUnmounted never fires on route
+// switch — reload on onActivated instead, or the dashboard stays stale
+// (empty state, old counts) after the user uploads documents elsewhere.
 onMounted(loadSummary)
+onActivated(loadSummary)
 onUnmounted(() => summaryCtrl?.abort())
 </script>
 

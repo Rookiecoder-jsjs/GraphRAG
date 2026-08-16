@@ -101,6 +101,20 @@ def load_gold_set(gold_dir: Path) -> List[GoldCase]:
     return cases
 
 
+# Gold JSON files ship with `REPLACE_WITH_REAL_CHUNK_UUID_*` stubs until the
+# operator fills in real chunk ids against their own corpus. A case whose
+# expected ids are still stubs would score a guaranteed 0.0 on every metric,
+# producing a misleading "everything failed" report — detect and skip them.
+_PLACEHOLDER_PREFIX = "REPLACE_WITH"
+
+
+def _has_placeholder_chunk_ids(case: GoldCase) -> bool:
+    return any(
+        str(cid).startswith(_PLACEHOLDER_PREFIX)
+        for cid in case.expected_chunk_ids
+    )
+
+
 # ---------- Per-case evaluation -------------------------------------------
 
 def compute_chunk_metrics(
@@ -177,7 +191,19 @@ async def run_evaluation(
     """Run every case sequentially. Returns a structured report dict."""
     started = time.time()
     per_case: List[Dict[str, Any]] = []
+    skipped: List[str] = []
     for case in gold_set:
+        if _has_placeholder_chunk_ids(case):
+            # Stub expected ids → guaranteed 0.0 metrics. Skip and surface it
+            # explicitly instead of reporting a misleading "everything failed".
+            skipped.append(case.id)
+            print(
+                f"[skip] {case.id}: expected_chunk_ids still contain "
+                f"'{_PLACEHOLDER_PREFIX}' placeholders — fill in real chunk "
+                f"ids first",
+                file=sys.stderr,
+            )
+            continue
         per_case.append(
             await evaluate_case(case, retriever, k_values, answer_provider)
         )
@@ -190,6 +216,7 @@ async def run_evaluation(
     summary = aggregate(flat)
     summary["elapsed_seconds"] = round(elapsed, 3)
     summary["total_cases"] = len(per_case)
+    summary["skipped_placeholder_cases"] = skipped
 
     return {
         "summary": summary,

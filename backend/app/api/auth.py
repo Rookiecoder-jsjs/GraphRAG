@@ -1,4 +1,6 @@
 """Authentication API endpoints."""
+import asyncio
+import sqlite3
 from datetime import timedelta
 from typing import Optional
 
@@ -61,13 +63,27 @@ async def register(user_data: UserCreate, request: Request = None):
                     detail="Username already registered"
                 )
 
-        # Create user
-        password_hash = get_password_hash(user_data.password)
-        async with db.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            (user_data.username, password_hash)
-        ) as cursor:
-            user_id = cursor.lastrowid
+        # Create user. bcrypt hashing is CPU-bound (~100-250ms at cost 12);
+        # run it off the event loop so a burst of registrations can't stall
+        # concurrent requests.
+        password_hash = await asyncio.to_thread(
+            get_password_hash, user_data.password
+        )
+        try:
+            async with db.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (user_data.username, password_hash)
+            ) as cursor:
+                user_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            # A concurrent same-name registration won the race between the
+            # SELECT check above and this INSERT (TOCTOU) — the UNIQUE
+            # constraint is the real guard. Surface it as the same 400 the
+            # pre-check produces, not a 500.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already registered"
+            )
 
         await db.commit()
 
@@ -115,7 +131,11 @@ async def login(
         ) as cursor:
             user = await cursor.fetchone()
 
-    if not user or not verify_password(form_data.password, user["password_hash"]):
+    # bcrypt verify is CPU-bound; keep it off the event loop (see register).
+    password_ok = user is not None and await asyncio.to_thread(
+        verify_password, form_data.password, user["password_hash"]
+    )
+    if not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",

@@ -31,13 +31,19 @@ async def _send_json(send, status: int, detail: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
-class RequestBodyLimitMiddleware:
-    """Reject requests whose declared Content-Length exceeds ``max_bytes``.
+class _BodyTooLarge(Exception):
+    """Internal: a chunked body exceeded the cap while being streamed in."""
 
-    Runs before the app consumes the body, so an oversized payload is
-    turned away at the door instead of being buffered. The upload
-    endpoint additionally enforces its own MAX_FILE_SIZE during streaming;
-    this is the global backstop for every other endpoint.
+
+class RequestBodyLimitMiddleware:
+    """Reject oversized request bodies, declared OR chunked.
+
+    Fast path: a declared Content-Length over ``max_bytes`` is turned away
+    at the door. Chunked / length-less bodies (no Content-Length header)
+    would otherwise bypass that check and be fully buffered into memory by
+    the JSON endpoints — so we count their bytes as they arrive and abort
+    at the cap. The upload endpoint is exempt: it streams and enforces its
+    own MAX_FILE_SIZE, and this wrapper must never buffer a large upload.
     """
 
     def __init__(self, app, max_bytes: int):
@@ -57,7 +63,29 @@ class RequestBodyLimitMiddleware:
                 except ValueError:
                     pass
                 break
-        await self.app(scope, receive, send)
+        path = scope.get("path", "").rstrip("/")
+        if path == "/api/documents/upload":
+            # Streaming upload endpoint — never count/buffer its body here.
+            await self.app(scope, receive, send)
+            return
+
+        total = 0
+
+        async def limited_receive():
+            nonlocal total
+            message = await receive()
+            if message["type"] == "http.request":
+                total += len(message.get("body", b""))
+                if total > self.max_bytes:
+                    raise _BodyTooLarge()
+            return message
+
+        try:
+            await self.app(scope, receive=limited_receive, send=send)
+        except _BodyTooLarge:
+            # The cap tripped mid-stream, before the app could send a
+            # response (receive runs first). Reply 413 ourselves.
+            await _send_json(send, 413, "Request body too large")
 
 
 class RequestIDMiddleware:

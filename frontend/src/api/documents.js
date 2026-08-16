@@ -33,9 +33,10 @@ export const documentApi = {
     return eventSource
   },
 
-  // Get progress history
-  getProgressHistory: (docId) => {
-    const token = localStorage.getItem('token')
-    return service.get(`/progress/${docId}/history?token=${token}`)
-  }
+  // Get progress history. This is a normal axios call, so it already sends
+  // the Authorization header via the request interceptor — the token must
+  // NOT also be appended to the query string, where it would leak into
+  // server/proxy access logs and the browser's Referer. (getProgressStream
+  // keeps ?token= only because native EventSource cannot set headers.)
+  getProgressHistory: (docId) => service.get(`/progress/${docId}/history`)
 }

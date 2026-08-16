@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -183,10 +184,15 @@ async def upload_document(
     with open(file_path, 'wb') as f:
         f.write(file_content)
 
-    # Convert to markdown
+    # Convert to markdown. markitdown parsing is CPU/file bound — a 10MB
+    # PDF can take seconds — and this is an async endpoint, so it must run
+    # off the event loop or it stalls every concurrent request (chat, SSE
+    # progress, search) behind the conversion.
     try:
-        markdown_content, extracted_title = convert_document_to_markdown(file_path, file_ext[1:])
-        markdown_content = clean_markdown(markdown_content)
+        markdown_content, extracted_title = await asyncio.to_thread(
+            convert_document_to_markdown, file_path, file_ext[1:]
+        )
+        markdown_content = await asyncio.to_thread(clean_markdown, markdown_content)
     except Exception as e:
         # Clean up file on error. Log the detail server-side; return a generic
         # message so internal parser errors don't leak to the client.
@@ -211,14 +217,27 @@ async def upload_document(
     # pipeline advances it through the state machine (services/doc_status.py)
     # as each durable checkpoint completes.
     async with get_db() as db:
-        await db.execute(
-            """INSERT INTO documents
-               (id, user_id, title, file_path, original_filename, file_type, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (doc_id, user_id, title, file_path, file.filename, file_ext[1:],
-             DocStatus.PENDING.value)
-        )
-        await db.commit()
+        try:
+            await db.execute(
+                """INSERT INTO documents
+                   (id, user_id, title, file_path, original_filename, file_type, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (doc_id, user_id, title, file_path, file.filename, file_ext[1:],
+                 DocStatus.PENDING.value)
+            )
+            await db.commit()
+        except Exception as e:
+            # The physical file is already on disk; a failed DB write must not
+            # leave an orphan blob with no row pointing at it.
+            logger.error("Failed to insert document row %s: %s", doc_id, e, exc_info=True)
+            try:
+                os.remove(file_path)
+            except OSError:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save document"
+            )
 
         # Get created document with timestamp
         async with db.execute(
@@ -814,8 +833,34 @@ _MAX_CHUNKS_PER_DOC_FOR_CLUSTER = 5
 # Per-user cluster-map cache: (timestamp, points). Re-embedding every doc
 # centroid on each page load is expensive, so cache the result and
 # invalidate on upload/delete. TTL is a safety net for background changes.
-_cluster_cache: Dict[int, Tuple[float, dict]] = {}
+# OrderedDict + a size cap bounds memory on a long-running server with many
+# users (the old plain dict grew without bound).
+_cluster_cache: "OrderedDict[int, Tuple[float, dict]]" = OrderedDict()
 _CLUSTER_CACHE_TTL = 300  # seconds
+_CLUSTER_CACHE_MAX = 256  # max users cached (LRU eviction)
+
+
+def _set_cluster_cache(user_id: int, result: dict) -> None:
+    """Store a cluster-map result, evicting the least-recently-used entry
+    when the cache exceeds its cap."""
+    _cluster_cache[user_id] = (time.time(), result)
+    _cluster_cache.move_to_end(user_id)
+    while len(_cluster_cache) > _CLUSTER_CACHE_MAX:
+        _cluster_cache.popitem(last=False)
+
+
+def _get_cluster_cache(user_id: int) -> Optional[dict]:
+    """Return a fresh cached cluster map for ``user_id`` (LRU-touched), or
+    None if absent or expired."""
+    entry = _cluster_cache.get(user_id)
+    if entry is None:
+        return None
+    ts, points = entry
+    if time.time() - ts >= _CLUSTER_CACHE_TTL:
+        _cluster_cache.pop(user_id, None)
+        return None
+    _cluster_cache.move_to_end(user_id)
+    return points
 
 
 def _pca_2d(X: np.ndarray) -> np.ndarray:
@@ -900,9 +945,9 @@ async def get_cluster_map(
     user_id = current_user["id"]
 
     # Fast path: return a cached cluster map if it's still fresh.
-    cached = _cluster_cache.get(user_id)
-    if cached and (time.time() - cached[0] < _CLUSTER_CACHE_TTL):
-        return cached[1]
+    cached = _get_cluster_cache(user_id)
+    if cached is not None:
+        return cached
 
     async with get_db() as db:
         async with db.execute(
@@ -965,7 +1010,7 @@ async def get_cluster_map(
             "y": float(y),
         })
     result = {"points": points}
-    _cluster_cache[user_id] = (time.time(), result)
+    _set_cluster_cache(user_id, result)
     return result
 
 
@@ -991,15 +1036,27 @@ async def delete_document(
             detail="Document not found"
         )
 
-    # Delete from ChromaDB
-    chroma = get_chroma_client()
-    await asyncio.to_thread(chroma.delete_document_chunks, doc_id, user_id)
+    # Delete from ChromaDB. Each store delete is best-effort: a failure here
+    # (e.g. Neo4j briefly unreachable) must NOT abort the whole delete and
+    # leave a ghost row in SQLite — the row is the source of truth for the
+    # listing, and a partial store delete can be retried/converged later.
+    store_errors: list[str] = []
+    try:
+        chroma = get_chroma_client()
+        await asyncio.to_thread(chroma.delete_document_chunks, doc_id, user_id)
+    except Exception as e:
+        logger.error("delete_document: Chroma purge failed for %s: %s", doc_id, e, exc_info=True)
+        store_errors.append("chroma")
     # Invalidate the user's cluster-map cache (their doc set changed).
     _cluster_cache.pop(user_id, None)
 
     # Delete from Neo4j
-    neo4j = await get_neo4j_client()
-    await neo4j.delete_document(doc_id, user_id)
+    try:
+        neo4j = await get_neo4j_client()
+        await neo4j.delete_document(doc_id, user_id)
+    except Exception as e:
+        logger.error("delete_document: Neo4j purge failed for %s: %s", doc_id, e, exc_info=True)
+        store_errors.append("neo4j")
 
     # Delete from SQLite. Capture the chunk_ids BEFORE deleting them so the
     # in-memory BM25 index can be purged too — otherwise the deleted
@@ -1038,6 +1095,16 @@ async def delete_document(
             get_bm25_service().remove_from_index, user_id, chunk_ids
         )
     invalidate_retrieval_cache(user_id)
+
+    # The row is gone from SQLite, so the doc no longer surfaces anywhere;
+    # a leftover store error just means that store keeps a few orphan
+    # vectors/nodes until the next full rebuild. Log it for the operator.
+    if store_errors:
+        logger.warning(
+            "delete_document: doc %s removed from SQLite, but store purge "
+            "failed for: %s — orphan data may linger until a rebuild",
+            doc_id, ", ".join(store_errors),
+        )
 
     # Delete the on-disk file LAST — every durable store is already purged by
     # now, so a file-removal failure (e.g. a transient OS lock) leaves only an
