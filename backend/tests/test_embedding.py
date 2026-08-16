@@ -112,7 +112,7 @@ def patch_client(monkey_target_module, transport):
 
 # ---------- async tests --------------------------------------------------------
 
-async def test_retry_then_succeed_on_5xx():
+async def _async_retry_then_succeed_on_5xx():
     ok = json.dumps({"data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]}).encode()
     t = ScriptedTransport([
         (503, b"upstream busy", {"content-type": "application/json"}),
@@ -129,7 +129,7 @@ async def test_retry_then_succeed_on_5xx():
     )
 
 
-async def test_4xx_fast_fail():
+async def _async_4xx_fast_fail():
     t = ScriptedTransport([
         (401, b'{"error":"invalid api key"}', {"content-type": "application/json"}),
     ])
@@ -146,7 +146,7 @@ async def test_4xx_fast_fail():
         )
 
 
-async def test_5xx_exhausts_retries():
+async def _async_5xx_exhausts_retries():
     t = ScriptedTransport([(503, b"busy", {}) for _ in range(MAX_ATTEMPTS)])
     patch_client(httpx, t)
     svc = make_service()
@@ -161,7 +161,7 @@ async def test_5xx_exhausts_retries():
         )
 
 
-async def test_transport_error_exhausts_retries():
+async def _async_transport_error_exhausts_retries():
     t = ScriptedRaiseTransport(httpx.RemoteProtocolError("conn reset"))
     patch_client(httpx, t)
     svc = make_service()
@@ -176,20 +176,72 @@ async def test_transport_error_exhausts_retries():
         )
 
 
-print("\nRetry / backoff")
-check(
-    "Retry schedule matches spec (1, 2, 4, 8, 16s, 5 attempts)",
-    RETRY_DELAYS_SECONDS == [1, 2, 4, 8, 16] and MAX_ATTEMPTS == 5,
-)
+# ---------------------------------------------------------------------------
+# Dual-mode entry points.
+#
+# The async checks above are prefixed ``_async_`` (not ``test_``) so pytest
+# never collects them as bare coroutines (which pytest-asyncio in strict mode
+# would silently SKIP with a PytestUnhandledCoroutineWarning — those retry
+# tests were effectively never running under ``pytest tests/``). Each is
+# exposed here as a sync ``test_*`` wrapper that runs it via asyncio.run and
+# asserts on the collected failures, so pytest actually fails on a regression.
+# The standalone runner (``python tests/test_embedding.py``) keeps the
+# original print-based report.
+# ---------------------------------------------------------------------------
 
-asyncio.run(test_retry_then_succeed_on_5xx())
-asyncio.run(test_4xx_fast_fail())
-asyncio.run(test_5xx_exhausts_retries())
-asyncio.run(test_transport_error_exhausts_retries())
+
+def _run_async(fn) -> None:
+    """Run one async check; fail the pytest item if any `check` failed."""
+    _failures.clear()
+    try:
+        asyncio.run(fn())
+    finally:
+        # patch_client() mutates the httpx.AsyncClient module attribute and
+        # never restores it; restore here so the last wrapper doesn't leave
+        # a scripted transport in place for later-collected test modules.
+        httpx.AsyncClient = _ORIGINAL_ASYNC_CLIENT
+    assert not _failures, "; ".join(_failures)
 
 
-print()
-if _failures:
-    print(f"\033[91m{len(_failures)} FAILED:\033[0m " + ", ".join(_failures))
-    sys.exit(1)
-print(f"\033[92mAll checks passed.\033[0m")
+def test_retry_schedule_matches_spec():
+    _failures.clear()
+    check(
+        "Retry schedule matches spec (1, 2, 4, 8, 16s, 5 attempts)",
+        RETRY_DELAYS_SECONDS == [1, 2, 4, 8, 16] and MAX_ATTEMPTS == 5,
+    )
+    assert not _failures, "; ".join(_failures)
+
+
+def test_retry_then_succeed_on_5xx():
+    _run_async(_async_retry_then_succeed_on_5xx)
+
+
+def test_4xx_fast_fail():
+    _run_async(_async_4xx_fast_fail)
+
+
+def test_5xx_exhausts_retries():
+    _run_async(_async_5xx_exhausts_retries)
+
+
+def test_transport_error_exhausts_retries():
+    _run_async(_async_transport_error_exhausts_retries)
+
+
+if __name__ == "__main__":
+    print("\nRetry / backoff")
+    check(
+        "Retry schedule matches spec (1, 2, 4, 8, 16s, 5 attempts)",
+        RETRY_DELAYS_SECONDS == [1, 2, 4, 8, 16] and MAX_ATTEMPTS == 5,
+    )
+
+    asyncio.run(_async_retry_then_succeed_on_5xx())
+    asyncio.run(_async_4xx_fast_fail())
+    asyncio.run(_async_5xx_exhausts_retries())
+    asyncio.run(_async_transport_error_exhausts_retries())
+
+    print()
+    if _failures:
+        print(f"\033[91m{len(_failures)} FAILED:\033[0m " + ", ".join(_failures))
+        sys.exit(1)
+    print(f"\033[92mAll checks passed.\033[0m")

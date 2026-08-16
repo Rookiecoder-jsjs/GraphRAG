@@ -101,6 +101,23 @@ class _FakeDriver:
         return self._session
 
 
+class _FakeChroma:
+    """Stand-in for the real ChromaDB client so TestClient's lifespan
+    startup (main.py: connect()/close()) and /health/ready (heartbeat())
+    don't require a live Chroma server. The endpoint under test only
+    touches Neo4j — Chroma is never exercised on the request path.
+    """
+
+    def connect(self):
+        pass
+
+    def close(self):
+        pass
+
+    def heartbeat(self):
+        pass
+
+
 # =========================================================================
 # 1. Neo4jClient.get_entity_detail — signature
 # =========================================================================
@@ -236,6 +253,7 @@ def test_endpoint_404_when_entity_not_found():
     """If Neo4j returns None (entity missing or another user's data),
     the API responds 404 — never leaks existence to other users."""
     from fastapi.testclient import TestClient
+    import app.main as main_mod
     from app.main import create_app
     from app.api import auth as auth_mod, graph as graph_mod
 
@@ -251,13 +269,12 @@ def test_endpoint_404_when_entity_not_found():
     # because FastAPI captures the reference when it builds the route.
     app.dependency_overrides[auth_mod.get_current_user] = \
         lambda: {"id": 1}
-    with _mock.patch.object(graph_mod, "get_neo4j_client", _stub_get_neo4g_unused):
-        # The override path is taken instead of the module patch.
-        pass
-    # Use a direct monkey-patch (the override alone is enough for auth;
-    # for get_neo4j_client the test calls into the same app, so we also
-    # need to swap the import in graph_mod).
-    with _mock.patch.object(graph_mod, "get_neo4j_client", _stub_get_neo4j), \
+    # TestClient runs the real lifespan on enter, which connects to
+    # ChromaDB — absent in CI. Stub it out (and the graph-module's
+    # get_neo4j_client, which the endpoint itself calls).
+    with _mock.patch.object(main_mod, "get_chroma_client",
+                            lambda: _FakeChroma()), \
+         _mock.patch.object(graph_mod, "get_neo4j_client", _stub_get_neo4j), \
          TestClient(app) as client:
         resp = client.get("/api/graph/entities/Missing/detail")
     app.dependency_overrides.clear()
@@ -275,6 +292,7 @@ def test_endpoint_200_with_full_envelope():
     envelope. The endpoint should NOT mutate the response shape — the
     client depends on the keys being in the documented positions."""
     from fastapi.testclient import TestClient
+    import app.main as main_mod
     from app.main import create_app
     from app.api import auth as auth_mod, graph as graph_mod
 
@@ -305,7 +323,11 @@ def test_endpoint_200_with_full_envelope():
     app = create_app()
     app.dependency_overrides[auth_mod.get_current_user] = \
         lambda: {"id": 1}
-    with _mock.patch.object(graph_mod, "get_neo4j_client", _stub_get_neo4j), \
+    # Same lifespan Chroma stub as test_endpoint_404_when_entity_not_found —
+    # see that test for the rationale.
+    with _mock.patch.object(main_mod, "get_chroma_client",
+                            lambda: _FakeChroma()), \
+         _mock.patch.object(graph_mod, "get_neo4j_client", _stub_get_neo4j), \
          TestClient(app) as client:
         resp = client.get("/api/graph/entities/QLoRA/detail")
     app.dependency_overrides.clear()
