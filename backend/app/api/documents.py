@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status,
 from app.config import get_settings
 from app.database import get_db
 from app.api.auth import get_current_user
-from app.models.document import DocumentResponse, ChunkResponse, TagCreate, TagResponse
+from app.models.document import DocumentResponse, TagCreate, TagResponse
 from app.utils.md_parser import convert_document_to_markdown, clean_markdown, extract_title_from_markdown
 from app.services.chunker import chunk_markdown
 from app.services.embedding import get_embedding_service, EmbeddingServiceError
@@ -105,6 +105,19 @@ def _content_matches_extension(content: bytes, ext: str) -> bool:
     return True
 
 
+def _split_hierarchy_path(raw_path: str) -> List[str]:
+    """Split a stored ``hierarchy_path`` into its component segments.
+
+    Historical writes used two separators: the upload pipeline joined the
+    SQLite value with "," while the Chroma metadata used ", ". Both formats
+    can exist in the chunks table (and the write side must stay put — the
+    retriever's ``_PART_SUFFIX_RE`` regex depends on the "," form), so split
+    on "," and strip each segment to normalise either one. Segment titles
+    never contain a comma, so the split is lossless.
+    """
+    return [seg.strip() for seg in raw_path.split(",") if seg.strip()]
+
+
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
     background_tasks: BackgroundTasks,
@@ -114,6 +127,15 @@ async def upload_document(
     """Upload and process a document."""
     settings = get_settings()
     user_id = current_user["id"]
+
+    # Multipart bodies without a filename (Content-Disposition with no
+    # filename=) can't be classified or stored — reject early with a 400
+    # rather than a 500 from Path(None).
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload must include a filename"
+        )
 
     # Validate file
     if not is_allowed_file(file.filename):
@@ -286,9 +308,11 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         await set_document_status(doc_id, DocStatus.DOCUMENT_CREATED)
         await progress.emit_and_save(doc_id, user_id, "document_created", "Document created", {"stage": "document_created"})
 
-        # Chunk the document
+        # Chunk the document. Chunking is CPU-heavy (regex splitting of the
+        # whole markdown), so run it in a worker thread to keep the event
+        # loop free for SSE progress emission and other requests.
         await progress.emit_and_save(doc_id, user_id, "chunking", "Chunking document...", {"stage": "chunking", "current": 0, "total": 1})
-        chunks = chunk_markdown(markdown, doc_id, user_id)
+        chunks = await asyncio.to_thread(chunk_markdown, markdown, doc_id, user_id)
         logger.info("Created %d chunks for doc %s", len(chunks), doc_id)
         await progress.emit_and_save(doc_id, user_id, "chunking", f"Created {len(chunks)} chunks", {"stage": "chunking", "current": 1, "total": 1, "percent": 100})
 
@@ -360,9 +384,10 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
         bm25 = get_bm25_service()
         await asyncio.to_thread(bm25.add_to_index, user_id, chunk_contents, chunk_ids)
 
-        # Store chunks in SQLite. INSERT OR IGNORE keeps a re-run idempotent:
-        # chunk_ids are deterministic (derived from doc_id + position), so a
-        # resumed pipeline re-derives the same ids and must not crash on the PK.
+        # Store chunks in SQLite. INSERT OR IGNORE is defensive only: chunk
+        # ids come from uuid.uuid4() in the chunker, so they are NOT
+        # deterministic and there is currently no re-run path that would
+        # re-derive the same ids and collide on the primary key.
         async with get_db() as db:
             for chunk in chunks:
                 hierarchy_path_str = ",".join(chunk.hierarchy.path) if chunk.hierarchy.path else ""
@@ -966,13 +991,6 @@ async def delete_document(
             detail="Document not found"
         )
 
-    # Delete file
-    try:
-        if os.path.exists(doc["file_path"]):
-            os.remove(doc["file_path"])
-    except Exception:
-        pass
-
     # Delete from ChromaDB
     chroma = get_chroma_client()
     await asyncio.to_thread(chroma.delete_document_chunks, doc_id, user_id)
@@ -1004,6 +1022,13 @@ async def delete_document(
             "DELETE FROM documents WHERE id = ? AND user_id = ?",
             (doc_id, user_id)
         )
+        # progress_history has no FK on doc_id, so orphaned rows would
+        # otherwise survive and replay a ghost progress stream for a doc that
+        # no longer exists. Delete in the SAME transaction as the document row.
+        await db.execute(
+            "DELETE FROM progress_history WHERE doc_id = ? AND user_id = ?",
+            (doc_id, user_id)
+        )
         await db.commit()
 
     # Purge this document from the user's BM25 index (no-op if absent) and
@@ -1014,10 +1039,22 @@ async def delete_document(
         )
     invalidate_retrieval_cache(user_id)
 
+    # Delete the on-disk file LAST — every durable store is already purged by
+    # now, so a file-removal failure (e.g. a transient OS lock) leaves only an
+    # orphaned blob that a retry can clean up. It must never fail the whole
+    # delete or mask an upstream store error.
+    try:
+        if os.path.exists(doc["file_path"]):
+            os.remove(doc["file_path"])
+    except Exception as e:
+        logger.warning(
+            "Failed to delete file %s for doc %s: %s", doc["file_path"], doc_id, e
+        )
+
     return {"message": "Document deleted successfully"}
 
 
-@router.get("/{doc_id}/chunks", response_model=List[ChunkResponse])
+@router.get("/{doc_id}/chunks")
 async def get_document_chunks(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
@@ -1060,7 +1097,10 @@ async def get_document_chunks(
         for row in rows:
             row_dict = dict(row)
             row_dict["hierarchy"] = {
-                "path": row_dict["hierarchy_path"].split(", ") if row_dict["hierarchy_path"] else [],
+                # Stored paths are ","-joined (SQLite) or ", "-joined (legacy
+                # Chroma metadata); _split_hierarchy_path normalises both.
+                "path": _split_hierarchy_path(row_dict["hierarchy_path"])
+                        if row_dict["hierarchy_path"] else [],
                 "level": row_dict["level"]
             }
             chunks.append(row_dict)
