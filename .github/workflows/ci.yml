@@ -34,8 +34,11 @@ jobs:
           APP_ENV: test
         # Surface the pytest failure tail as a GitHub annotation (readable
         # from the check-run annotations API without the logs page).
+        # `python -m pytest` (not bare `pytest`): the -m form puts CWD on
+        # sys.path, so `import app...` in the tests resolves. Bare pytest
+        # fails collection with ModuleNotFoundError: No module named 'app'.
         run: |
-          pytest tests/ -q 2>&1 | tee /tmp/pytest.log || true
+          python -m pytest tests/ -q 2>&1 | tee /tmp/pytest.log || true
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
             echo "::error::$(tail -25 /tmp/pytest.log | sed 's/%/%25/g; s/\r//g' | tr '\n' '%0A')"
