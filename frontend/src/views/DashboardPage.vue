@@ -2,27 +2,27 @@
   <div class="dashboard-page">
     <PageHeader
       :icon="LayoutIcon"
-      kicker="Dashboard · Overview"
-      title="Dashboard"
-      subtitle="Your knowledge base at a glance"
+      kicker="仪表盘 · 概览"
+      title="仪表盘"
+      subtitle="你的知识库一览"
     />
 
     <div class="dashboard-content">
-      <LoadingState v-if="loading" message="Loading dashboard..." />
+      <LoadingState v-if="loading" message="加载仪表盘…" />
 
       <ErrorState
         v-else-if="loadError"
-        title="Failed to load dashboard"
-        description="Something went wrong while fetching your knowledge overview."
+        title="加载仪表盘失败"
+        description="获取知识概览时出了点问题。"
         @retry="loadSummary"
       />
 
       <EmptyState
         v-else-if="isEmpty"
         :icon="LayoutIcon"
-        title="Your knowledge base is empty"
-        description="Upload a document or start a chat to populate the dashboard."
-        action-label="Upload document"
+        title="知识库为空"
+        description="上传文档或开始对话来填充仪表盘。"
+        action-label="上传文档"
         @action="goUpload"
       />
 
@@ -43,13 +43,13 @@
 
         <div class="grid">
           <div class="col-left">
-            <Card title="Knowledge growth" meta="last 6 months">
+            <Card title="知识增长" meta="最近 6 个月">
               <div class="bar-chart">
                 <div
                   v-for="b in summary.growth"
                   :key="b.month"
                   class="bar-col"
-                  :title="`${b.month}: ${b.count} document${b.count === 1 ? '' : 's'}`"
+                  :title="`${b.month}：${b.count} 个文档`"
                 >
                   <div class="bar-count">{{ b.count || '' }}</div>
                   <div class="bar" :style="{ height: growthBarHeightPct(b.count) + '%' }" />
@@ -57,12 +57,12 @@
                 </div>
               </div>
               <div class="figure-caption">
-                <span class="fig-num">Fig. 1</span>
-                <span>Documents added per month — last 6 months.</span>
+                <span class="fig-num">图 1</span>
+                <span>每月新增文档 — 最近 6 个月。</span>
               </div>
             </Card>
 
-            <Card v-if="summary.top_entities.length > 0" title="Top entities" meta="by mention count">
+            <Card v-if="summary.top_entities.length > 0" title="热门实体" meta="按提及数">
               <ul class="ranked-list">
                 <li
                   v-for="(e, idx) in summary.top_entities"
@@ -76,8 +76,8 @@
                     <span class="entity-type">{{ e.type }}</span>
                   </span>
                   <span class="rank-stats">
-                    <Tag shape="pill" tone="primary">{{ e.mention_count }} mentions</Tag>
-                    <Tag shape="pill" tone="muted">{{ e.doc_count }} doc{{ e.doc_count === 1 ? '' : 's' }}</Tag>
+                    <Tag shape="pill" tone="primary">{{ e.mention_count }} 次提及</Tag>
+                    <Tag shape="pill" tone="muted">{{ e.doc_count }} 个文档</Tag>
                   </span>
                 </li>
               </ul>
@@ -85,7 +85,7 @@
           </div>
 
           <div class="col-right">
-            <Card v-if="summary.recent_activity.length > 0" title="Recent activity" meta="uploads + messages">
+            <Card v-if="summary.recent_activity.length > 0" title="最近活动" meta="上传 + 消息">
               <ul class="activity-list">
                 <li
                   v-for="(a, idx) in summary.recent_activity"
@@ -101,12 +101,12 @@
                     <span class="activity-title">{{ a.title }}</span>
                     <span class="activity-meta">
                       <template v-if="a.kind === 'document'">
-                        uploaded · {{ formatTimeAgo(a.created_at) }}
+                        已上传 · {{ formatTimeAgo(a.created_at) }}
                       </template>
                       <template v-else>
-                        {{ a.role === 'user' ? 'you' : 'assistant' }} in
+                        {{ a.role === 'user' ? '你' : '助手' }} 在
                         <router-link to="/chat" class="link-inline">
-                          {{ a.conversation_title || 'untitled chat' }}
+                          {{ a.conversation_title || '未命名对话' }}
                         </router-link>
                         · {{ formatTimeAgo(a.created_at) }}
                       </template>
@@ -116,14 +116,14 @@
               </ul>
             </Card>
 
-            <Card v-if="summary.top_tags.length > 0" title="Top tags" meta="by usage">
+            <Card v-if="summary.top_tags.length > 0" title="热门标签" meta="按使用量">
               <div class="tag-cloud">
                 <Tag
                   v-for="t in summary.top_tags"
                   :key="t.tag"
                   shape="pill"
                   clickable
-                  :title="`${t.count} document${t.count === 1 ? '' : 's'} tagged ${t.tag}`"
+                  :title="`${t.count} 个文档标记为 ${t.tag}`"
                   @click="onTagClick(t.tag)"
                 >
                   <span>{{ t.tag }}</span>
@@ -210,12 +210,12 @@ const TagIcon = {
 const heroStats = computed(() => {
   const s = summary.value.stats || {}
   return [
-    { key: 'documents',     value: s.documents     || 0, label: 'Documents',     tone: 'primary', icon: DocumentIcon },
-    { key: 'entities',      value: s.entities      || 0, label: 'Entities',      tone: 'accent',  icon: EntitiesIcon },
-    { key: 'relations',     value: s.relations     || 0, label: 'Relations',     tone: 'warm',    icon: RelationsIcon },
-    { key: 'conversations', value: s.conversations || 0, label: 'Conversations', tone: 'cool',    icon: MessageIcon },
-    { key: 'messages',      value: s.messages      || 0, label: 'Messages',      tone: 'cool',    icon: MessagesIcon },
-    { key: 'tags',          value: s.tags          || 0, label: 'Tags',          tone: 'warm',    icon: TagIcon }
+    { key: 'documents',     value: s.documents     || 0, label: '文档',     tone: 'primary', icon: DocumentIcon },
+    { key: 'entities',      value: s.entities      || 0, label: '实体',      tone: 'accent',  icon: EntitiesIcon },
+    { key: 'relations',     value: s.relations     || 0, label: '关系',     tone: 'warm',    icon: RelationsIcon },
+    { key: 'conversations', value: s.conversations || 0, label: '对话', tone: 'cool',    icon: MessageIcon },
+    { key: 'messages',      value: s.messages      || 0, label: '消息',      tone: 'cool',    icon: MessagesIcon },
+    { key: 'tags',          value: s.tags          || 0, label: '标签',          tone: 'warm',    icon: TagIcon }
   ]
 })
 

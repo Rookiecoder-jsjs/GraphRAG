@@ -2,8 +2,8 @@
   <div class="document-detail-page">
     <PageHeader
       :icon="DocumentIcon"
-      :kicker="detail?.document?.file_type ? `Document · ${detail.document.file_type.toUpperCase()}` : 'Document'"
-      :title="detail?.document?.title || 'Document'"
+      :kicker="detail?.document?.file_type ? `文档 · ${detail.document.file_type.toUpperCase()}` : '文档'"
+      :title="detail?.document?.title || '文档'"
     >
       <template #subtitle>
         <span v-if="detail" class="filename">
@@ -12,28 +12,28 @@
             · {{ detail.document.file_type.toUpperCase() }}
           </span>
         </span>
-        <span v-else>Document</span>
+        <span v-else>文档</span>
       </template>
       <template #actions>
-        <BackButton :to="{ name: 'Documents' }" title="Back to documents" />
+        <BackButton :to="{ name: 'Documents' }" title="返回文档列表" />
       </template>
     </PageHeader>
 
     <div class="document-content">
-      <LoadingState v-if="loading" message="Loading document…" />
+      <LoadingState v-if="loading" message="加载文档…" />
 
       <ErrorState
         v-else-if="loadError"
-        title="Failed to load document"
-        description="Something went wrong while fetching this document."
+        title="加载文档失败"
+        description="获取此文档时出错了。"
         @retry="loadDetail"
       />
 
       <EmptyState
         v-else-if="notFound"
         :icon="XCircleIcon"
-        title="Document not found"
-        description="The document you're looking for doesn't exist or has been deleted."
+        title="未找到文档"
+        description="你查找的文档不存在或已被删除。"
       />
 
       <template v-else-if="detail">
@@ -44,23 +44,23 @@
         </section>
 
         <div v-if="detail.stats" class="byline doc-byline">
-          <span>{{ detail.document.file_type?.toUpperCase() || 'FILE' }}</span>
-          <span>{{ detail.stats.chunk_count }} chunk{{ detail.stats.chunk_count === 1 ? '' : 's' }}</span>
-          <span>{{ detail.stats.key_entity_count }} entit{{ detail.stats.key_entity_count === 1 ? 'y' : 'ies' }}</span>
-          <span>{{ detail.stats.related_document_count }} related</span>
+          <span>{{ detail.document.file_type?.toUpperCase() || '文件' }}</span>
+          <span>{{ detail.stats.chunk_count }} 个分块</span>
+          <span>{{ detail.stats.key_entity_count }} 个实体</span>
+          <span>{{ detail.stats.related_document_count }} 个相关文档</span>
         </div>
 
         <section class="stats-row">
-          <Stat variant="tile" :value="detail.stats.chunk_count" label="chunks" />
-          <Stat variant="tile" :value="detail.stats.key_entity_count" label="key entities" />
-          <Stat variant="tile" :value="detail.stats.related_document_count" label="related" />
+          <Stat variant="tile" :value="detail.stats.chunk_count" label="分块" />
+          <Stat variant="tile" :value="detail.stats.key_entity_count" label="关键实体" />
+          <Stat variant="tile" :value="detail.stats.related_document_count" label="相关" />
         </section>
 
         <div class="grid">
           <div class="col-left">
-            <Card title="Key entities" :meta="`${detail.key_entities.length} entit${detail.key_entities.length === 1 ? 'y' : 'ies'}`">
+            <Card title="关键实体" :meta="`${detail.key_entities.length} 个实体`">
               <div v-if="detail.key_entities.length === 0" class="card-empty">
-                No entities extracted yet.
+                尚未提取到实体。
               </div>
               <ul v-else class="entity-list">
                 <li
@@ -74,14 +74,14 @@
                     class="entity-name"
                   >{{ ent.name }}</router-link>
                   <Tag shape="badge" tone="muted">{{ ent.type }}</Tag>
-                  <span class="entity-count">{{ ent.mention_count }} mention{{ ent.mention_count === 1 ? '' : 's' }}</span>
+                  <span class="entity-count">{{ ent.mention_count }} 次提及</span>
                 </li>
               </ul>
             </Card>
 
-            <Card title="Sample chunks" :meta="`${detail.sample_chunks.length} of ${detail.stats.chunk_count} chunks`">
+            <Card title="分块示例" :meta="`${detail.sample_chunks.length} / ${detail.stats.chunk_count} 个分块`">
               <div v-if="detail.sample_chunks.length === 0" class="card-empty">
-                No chunks available.
+                暂无分块。
               </div>
               <ol v-else class="chunk-list">
                 <li
@@ -99,9 +99,9 @@
           </div>
 
           <div class="col-right">
-            <Card title="Related documents" :meta="`${detail.related_documents.length} document${detail.related_documents.length === 1 ? '' : 's'}`">
+            <Card title="相关文档" :meta="`${detail.related_documents.length} 个文档`">
               <div v-if="detail.related_documents.length === 0" class="card-empty">
-                No related documents found. Other documents that mention the same entities as this one will appear here.
+                未找到相关文档。与本文档提及相同实体的其他文档会显示在这里。
               </div>
               <ul v-else class="related-list">
                 <li
@@ -115,7 +115,7 @@
                   >
                     <span class="related-title">{{ rel.title }}</span>
                     <span class="related-shared">
-                      {{ rel.shared_count }} shared entit{{ rel.shared_count === 1 ? 'y' : 'ies' }}
+                      {{ rel.shared_count }} 个共享实体
                     </span>
                   </router-link>
                 </li>

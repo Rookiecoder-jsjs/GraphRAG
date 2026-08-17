@@ -17,8 +17,8 @@
 <script setup>
 defineProps({
   to: { type: [String, Object], default: '' },
-  label: { type: String, default: 'Back' },
-  title: { type: String, default: 'Back' },
+  label: { type: String, default: '返回' },
+  title: { type: String, default: '返回' },
   size: { type: String, default: 'md' }
 })
 </script>

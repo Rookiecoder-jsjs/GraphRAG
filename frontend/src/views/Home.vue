@@ -7,31 +7,31 @@
             <LogoIcon class="logo-icon" />
           </div>
           <h1 class="login-title">智能知识库</h1>
-          <p class="login-subtitle">Intelligent Knowledge Base</p>
+          <p class="login-subtitle">知识图谱智能问答平台</p>
         </div>
 
         <form @submit.prevent="handleSubmit" class="login-form">
           <div class="form-group">
-            <label for="username" class="form-label">Username</label>
+            <label for="username" class="form-label">用户名</label>
             <input
               id="username"
               v-model="username"
               type="text"
               class="form-input"
-              placeholder="Enter username"
+              placeholder="请输入用户名"
               required
               autocomplete="username"
             />
           </div>
 
           <div class="form-group">
-            <label for="password" class="form-label">Password</label>
+            <label for="password" class="form-label">密码</label>
             <input
               id="password"
               v-model="password"
               type="password"
               class="form-input"
-              placeholder="Enter password"
+              placeholder="请输入密码"
               required
               autocomplete="current-password"
             />
@@ -46,7 +46,7 @@
             block
             class="submit-btn"
           >
-            {{ isRegister ? 'Create Account' : 'Sign In' }}
+            {{ isRegister ? '创建账户' : '登录' }}
           </Button>
 
           <Button
@@ -56,7 +56,7 @@
             class="toggle-btn"
             @click="isRegister = !isRegister"
           >
-            {{ isRegister ? 'Already have an account? Sign In' : "Don't have an account? Register" }}
+            {{ isRegister ? '已有账户？去登录' : '还没有账户？去注册' }}
           </Button>
         </form>
       </div>
@@ -100,7 +100,7 @@ const handleSubmit = async () => {
       error.value = result.error
     }
   } catch (err) {
-    error.value = 'An unexpected error occurred'
+    error.value = '发生了意外错误'
     console.error('Auth error:', err)
   } finally {
     loading.value = false

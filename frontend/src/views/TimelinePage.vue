@@ -2,32 +2,32 @@
   <div class="timeline-page">
     <PageHeader
       :icon="ClockIcon"
-      title="Timeline"
-      subtitle="How your knowledge base has grown"
+      title="时间线"
+      subtitle="你的知识库是如何增长的"
     />
 
     <div class="timeline-content">
-      <LoadingState v-if="loading" message="Loading timeline..." />
+      <LoadingState v-if="loading" message="加载时间线…" />
 
       <ErrorState
         v-else-if="loadError"
-        title="Failed to load timeline"
-        description="Something went wrong while fetching your knowledge history."
+        title="加载时间线失败"
+        description="获取知识历史时出了点问题。"
         @retry="loadTimeline"
       />
 
       <EmptyState
         v-else-if="!hasAnything"
         :icon="ClockIcon"
-        title="No history yet"
-        description="Upload a document to start building your timeline."
+        title="暂无历史"
+        description="上传文档开始构建你的时间线。"
       />
 
       <template v-else>
         <Card v-if="documentsByMonth.length > 0" compact>
           <header class="section-header">
-            <h2 class="section-title">Documents over time</h2>
-            <span class="section-meta">{{ totalDocuments }} total · {{ documentsByMonth.length }} months</span>
+            <h2 class="section-title">文档时间分布</h2>
+            <span class="section-meta">共 {{ totalDocuments }} 个 · {{ documentsByMonth.length }} 个月</span>
           </header>
 
           <div class="bar-chart">
@@ -35,7 +35,7 @@
               v-for="bucket in documentsByMonth"
               :key="bucket.month"
               class="bar-col"
-              :title="`${bucket.month}: ${bucket.count} document${bucket.count === 1 ? '' : 's'}`"
+              :title="`${bucket.month}：${bucket.count} 个文档`"
             >
               <div class="bar-count">{{ bucket.count }}</div>
               <div class="bar" :style="{ height: barHeightPct(bucket.count) + '%' }" />
@@ -46,8 +46,8 @@
 
         <Card v-if="entityTimeline.length > 0" compact>
           <header class="section-header">
-            <h2 class="section-title">Topics first seen</h2>
-            <span class="section-meta">{{ entityTimeline.length }} entities</span>
+            <h2 class="section-title">主题首次出现</h2>
+            <span class="section-meta">{{ entityTimeline.length }} 个实体</span>
           </header>
 
           <ul class="entity-list">
@@ -58,7 +58,7 @@
             >
               <div class="entity-date">
                 <span v-if="e.first_seen" class="date-pretty">{{ formatPrettyDate(e.first_seen) }}</span>
-                <span v-else class="date-missing">no date</span>
+                <span v-else class="date-missing">无日期</span>
               </div>
               <div class="entity-marker" :class="`marker-${entityMarkerClass(e.type)}`">
                 <span class="marker-dot" />
@@ -70,19 +70,19 @@
                 </div>
                 <div class="entity-meta">
                   <template v-if="e.first_seen_doc_id && e.first_seen_doc_title">
-                    introduced in
+                    首次出现于
                     <router-link
                       to="/documents"
                       class="doc-link"
-                      :title="`Open ${e.first_seen_doc_title} in Documents`"
+                      :title="`在文档中打开 ${e.first_seen_doc_title}`"
                     >{{ e.first_seen_doc_title }}</router-link>
                   </template>
                   <template v-else-if="e.mention_count > 0">
-                    <span class="orphan-meta">mentions exist but all source documents were deleted</span>
+                    <span class="orphan-meta">存在提及，但来源文档均已删除</span>
                   </template>
                   <span class="entity-stats">
-                    · {{ e.mention_count }} mention{{ e.mention_count === 1 ? '' : 's' }}
-                    across {{ e.doc_count }} document{{ e.doc_count === 1 ? '' : 's' }}
+                    · {{ e.mention_count }} 次提及
+                    分布于 {{ e.doc_count }} 个文档
                   </span>
                 </div>
               </div>
@@ -92,8 +92,8 @@
 
         <Card v-if="recentDocuments.length > 0" compact>
           <header class="section-header">
-            <h2 class="section-title">Recently added</h2>
-            <span class="section-meta">last {{ recentDocuments.length }}</span>
+            <h2 class="section-title">最近添加</h2>
+            <span class="section-meta">最近 {{ recentDocuments.length }} 个</span>
           </header>
 
           <ul class="doc-list">
@@ -179,7 +179,7 @@ const formatPrettyDate = (input) => {
   if (!input) return ''
   const d = new Date(input)
   if (isNaN(d.getTime())) return String(input)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
 const formatTimeAgo = (input) => {

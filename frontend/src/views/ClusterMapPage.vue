@@ -2,41 +2,41 @@
   <div class="cluster-map-page">
     <PageHeader
       :icon="ClusterIcon"
-      title="Document Cluster Map"
-      subtitle="Each dot is a document. Distance reflects semantic similarity — nearby dots share topics."
+      title="文档聚类图"
+      subtitle="每个圆点代表一份文档。距离反映语义相似度——相近的圆点共享主题。"
     >
       <template #actions>
-        <BackButton :to="{ name: 'Documents' }" title="Back to documents" />
+        <BackButton :to="{ name: 'Documents' }" title="返回文档" />
       </template>
     </PageHeader>
 
     <div class="map-content">
-      <LoadingState v-if="loading" message="Loading map…" />
+      <LoadingState v-if="loading" message="正在加载地图…" />
 
       <div v-else-if="errorMessage" class="error-state">
         <p>{{ errorMessage }}</p>
-        <Button variant="secondary" @click="loadMap">Retry</Button>
+        <Button variant="secondary" @click="loadMap">重试</Button>
       </div>
 
       <EmptyState
         v-else-if="!points || points.length < 2"
         :icon="ClusterIcon"
-        title="Not enough data yet"
-        :description="`Upload at least two documents with content to see them clustered by topic similarity. Currently showing ${points?.length || 0}.`"
-        action-label="Back to documents"
+        title="数据不足"
+        :description="`请至少上传两份有内容的文档，即可查看它们按主题相似度聚类。当前显示 ${points?.length || 0} 份。`"
+        action-label="返回文档"
         @action="goBack"
       />
 
       <template v-else>
         <div v-if="legendItems.length > 1" class="legend">
-          <span class="legend-label">File type:</span>
+          <span class="legend-label">文件类型：</span>
           <span
             v-for="item in legendItems"
             :key="item.type"
             class="legend-item"
           >
             <Dot :color="item.color" />
-            <span class="legend-text">{{ item.type || 'unknown' }}</span>
+            <span class="legend-text">{{ item.type || '未知' }}</span>
           </span>
         </div>
 
@@ -46,7 +46,7 @@
             :viewBox="`0 0 ${VIEW_W} ${VIEW_H}`"
             preserveAspectRatio="xMidYMid meet"
             role="img"
-            aria-label="Document cluster map"
+            aria-label="文档聚类图"
           >
             <g class="grid">
               <line v-for="i in 4" :key="`v${i}`"
@@ -74,7 +74,7 @@
                 :class="{ hovered: hoveredId === p.doc_id }"
                 :tabindex="0"
                 role="button"
-                :aria-label="p.title || 'Open document'"
+                :aria-label="p.title || '打开文档'"
                 @mouseenter="hoveredId = p.doc_id"
                 @mouseleave="hoveredId = null"
                 @focus="hoveredId = p.doc_id"
@@ -104,7 +104,7 @@
         </Card>
 
         <div class="footer-hint">
-          Hover a dot to see the title · click to open the document
+          悬停圆点查看标题 · 点击打开文档
         </div>
       </template>
     </div>
@@ -200,7 +200,7 @@ const loadMap = async () => {
       points.value = []
     } else {
       console.error('Failed to load cluster map:', err)
-      errorMessage.value = 'Could not load the map. Please try again.'
+      errorMessage.value = '无法加载地图，请重试。'
     }
   } finally {
     loading.value = false

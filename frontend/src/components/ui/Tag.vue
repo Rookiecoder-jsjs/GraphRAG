@@ -13,7 +13,7 @@
       v-if="removable"
       type="button"
       class="tag-remove"
-      aria-label="Remove"
+      aria-label="移除"
       @click.stop="$emit('remove', $event)"
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">

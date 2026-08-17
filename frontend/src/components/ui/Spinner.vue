@@ -1,5 +1,5 @@
 <template>
-  <span class="spinner" :class="`spinner-${size}`" :style="cssVars" role="status" aria-label="Loading" />
+  <span class="spinner" :class="`spinner-${size}`" :style="cssVars" role="status" aria-label="加载中" />
 </template>
 
 <script setup>

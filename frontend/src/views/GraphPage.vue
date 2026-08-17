@@ -2,15 +2,15 @@
   <div class="graph-page">
     <PageHeader
       :icon="GraphIcon"
-      kicker="Graph · Live"
-      title="Knowledge Graph"
-      subtitle="Interactive network visualization"
+      kicker="图谱 · 实时"
+      title="知识图谱"
+      subtitle="交互式网络可视化"
     >
       <template #actions>
         <div class="stats">
-          <Stat variant="inline" :value="stats.entities" label="ENTITIES" />
+          <Stat variant="inline" :value="stats.entities" label="实体" />
           <div class="stat-divider" />
-          <Stat variant="inline" :value="stats.relations" label="RELATIONS" />
+          <Stat variant="inline" :value="stats.relations" label="关系" />
         </div>
         <Button
           variant="secondary"
@@ -18,9 +18,9 @@
           :icon="ClockIcon"
           icon-position="left"
           @click="goToTimelineAnimation"
-          title="Watch entities appear over time"
+          title="查看实体随时间出现的动画"
         >
-          Timeline Animation
+          时间线动画
         </Button>
       </template>
     </PageHeader>
@@ -36,7 +36,7 @@
             v-model="query"
             type="text"
             class="search-input"
-            placeholder="Search entities or concepts..."
+            placeholder="搜索实体或概念..."
             @keyup.enter="handleSearch"
           />
         </div>
@@ -48,7 +48,7 @@
           @click="handleSearch"
           class="search-btn-trigger"
         >
-          Analyze
+          分析
         </Button>
         <Button
           variant="ghost"
@@ -56,7 +56,7 @@
           :icon="GlobeIcon"
           icon-position="only"
           @click="handleReset"
-          title="Show full graph"
+          title="显示完整图谱"
         />
       </div>
     </div>
@@ -65,8 +65,8 @@
       <EmptyState
         v-if="nodes.length === 0 && !loading"
         :icon="GraphIcon"
-        title="No Graph Data"
-        description="Upload documents to initialize the knowledge graph"
+        title="暂无图谱数据"
+        description="上传文档以初始化知识图谱"
       />
 
       <template v-else>
@@ -82,7 +82,7 @@
 
         <div v-if="selectedEdge" class="relationship-panel">
           <div class="panel-header">
-            <h3 class="panel-title">Relationship Details</h3>
+            <h3 class="panel-title">关系详情</h3>
             <Button variant="ghost" size="sm" icon-position="only" @click="closeEdgePanel" class="panel-close-btn">&times;</Button>
           </div>
           <div class="panel-content">
@@ -92,15 +92,15 @@
               <span class="target-name">{{ selectedEdge.target_label || selectedEdge.target }}</span>
             </div>
             <div class="detail-row">
-              <span class="detail-label">Type:</span>
+              <span class="detail-label">类型：</span>
               <span class="detail-value">{{ selectedEdge.type || 'RELATED_TO' }}</span>
             </div>
             <div class="detail-row" v-if="selectedEdge.label">
-              <span class="detail-label">Label:</span>
+              <span class="detail-label">标签：</span>
               <span class="detail-value">{{ selectedEdge.label }}</span>
             </div>
             <div class="detail-row" v-if="selectedEdge.id">
-              <span class="detail-label">Edge ID:</span>
+              <span class="detail-label">关系 ID：</span>
               <span class="detail-value uuid">{{ selectedEdge.id }}</span>
             </div>
           </div>
@@ -108,7 +108,7 @@
 
         <div v-if="selectedEntity" class="entity-edit-panel">
           <div class="panel-header">
-            <h3 class="panel-title">Edit Entity</h3>
+            <h3 class="panel-title">编辑实体</h3>
             <Button variant="ghost" size="sm" icon-position="only" @click="closeEntityPanel" class="panel-close-btn">&times;</Button>
           </div>
 
@@ -121,7 +121,7 @@
             @click="goToEntityDetail(selectedEntity)"
             class="detail-link-btn"
           >
-            Open full detail page
+            打开完整详情页
           </Button>
 
           <div class="entity-hero">
@@ -149,10 +149,10 @@
           </div>
 
           <div class="entity-section">
-            <div class="entity-section-title">Basics</div>
+            <div class="entity-section-title">基本信息</div>
 
             <div class="form-group">
-              <label class="form-label">Type</label>
+              <label class="form-label">类型</label>
               <select v-model="editingEntityType" class="form-input">
                 <option v-for="opt in ENTITY_TYPE_OPTIONS" :key="opt" :value="opt">
                   {{ opt }}
@@ -161,12 +161,12 @@
             </div>
 
             <div class="form-group">
-              <label class="form-label">Description</label>
+              <label class="form-label">描述</label>
               <textarea
                 v-model="editingEntityDescription"
                 class="form-input"
                 rows="3"
-                placeholder="(no description)"
+                placeholder="(无描述)"
               />
             </div>
 
@@ -174,14 +174,14 @@
             <div v-if="entityEditSuccess" class="success-message">{{ entityEditSuccess }}</div>
 
             <div class="actions-row">
-              <Button variant="secondary" size="sm" @click="closeEntityPanel">Cancel</Button>
+              <Button variant="secondary" size="sm" @click="closeEntityPanel">取消</Button>
               <Button
                 variant="primary"
                 size="sm"
                 :loading="entityEditSaving"
                 :disabled="!entityEditDirty"
                 @click="saveEntityEdits"
-              >Save changes</Button>
+              >保存修改</Button>
             </div>
 
             <div class="merge-toggle-row">
@@ -190,30 +190,30 @@
                 size="sm"
                 block
                 @click="merging = !merging"
-                :title="merging ? 'Cancel merge' : 'Merge this entity into another'"
+                :title="merging ? '取消合并' : '将此实体合并到其他实体'"
               >
-                {{ merging ? '× Cancel merge' : '⌄ Merge into another entity…' }}
+                {{ merging ? '× 取消合并' : '⌄ 合并到其他实体…' }}
               </Button>
             </div>
           </div>
 
           <div v-if="merging" class="entity-section">
-            <div class="entity-section-title">Merge</div>
-            <div class="merge-hint">Combine this entity with another. The other one will be removed and all its edges will be redirected.</div>
+            <div class="entity-section-title">合并</div>
+            <div class="merge-hint">将此实体与另一个实体合并。另一个实体将被移除，其所有关系都将被重定向。</div>
 
             <div class="form-group">
-              <label class="form-label">Target entity</label>
+              <label class="form-label">目标实体</label>
               <input
                 v-model="mergeTargetName"
                 class="form-input"
-                placeholder="Target entity name (must exist)"
+                placeholder="目标实体名称（必须存在）"
               />
             </div>
 
             <div v-if="mergeError" class="error-message">{{ mergeError }}</div>
 
             <div v-if="mergePill" class="merge-target-pill">
-              <span class="pill-label">Will merge into:</span>
+              <span class="pill-label">将合并到：</span>
               <span class="pill-name">{{ mergePill.name }}</span>
               <Button variant="ghost" size="sm" icon-position="only" @click="clearMergePill" class="pill-clear-btn">&times;</Button>
             </div>
@@ -226,29 +226,29 @@
               @click="confirmMerge"
               block
             >
-              Merge into "{{ mergePill?.name || mergeTargetName }}"
+              合并到 "{{ mergePill?.name || mergeTargetName }}"
             </Button>
           </div>
 
           <div class="entity-section danger">
-            <div class="entity-section-title">Danger zone</div>
-            <p class="danger-text">Deleting this entity removes it from the graph and severs all its relationships. This cannot be undone.</p>
-            <Button variant="outline-danger" size="sm" @click="requestDelete">Delete entity</Button>
+            <div class="entity-section-title">危险操作</div>
+            <p class="danger-text">删除此实体会将其从图谱中移除，并断开其所有关系。此操作无法撤销。</p>
+            <Button variant="outline-danger" size="sm" @click="requestDelete">删除实体</Button>
           </div>
         </div>
 
         <div v-if="confirmDelete" class="confirm-overlay" @click.self="cancelDelete">
           <div class="confirm-dialog">
-            <h3 class="confirm-title">Delete "{{ selectedEntity?.name }}"?</h3>
-            <p class="confirm-text">This permanently removes the entity and all its relationships from your knowledge graph.</p>
+            <h3 class="confirm-title">删除 "{{ selectedEntity?.name }}"？</h3>
+            <p class="confirm-text">此操作会将该实体及其所有关系从您的知识图谱中永久删除。</p>
             <div class="confirm-actions">
-              <Button variant="secondary" size="sm" @click="cancelDelete">Cancel</Button>
+              <Button variant="secondary" size="sm" @click="cancelDelete">取消</Button>
               <Button
                 variant="danger"
                 size="sm"
                 :loading="deleteSaving"
                 @click="confirmDeleteEntity"
-              >Yes, delete</Button>
+              >确认删除</Button>
             </div>
           </div>
         </div>
@@ -458,12 +458,12 @@ const saveEntityEdits = async () => {
       entity_type: editingEntityType.value,
       description: editingEntityDescription.value,
     })
-    entityEditSuccess.value = data?.message || 'Saved.'
+    entityEditSuccess.value = data?.message || '已保存。'
     originalEntityType.value = editingEntityType.value
     originalEntityDescription.value = editingEntityDescription.value
     loadFullGraph()
   } catch (err) {
-    entityEditError.value = err?.response?.data?.detail || 'Failed to save changes.'
+    entityEditError.value = err?.response?.data?.detail || '保存修改失败。'
   } finally {
     entityEditSaving.value = false
   }
@@ -489,11 +489,11 @@ const onMergeTargetInput = (val) => {
       if (data?.found && data.entity) {
         mergePill.value = data.entity
       } else {
-        mergeError.value = `No entity named "${val}" found.`
+        mergeError.value = `未找到名为 "${val}" 的实体。`
       }
     } catch (err) {
       if (seq !== mergeLookupSeq) return
-      mergeError.value = 'Lookup failed.'
+      mergeError.value = '查找失败。'
     }
   }, 350)
 }
@@ -518,7 +518,7 @@ const confirmMerge = async () => {
     closeEntityPanel()
     loadFullGraph()
   } catch (err) {
-    mergeError.value = err?.response?.data?.detail || 'Merge failed.'
+    mergeError.value = err?.response?.data?.detail || '合并失败。'
   } finally {
     mergeSaving.value = false
   }
@@ -541,10 +541,10 @@ const confirmDeleteEntity = async () => {
     confirmDelete.value = false
     closeEntityPanel()
     loadFullGraph()
-    toast.success(`Deleted “${name}”`)
+    toast.success(`已删除 “${name}”`)
   } catch (err) {
     console.error('Delete failed:', err)
-    toast.error(err?.response?.data?.detail || `Failed to delete “${name}”. Please try again.`)
+    toast.error(err?.response?.data?.detail || `删除 “${name}” 失败。请重试。`)
   } finally {
     deleteSaving.value = false
   }

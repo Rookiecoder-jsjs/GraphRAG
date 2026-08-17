@@ -4,8 +4,8 @@
       <div class="header-content">
         <PageHeader
           :icon="SearchIcon"
-          title="Semantic Search"
-          subtitle="Find relevant content using natural language"
+          title="语义搜索"
+          subtitle="使用自然语言查找相关内容"
         />
       </div>
 
@@ -19,7 +19,7 @@
             v-model="query"
             type="text"
             class="search-input"
-            placeholder="Search your documents..."
+            placeholder="搜索你的文档..."
             @keyup.enter="handleSearch"
             :disabled="loading"
           />
@@ -31,39 +31,39 @@
           @click="handleSearch"
           class="search-btn-trigger"
         >
-          Search
+          搜索
         </Button>
       </div>
     </header>
 
     <div class="results-content">
-      <LoadingState v-if="loading" message="Searching..." />
+      <LoadingState v-if="loading" message="搜索中..." />
 
       <ErrorState
         v-else-if="searchError"
-        title="Search failed"
-        description="Something went wrong while searching your documents."
+        title="搜索失败"
+        description="搜索文档时出错了。"
         @retry="handleSearch"
       />
 
       <EmptyState
         v-else-if="results.length === 0 && hasSearched"
         :icon="SearchIcon"
-        title="No Results Found"
-        description="Try different keywords or upload more documents"
+        title="暂无结果"
+        description="尝试不同的关键词，或上传更多文档"
       />
 
       <EmptyState
         v-else-if="results.length === 0"
         variant="initial"
         :icon="SearchIcon"
-        title="Search Your Knowledge Base"
-        description="Enter a query to find relevant information from your documents"
+        title="搜索你的知识库"
+        description="输入查询词，从你的文档中查找相关信息"
       />
 
       <div v-else class="results-list">
         <div class="results-header">
-          <span class="results-count">{{ results.length }} results found</span>
+          <span class="results-count">{{ results.length }} 条结果</span>
         </div>
 
         <div
@@ -72,7 +72,7 @@
           class="result-card"
         >
           <div class="result-header">
-            <h3 class="result-title">{{ result.title || result.filename || 'Document' }}</h3>
+            <h3 class="result-title">{{ result.title || result.filename || '文档' }}</h3>
             <Tag shape="score">{{ (result.score || result.similarity || 0).toFixed(2) }}</Tag>
           </div>
 
@@ -89,7 +89,7 @@
               {{ result.metadata.source }}
             </span>
             <span v-if="result.metadata.page" class="meta-item">
-              Page {{ result.metadata.page }}
+              第 {{ result.metadata.page }} 页
             </span>
           </div>
         </div>
@@ -128,7 +128,7 @@ const handleSearch = async () => {
     const searchResults = data.chunks || data.results || []
     results.value = searchResults.map(r => ({
       chunk: r.content || r.chunk,
-      title: r.metadata?.title || r.metadata?.source || r.filename || 'Document',
+      title: r.metadata?.title || r.metadata?.source || r.filename || '文档',
       score: 1 - (r.distance || 0),
       similarity: 1 - (r.distance || 0),
       metadata: r.metadata

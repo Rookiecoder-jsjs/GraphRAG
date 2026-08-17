@@ -1,7 +1,7 @@
 <template>
   <div class="graph-panel">
     <div class="panel-header">
-      <span class="panel-title">Knowledge Graph</span>
+      <span class="panel-title">知识图谱</span>
       <div class="header-tools">
         <Button
           variant="secondary"
@@ -10,7 +10,7 @@
           :icon="RefreshIcon"
           :loading="loading"
           @click="$emit('refresh')"
-          title="Refresh"
+          title="刷新"
         >
         </Button>
         <div class="export-group">
@@ -21,7 +21,7 @@
             :icon="DownloadIcon"
             :disabled="!graphData"
             @click="exportSVG"
-            title="Download as SVG"
+            title="下载为 SVG"
           >
           </Button>
           <Button
@@ -31,7 +31,7 @@
             :icon="ImageIcon"
             :disabled="!graphData"
             @click="exportPNG"
-            title="Download as PNG"
+            title="下载为 PNG"
           >
           </Button>
         </div>
@@ -46,7 +46,7 @@
         <!-- Loading state -->
         <div v-if="loading" class="graph-state">
           <div class="loading-spinner"></div>
-          <p>Loading graph...</p>
+          <p>加载图谱中...</p>
         </div>
       </div>
 
@@ -59,7 +59,7 @@
             <line x1="12" y1="8" x2="12" y2="16" />
           </svg>
         </div>
-        <p class="empty-text">No graph data available</p>
+        <p class="empty-text">暂无图谱数据</p>
       </div>
     </div>
 
@@ -226,7 +226,7 @@ const renderGraph = () => {
   // Process nodes
   const nodes = nodesData.map(n => ({
     id: n.id,
-    name: n.label || n.name || 'Unnamed',
+    name: n.label || n.name || '未命名',
     type: n.type || 'ENTITY',
     rawData: n
   }))
@@ -732,7 +732,7 @@ const exportSVG = () => {
     ['<?xml version="1.0" encoding="UTF-8"?>\n', source],
     { type: 'image/svg+xml;charset=utf-8' }
   )
-  triggerDownload(blob, `knowledge-graph-${Date.now()}.svg`)
+  triggerDownload(blob, `知识图谱-${Date.now()}.svg`)
 }
 
 const exportPNG = async () => {
@@ -768,7 +768,7 @@ const exportPNG = async () => {
         'image/png'
       )
     })
-    triggerDownload(pngBlob, `knowledge-graph-${Date.now()}.png`)
+    triggerDownload(pngBlob, `知识图谱-${Date.now()}.png`)
   } finally {
     URL.revokeObjectURL(url)
   }

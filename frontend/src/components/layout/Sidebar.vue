@@ -2,20 +2,20 @@
   <aside :class="['sidebar', { collapsed: state.collapsed }]">
     <!-- Logo Section -->
     <div class="logo-section">
-      <router-link to="/dashboard" class="logo-link" aria-label="Nexus dashboard">
+      <router-link to="/dashboard" class="logo-link" aria-label="Nexus 仪表盘">
         <div class="logo-container">
           <LogoIcon class="logo-icon" />
         </div>
         <div class="logo-text" v-show="!state.collapsed">
           <h1 class="logo-title">NEXUS</h1>
-          <p class="logo-subtitle">Knowledge Graph</p>
+          <p class="logo-subtitle">知识图谱</p>
         </div>
       </router-link>
       <button
         class="collapse-btn"
         @click="toggle"
-        :title="state.collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
-        :aria-label="state.collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+        :title="state.collapsed ? '展开侧栏' : '折叠侧栏'"
+        :aria-label="state.collapsed ? '展开侧栏' : '折叠侧栏'"
       >
         <ChevronLeftIcon v-if="!state.collapsed" />
         <ChevronRightIcon v-else />
@@ -23,7 +23,7 @@
     </div>
 
     <!-- Navigation -->
-    <nav class="nav" aria-label="Main navigation">
+    <nav class="nav" aria-label="主导航">
       <template v-for="group in navGroups" :key="group.label">
         <div v-if="!state.collapsed" class="nav-group-label">{{ group.label }}</div>
         <ul class="nav-list">
@@ -47,12 +47,12 @@
       <button
         class="footer-btn"
         @click="toggleTheme"
-        :title="theme === 'dark' ? 'Switch to light' : 'Switch to dark'"
+        :title="theme === 'dark' ? '切换为亮色' : '切换为暗色'"
       >
         <SunIcon v-if="theme === 'dark'" class="footer-icon" />
         <MoonIcon v-else class="footer-icon" />
         <span v-show="!state.collapsed" class="footer-label">
-          {{ theme === 'dark' ? 'Light mode' : 'Dark mode' }}
+          {{ theme === 'dark' ? '亮色模式' : '暗色模式' }}
         </span>
       </button>
 
@@ -60,15 +60,15 @@
       <div class="user-card">
         <div class="user-avatar" aria-hidden="true">{{ initials }}</div>
         <div v-show="!state.collapsed" class="user-info">
-          <p class="user-name">{{ user?.username || 'User' }}</p>
+          <p class="user-name">{{ user?.username || '用户' }}</p>
           <p class="user-role">{{ roleLabel }}</p>
         </div>
         <button
           v-show="!state.collapsed"
           class="logout-btn"
           @click="handleLogout"
-          title="Logout"
-          aria-label="Logout"
+          title="登出"
+          aria-label="登出"
         >
           <LogOutIcon />
         </button>
@@ -104,32 +104,32 @@ const initials = computed(() => {
 })
 
 const roleLabel = computed(() =>
-  user.value?.role ? String(user.value.role) : 'member'
+  user.value?.role ? String(user.value.role) : '成员'
 )
 
 // 分组导航：工作台 / 分析 / 协作
 const navGroups = [
   {
-    label: 'Workspace',
+    label: '工作区',
     items: [
-      { path: '/dashboard', label: 'Dashboard', icon: LayoutGridIcon },
-      { path: '/documents', label: 'Documents', icon: FileTextIcon },
-      { path: '/search', label: 'Search', icon: SearchIcon }
+      { path: '/dashboard', label: '仪表盘', icon: LayoutGridIcon },
+      { path: '/documents', label: '文档', icon: FileTextIcon },
+      { path: '/search', label: '搜索', icon: SearchIcon }
     ]
   },
   {
-    label: 'Analytics',
+    label: '分析',
     items: [
-      { path: '/graph', label: 'Graph', icon: Share2Icon },
-      { path: '/timeline', label: 'Timeline', icon: BarChartIcon },
-      { path: '/documents/map', label: 'Cluster Map', icon: MapIcon },
-      { path: '/graph/timeline-animation', label: 'Entity Timeline', icon: PlayIcon }
+      { path: '/graph', label: '图谱', icon: Share2Icon },
+      { path: '/timeline', label: '时间线', icon: BarChartIcon },
+      { path: '/documents/map', label: '聚类图', icon: MapIcon },
+      { path: '/graph/timeline-animation', label: '实体时间线', icon: PlayIcon }
     ]
   },
   {
-    label: 'Collaborate',
+    label: '协作',
     items: [
-      { path: '/chat', label: 'Chat', icon: MessageSquareIcon }
+      { path: '/chat', label: '对话', icon: MessageSquareIcon }
     ]
   }
 ]

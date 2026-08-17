@@ -14,9 +14,9 @@ import { h } from 'vue'
 import EmptyState from './EmptyState.vue'
 
 defineProps({
-  title: { type: String, default: 'Something went wrong' },
-  description: { type: String, default: 'The request failed. Please try again.' },
-  retryLabel: { type: String, default: 'Retry' }
+  title: { type: String, default: '出错了' },
+  description: { type: String, default: '请求失败,请重试。' },
+  retryLabel: { type: String, default: '重试' }
 })
 
 defineEmits(['retry'])

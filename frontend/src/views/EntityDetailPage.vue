@@ -2,60 +2,60 @@
   <div class="entity-detail-page">
     <PageHeader
       :icon="EntityIcon"
-      :kicker="detail ? `Entity · ${detail.entity.type}` : 'Entity'"
+      :kicker="detail ? `实体 · ${detail.entity.type}` : '实体'"
       :italic-title="true"
       :title="detail?.entity?.name || entityName"
     >
       <template #subtitle>
         <span v-if="detail" class="entity-type-badge">{{ detail.entity.type }}</span>
-        <span v-else>Entity</span>
+        <span v-else>实体</span>
       </template>
       <template #actions>
-        <BackButton :to="{ name: 'Graph' }" title="Back to graph" />
+        <BackButton :to="{ name: 'Graph' }" title="返回图谱" />
       </template>
     </PageHeader>
 
     <div class="entity-content">
-      <LoadingState v-if="loading" message="Loading entity…" />
+      <LoadingState v-if="loading" message="正在加载实体…" />
 
       <ErrorState
         v-else-if="loadError"
-        title="Failed to load entity"
-        description="Something went wrong while fetching this entity."
+        title="加载实体失败"
+        description="获取该实体时出现了问题。"
         @retry="load"
       />
 
       <EmptyState
         v-else-if="notFound"
         :icon="XCircleIcon"
-        title="Entity not found"
-        :description="`“${entityName}” isn't in your knowledge graph yet.`"
+        title="未找到实体"
+        :description="`“${entityName}” 尚未存在于你的知识图谱中。`"
       />
 
       <template v-else-if="detail">
         <blockquote v-if="detail.entity.description" class="pull-quote">
           <p>{{ detail.entity.description }}</p>
-          <cite>Entity description · last edited by you</cite>
+          <cite>实体描述 · 最后由你编辑</cite>
         </blockquote>
 
         <div v-if="detail" class="byline">
           <span>{{ detail.entity.type }}</span>
-          <span>{{ detail.stats.document_count }} document{{ detail.stats.document_count === 1 ? '' : 's' }}</span>
-          <span>{{ detail.stats.mention_count }} mention{{ detail.stats.mention_count === 1 ? '' : 's' }}</span>
-          <span>{{ detail.stats.related_entity_count }} related</span>
+          <span>{{ detail.stats.document_count }} 份文档</span>
+          <span>{{ detail.stats.mention_count }} 次提及</span>
+          <span>{{ detail.stats.related_entity_count }} 个相关</span>
         </div>
 
         <section class="stats-row">
-          <Stat variant="tile" :value="detail.stats.mention_count" label="mentions" />
-          <Stat variant="tile" :value="detail.stats.document_count" label="documents" />
-          <Stat variant="tile" :value="detail.stats.related_entity_count" label="related" />
+          <Stat variant="tile" :value="detail.stats.mention_count" label="提及" />
+          <Stat variant="tile" :value="detail.stats.document_count" label="文档" />
+          <Stat variant="tile" :value="detail.stats.related_entity_count" label="相关" />
         </section>
 
         <div class="grid">
           <div class="col-left">
-            <Card title="Mentioned in" :meta="`${detail.documents.length} document${detail.documents.length === 1 ? '' : 's'}`">
+            <Card title="提及于" :meta="`${detail.documents.length} 份文档`">
               <div v-if="detail.documents.length === 0" class="card-empty">
-                Not mentioned in any document yet.
+                尚未在任何文档中被提及。
               </div>
               <ul v-else class="doc-list">
                 <li
@@ -70,7 +70,7 @@
                   <div class="doc-meta">
                     <div class="doc-title">{{ d.title }}</div>
                     <div class="doc-sub">
-                      <span>{{ d.chunk_count }} chunk{{ d.chunk_count === 1 ? '' : 's' }}</span>
+                      <span>{{ d.chunk_count }} 个分块</span>
                       <span v-if="d.first_seen" class="doc-sep">·</span>
                       <span v-if="d.first_seen">{{ formatDate(d.first_seen) }}</span>
                     </div>
@@ -79,9 +79,9 @@
               </ul>
             </Card>
 
-            <Card title="Related entities" :meta="`${detail.related_entities.length} link${detail.related_entities.length === 1 ? '' : 's'}`">
+            <Card title="相关实体" :meta="`${detail.related_entities.length} 条关联`">
               <div v-if="detail.related_entities.length === 0" class="card-empty">
-                No relations to other entities yet.
+                尚未与其他实体建立关系。
               </div>
               <ul v-else class="related-list">
                 <li
@@ -90,7 +90,7 @@
                   class="related-item"
                   @click="goEntity(r.name)"
                 >
-                  <span class="related-dir" :class="`dir-${r.direction}`" :title="r.direction">
+                  <span class="related-dir" :class="`dir-${r.direction}`" :title="directionLabel(r.direction)">
                     <ArrowRightIcon v-if="r.direction === 'outgoing'" />
                     <ArrowLeftIcon v-else />
                   </span>
@@ -103,9 +103,9 @@
           </div>
 
           <div class="col-right">
-            <Card title="Sample mentions" :meta="`up to ${detail.sample_chunks.length} chunk${detail.sample_chunks.length === 1 ? '' : 's'}`">
+            <Card title="提及示例" :meta="`最多 ${detail.sample_chunks.length} 个分块`">
               <div v-if="detail.sample_chunks.length === 0" class="card-empty">
-                No chunk excerpts available.
+                暂无分块摘录。
               </div>
               <ul v-else class="chunk-list">
                 <li
@@ -203,6 +203,9 @@ const load = async () => {
 
 onMounted(loadIfChanged)
 watch(() => route.params.name, loadIfChanged)
+
+// 关系方向的 tooltip：后端返回 outgoing/incoming 原始值，展示时映射为中文
+const directionLabel = (d) => (d === 'outgoing' ? '指向该实体' : '来自该实体')
 
 const goBack = () => {
   if (window.history.length > 1) {

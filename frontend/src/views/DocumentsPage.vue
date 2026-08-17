@@ -2,8 +2,8 @@
   <div class="documents-page">
     <PageHeader
       :icon="DocumentIcon"
-      title="Documents"
-      subtitle="Upload and manage your documents"
+      title="文档"
+      subtitle="上传并管理你的文档"
     >
       <template #actions>
         <Button
@@ -11,9 +11,9 @@
           size="sm"
           :icon="ClusterIcon"
           @click="goToClusterMap"
-          title="View semantic cluster map"
+          title="查看语义聚类图"
         >
-          Cluster Map
+          聚类图
         </Button>
         <input
           ref="fileInput"
@@ -30,7 +30,7 @@
           :loading="uploading"
           @click="triggerUpload"
         >
-          {{ uploading ? 'Uploading...' : 'Upload Documents' }}
+          {{ uploading ? '上传中...' : '上传文档' }}
         </Button>
       </template>
     </PageHeader>
@@ -39,7 +39,7 @@
     <div v-if="processingDoc" class="progress-modal-overlay">
       <div class="progress-modal">
         <div class="progress-header">
-          <h3>Processing Document</h3>
+          <h3>处理文档</h3>
           <Button
             variant="ghost"
             size="sm"
@@ -67,16 +67,16 @@
               <div class="stage-name">{{ stage.name }}</div>
               <div v-if="stage.message" class="stage-message">{{ stage.message }}</div>
               <div v-if="stage.entities && stage.entities.length" class="stage-details">
-                <div class="detail-label">Extracted:</div>
+                <div class="detail-label">提取到：</div>
                 <div class="detail-items">
                   <Tag v-for="(entity, idx) in stage.entities.slice(0, 8)" :key="idx" shape="badge" tone="primary">
                     {{ entity }}
                   </Tag>
-                  <span v-if="stage.entities.length > 8" class="detail-more">+{{ stage.entities.length - 8 }} more</span>
+                  <span v-if="stage.entities.length > 8" class="detail-more">+{{ stage.entities.length - 8 }} 更多</span>
                 </div>
               </div>
               <div v-if="stage.relations_sample && stage.relations_sample.length" class="stage-details">
-                <div class="detail-label">Relations:</div>
+                <div class="detail-label">关系：</div>
                 <div class="detail-items">
                   <Tag v-for="(rel, idx) in stage.relations_sample.slice(0, 5)" :key="idx" shape="badge" tone="accent">
                     {{ rel[0] }} -> {{ rel[1] }}
@@ -95,15 +95,15 @@
             <CheckCircleIcon />
           </div>
           <div class="complete-text">
-            Processing complete!
+            处理完成！
             <span v-if="processingStats.duration" class="duration-badge">
               {{ processingStats.duration }}
             </span>
             <span v-if="processingStats.entityCount > 0">
-              Extracted {{ processingStats.entityCount }} entities and {{ processingStats.relationCount }} relations
+              已提取 {{ processingStats.entityCount }} 个实体和 {{ processingStats.relationCount }} 个关系
             </span>
           </div>
-          <Button variant="primary" size="sm" @click="viewGraph">View Knowledge Graph</Button>
+          <Button variant="primary" size="sm" @click="viewGraph">查看知识图谱</Button>
         </div>
 
         <div v-if="processingError" class="progress-error">
@@ -111,7 +111,7 @@
             <XCircleIcon />
           </div>
           <div class="error-text">{{ processingError }}</div>
-          <Button variant="secondary" size="sm" @click="cancelProcessing">Close</Button>
+          <Button variant="secondary" size="sm" @click="cancelProcessing">关闭</Button>
         </div>
       </div>
     </div>
@@ -126,8 +126,8 @@
     >
       <div class="drop-card">
         <UploadIcon class="drop-icon-svg" />
-        <p class="drop-title">Drop files to upload</p>
-        <p class="drop-hint">PDF, DOCX, TXT, MD · up to 10 MB each</p>
+        <p class="drop-title">拖拽文件到此处上传</p>
+        <p class="drop-hint">PDF、DOCX、TXT、MD · 每个最大 10 MB</p>
       </div>
     </div>
 
@@ -140,7 +140,7 @@
       @drop.prevent="onDrop"
     >
       <div v-if="userTags.length > 0" class="tag-filter-bar">
-        <span class="tag-filter-label">Filter by tag</span>
+        <span class="tag-filter-label">按标签筛选</span>
         <div class="tag-filter-chips">
           <Tag
             shape="pill"
@@ -148,7 +148,7 @@
             :active="activeTagFilter === null"
             @click="clearTagFilter"
           >
-            All
+            全部
             <span class="tag-count">{{ documents.length }}</span>
           </Tag>
           <Tag
@@ -165,12 +165,12 @@
         </div>
       </div>
 
-      <LoadingState v-if="loading" message="Loading documents..." />
+      <LoadingState v-if="loading" message="加载文档中..." />
 
       <ErrorState
         v-else-if="loadError"
-        title="Failed to load documents"
-        description="Something went wrong while fetching your documents."
+        title="加载文档失败"
+        description="获取文档时出错了。"
         @retry="loadDocuments"
       />
 
@@ -178,13 +178,13 @@
         <div class="empty-icon">
           <DocumentIcon class="empty-icon-svg" />
         </div>
-        <h2 v-if="activeTagFilter">No documents tagged "{{ activeTagFilter }}"</h2>
-        <h2 v-else>No Documents Yet</h2>
+        <h2 v-if="activeTagFilter">没有标签为 "{{ activeTagFilter }}" 的文档</h2>
+        <h2 v-else>暂无文档</h2>
         <p v-if="activeTagFilter">
-          Try a different tag or
-          <Button variant="link" size="sm" @click="clearTagFilter">show all</Button>.
+          试试其他标签，或
+          <Button variant="link" size="sm" @click="clearTagFilter">显示全部</Button>。
         </p>
-        <p v-else>Upload PDF, DOCX, TXT, or MD files to get started</p>
+        <p v-else>上传 PDF、DOCX、TXT 或 MD 文件开始使用</p>
       </div>
 
       <div v-else class="documents-list documents-list-scrollable">
@@ -201,7 +201,7 @@
                 class="doc-name doc-name-link"
                 role="button"
                 tabindex="0"
-                :title="`Open detail page for ${doc.title || doc.original_filename}`"
+                :title="`打开 ${doc.title || doc.original_filename} 的详情页`"
                 @click="goToDetail(doc.id)"
                 @keydown.enter.prevent="goToDetail(doc.id)"
                 @keydown.space.prevent="goToDetail(doc.id)"
@@ -227,7 +227,7 @@
                   :data-tag-input-for="doc.id"
                   v-model="newTagInput"
                   class="tag-input"
-                  placeholder="new tag"
+                  placeholder="新标签"
                   :disabled="tagBusy"
                   @keydown.enter.prevent="submitAddTag(doc.id)"
                   @keydown.esc.prevent="cancelAddTag"
@@ -238,9 +238,9 @@
                   variant="outline-dashed"
                   size="sm"
                   @click="startAddTag(doc.id)"
-                  :title="`Add tag to ${doc.title || doc.original_filename}`"
+                  :title="`为 ${doc.title || doc.original_filename} 添加标签`"
                 >
-                  + Add tag
+                  + 添加标签
                 </Button>
               </div>
             </div>
@@ -250,7 +250,7 @@
               :icon="ClockIcon"
               icon-position="only"
               @click="viewProgress(doc)"
-              title="View Progress"
+              title="查看进度"
             />
             <Button
               variant="ghost"
@@ -258,7 +258,7 @@
               :icon="TrashIcon"
               icon-position="only"
               @click="handleDelete(doc.id)"
-              title="Delete"
+              title="删除"
             />
         </div>
       </div>
@@ -398,14 +398,14 @@ const processingStats = ref({ entityCount: 0, relationCount: 0, duration: '' })
 let eventSource = null
 
 const stages = reactive([
-  { id: 'document_created', name: 'Creating document', order: 1, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'chunking', name: 'Chunking content', order: 2, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'embedding', name: 'Creating embeddings', order: 3, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'stored', name: 'Storing in database', order: 4, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'graph', name: 'Building knowledge graph', order: 5, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'entity_extraction', name: 'Extracting entities (LLM)', order: 6, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'entities', name: 'Saving entities', order: 7, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
-  { id: 'relations', name: 'Creating relationships', order: 8, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] }
+  { id: 'document_created', name: '创建文档', order: 1, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'chunking', name: '切分内容', order: 2, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'embedding', name: '生成向量', order: 3, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'stored', name: '存入数据库', order: 4, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'graph', name: '构建知识图谱', order: 5, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'entity_extraction', name: '提取实体（LLM）', order: 6, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'entities', name: '保存实体', order: 7, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
+  { id: 'relations', name: '创建关系', order: 8, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] }
 ])
 
 const resetStages = () => {
@@ -482,7 +482,7 @@ const submitAddTag = async (docId) => {
     loadUserTags()
   } catch (error) {
     console.error('Failed to add tag:', error)
-    toast.error(error?.response?.data?.detail || 'Could not add tag.')
+    toast.error(error?.response?.data?.detail || '无法添加标签。')
   } finally {
     tagBusy.value = false
   }
@@ -497,7 +497,7 @@ const removeTag = async (docId, tag) => {
     loadUserTags()
   } catch (error) {
     console.error('Failed to remove tag:', error)
-    toast.error(error?.response?.data?.detail || `Could not remove tag “${tag}”.`)
+    toast.error(error?.response?.data?.detail || `无法移除标签“${tag}”。`)
   } finally {
     tagBusy.value = false
   }
@@ -541,8 +541,8 @@ const uploadFiles = async (files) => {
   if (rejected.length > 0) {
     console.warn('Skipped files:', rejected)
     const names = rejected.map(r => r.name).slice(0, 3).join(', ')
-    const more = rejected.length > 3 ? ` and ${rejected.length - 3} more` : ''
-    toast.warning(`Skipped ${rejected.length} file${rejected.length === 1 ? '' : 's'}: ${names}${more} (unsupported type or over 10 MB)`)
+    const more = rejected.length > 3 ? ` 等 ${rejected.length - 3} 个` : ''
+    toast.warning(`已跳过 ${rejected.length} 个文件：${names}${more}（类型不支持或超过 10 MB）`)
   }
 
   if (accepted.length === 0) return
@@ -557,7 +557,7 @@ const uploadFiles = async (files) => {
   } catch (error) {
     console.error('Upload failed:', error)
     uploading.value = false
-    toast.error(error?.response?.data?.detail || 'Upload failed. Please try again.')
+    toast.error(error?.response?.data?.detail || '上传失败，请重试。')
   }
 }
 
@@ -576,7 +576,7 @@ const handleProgressEvent = (e) => {
     if (event.type === 'keepalive') return
 
     if (event.type === 'error') {
-      const message = event.error || event.message || 'Processing failed'
+      const message = event.error || event.message || '处理失败'
       processingError.value = message
       const stage = stages.find(s => s.active)
       if (stage) {
@@ -626,7 +626,7 @@ const handleProgressEvent = (e) => {
 
 const handleProgressError = () => {
   if (processingComplete.value || processingError.value) return
-  processingError.value = 'Connection lost. Close and reopen the progress dialog to check the latest status.'
+  processingError.value = '连接已断开，请关闭并重新打开进度对话框以查看最新状态。'
 }
 
 const connectProgressStream = (docId) => {
@@ -691,7 +691,7 @@ const viewProgress = async (doc) => {
         })
         alreadyTerminal = true
       } else if (lastEvent.is_error) {
-        processingError.value = lastEvent.error_message || 'Processing failed'
+        processingError.value = lastEvent.error_message || '处理失败'
         const stage = stages.find(s => s.active)
         if (stage) {
           stage.error = true
@@ -725,9 +725,9 @@ const viewProgress = async (doc) => {
 const handleDelete = async (id) => {
   const doc = documents.value.find(d => d.id === id)
   const ok = await confirm({
-    title: 'Delete document?',
-    message: `“${doc?.title || doc?.original_filename || id}” will be permanently removed, along with its chunks and extracted entities.`,
-    confirmLabel: 'Delete',
+    title: '删除文档？',
+    message: `“${doc?.title || doc?.original_filename || id}” 将被永久删除，其分块和提取的实体也会一并删除。`,
+    confirmLabel: '删除',
     danger: true
   })
   if (!ok) return
@@ -736,10 +736,10 @@ const handleDelete = async (id) => {
     await documentApi.delete(id)
     await loadDocuments()
     loadUserTags()
-    toast.success('Document deleted')
+    toast.success('文档已删除')
   } catch (error) {
     console.error('Delete failed:', error)
-    toast.error(error?.response?.data?.detail || 'Failed to delete document. Please try again.')
+    toast.error(error?.response?.data?.detail || '删除文档失败，请重试。')
   }
 }
 
@@ -747,8 +747,8 @@ const formatDate = (dateStr) => {
   if (!dateStr) return ''
   try {
     const date = new Date(dateStr)
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
+    return date.toLocaleDateString('zh-CN', {
+      month: 'long',
       day: 'numeric',
       year: 'numeric'
     })

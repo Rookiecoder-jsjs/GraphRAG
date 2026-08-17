@@ -2,28 +2,28 @@
   <div class="timeline-anim-page">
     <PageHeader
       :icon="ClockIcon"
-      title="Entity Timeline"
-      subtitle="Watch your knowledge base grow — each dot is an entity, introduced on the day it first appeared in your documents."
+      title="实体时间线"
+      subtitle="见证你的知识库不断成长——每个圆点都是一个实体，对应它首次出现在文档中的那一天。"
     >
       <template #actions>
-        <BackButton :to="{ name: 'Graph' }" title="Back to graph" />
+        <BackButton :to="{ name: 'Graph' }" title="返回图谱" />
       </template>
     </PageHeader>
 
     <div class="anim-content">
-      <LoadingState v-if="loading" message="Loading entities…" />
+      <LoadingState v-if="loading" message="正在加载实体…" />
 
       <div v-else-if="errorMessage" class="error-state">
         <p>{{ errorMessage }}</p>
-        <Button variant="secondary" @click="loadAll">Retry</Button>
+        <Button variant="secondary" @click="loadAll">重试</Button>
       </div>
 
       <EmptyState
         v-else-if="!hasData"
         :icon="XCircleIcon"
-        title="No dated entities yet"
-        description="Entity dates are derived from when each entity first appears in your documents. Upload a processed document, then come back to watch the timeline fill in."
-        action-label="Back to graph"
+        title="暂无带日期的实体"
+        description="实体日期由每个实体首次出现在文档中的时间推导而来。上传一份已处理的文档，再回来观看时间线逐渐填满。"
+        action-label="返回图谱"
         @action="goBack"
       />
 
@@ -32,11 +32,11 @@
           <div class="stats">
             <Tag shape="pill" tone="muted">
               <span class="stat-num">{{ visibleCount }}</span>
-              <span class="stat-label">of {{ entities.length }} entities</span>
+              <span class="stat-label">共 {{ entities.length }} 个实体</span>
             </Tag>
             <Tag shape="pill" tone="muted">
               <span class="stat-num">{{ formatDate(currentDate) }}</span>
-              <span class="stat-label">up to</span>
+              <span class="stat-label">截至</span>
             </Tag>
             <Button
               v-if="!atEnd"
@@ -45,7 +45,7 @@
               class="jump-btn"
               @click="jumpToEnd"
             >
-              Skip to end ›
+              跳到末尾 ›
             </Button>
           </div>
 
@@ -58,7 +58,7 @@
               :value="dayIndex"
               :disabled="playing"
               @input="onSliderInput"
-              aria-label="Time scrubber"
+              aria-label="时间进度条"
             />
             <div class="slider-bounds">
               <span>{{ formatDate(range.min) }}</span>
@@ -76,10 +76,10 @@
             >
               <PlayIcon v-if="!playing" />
               <PauseIcon v-else />
-              <span>{{ playing ? 'Pause' : 'Play' }}</span>
+              <span>{{ playing ? '暂停' : '播放' }}</span>
             </Button>
             <div class="speed-control">
-              <label>Speed:</label>
+              <label>速度：</label>
               <select v-model.number="speedMs" :disabled="playing" @change="onSpeedChange">
                 <option :value="800">0.5×</option>
                 <option :value="400">1×</option>
@@ -97,7 +97,7 @@
               :viewBox="`0 0 ${VIEW_W} ${VIEW_H}`"
               preserveAspectRatio="xMidYMid meet"
               role="img"
-              aria-label="Entity timeline"
+              aria-label="实体时间线"
             >
               <g class="grid">
                 <line
@@ -139,9 +139,9 @@
                 >
                   <circle
                     :cx="xForDate(e.first_seen)"
-                    :cy="yForType(e.type || 'Unknown')"
+                    :cy="yForType(e.type || '未知')"
                     :r="radiusFor(e.mention_count)"
-                    :style="{ fill: colorForType(e.type || 'Unknown') }"
+                    :style="{ fill: colorForType(e.type || '未知') }"
                     :opacity="hoveredName === e.name ? 1 : 0.78"
                     :stroke="hoveredName === e.name ? 'var(--text-primary)' : 'none'"
                     stroke-width="1.5"
@@ -149,7 +149,7 @@
                   <text
                     v-if="hoveredName === e.name"
                     :x="xForDate(e.first_seen)"
-                    :y="yForType(e.type || 'Unknown') - radiusFor(e.mention_count) - 6"
+                    :y="yForType(e.type || '未知') - radiusFor(e.mention_count) - 6"
                     text-anchor="middle"
                     class="dot-label"
                   >{{ e.name }}</text>
@@ -160,11 +160,11 @@
 
           <Card compact class="list-card">
             <header class="list-header">
-              <h3>Introduced by {{ formatDate(currentDate) }}</h3>
-              <span class="list-count">{{ visibleCount }} entit{{ visibleCount === 1 ? 'y' : 'ies' }}</span>
+              <h3>截至 {{ formatDate(currentDate) }} 新增</h3>
+              <span class="list-count">{{ visibleCount }} 个实体</span>
             </header>
             <div v-if="visibleEntities.length === 0" class="list-empty">
-              Scrub forward to reveal entities.
+              向前拖动以显示实体。
             </div>
             <ul v-else class="entity-list">
               <li
@@ -176,12 +176,12 @@
                 @mouseleave="hoveredName = null"
                 @click="goToEntity(e.name)"
               >
-                <span class="entity-dot" :style="{ background: colorForType(e.type || 'Unknown') }" />
+                <span class="entity-dot" :style="{ background: colorForType(e.type || '未知') }" />
                 <div class="entity-meta">
                   <span class="entity-name">{{ e.name }}</span>
                   <span class="entity-sub">
-                    {{ e.type || 'Unknown' }} ·
-                    {{ e.mention_count }} mention{{ e.mention_count === 1 ? '' : 's' }} ·
+                    {{ e.type || '未知' }} ·
+                    {{ e.mention_count }} 次提及 ·
                     {{ formatDate(e.first_seen) }}
                   </span>
                 </div>
@@ -191,7 +191,7 @@
         </div>
 
         <div class="footer-hint">
-          Hover an entity to highlight it in both views · click to open its detail page
+          悬停实体可在两个视图中高亮 · 点击打开其详情页
         </div>
       </template>
     </div>
@@ -270,7 +270,7 @@ const hasData = computed(() => entities.value.length > 0 && totalDays.value > 0)
 const typeList = computed(() => {
   const set = new Set()
   for (const e of entities.value) {
-    set.add((e.type || 'Unknown').toUpperCase())
+    set.add((e.type || '未知').toUpperCase())
   }
   return Array.from(set).sort()
 })
@@ -378,7 +378,7 @@ const loadAll = async () => {
     }
   } catch (err) {
     console.error('Failed to load timeline:', err)
-    errorMessage.value = 'Could not load the timeline. Please try again.'
+    errorMessage.value = '无法加载时间线，请重试。'
   } finally {
     loading.value = false
   }
