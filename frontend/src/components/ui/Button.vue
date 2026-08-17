@@ -84,16 +84,14 @@ const cssVars = computed(() => ({}))
 .variant-primary:hover:not(:disabled) { background: var(--primary-dark); border-color: var(--primary-dark); }
 
 .variant-secondary {
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(12px);
-          backdrop-filter: blur(12px);
+  background: var(--bg-primary);
   color: var(--text-primary);
-  border-color: var(--glass-border);
-  box-shadow: var(--glass-highlight);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
 }
 .variant-secondary:hover:not(:disabled) {
   border-color: var(--primary);
-  background: var(--glass-bg-strong);
+  background: var(--bg-secondary);
   color: var(--primary);
 }
 
@@ -129,12 +127,10 @@ const cssVars = computed(() => ({}))
 }
 
 .variant-outline-dashed {
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(8px);
-          backdrop-filter: blur(8px);
+  background: transparent;
   color: var(--text-secondary);
   border-style: dashed;
-  border-color: var(--glass-border);
+  border-color: var(--border-strong);
 }
 .variant-outline-dashed:hover:not(:disabled) {
   color: var(--primary);

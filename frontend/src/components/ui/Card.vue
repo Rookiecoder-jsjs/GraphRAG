@@ -32,26 +32,17 @@ defineProps({
 
 <style scoped>
 .card {
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-          backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  border: 1px solid var(--glass-border);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--glass-shadow), var(--glass-highlight);
+  box-shadow: var(--shadow-sm);
   transition:
-    transform var(--transition),
+    border-color var(--transition),
     box-shadow var(--transition);
 }
 .card.hoverable:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 12px 40px -8px rgba(28, 25, 23, 0.16),
-    var(--glass-highlight);
-}
-[data-theme='dark'] .card.hoverable:hover {
-  box-shadow:
-    0 12px 40px -8px rgba(0, 0, 0, 0.60),
-    var(--glass-highlight);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
 }
 
 .card-header {

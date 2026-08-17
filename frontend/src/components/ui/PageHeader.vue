@@ -71,24 +71,21 @@ const cssVars = computed(() => ({}))
   justify-content: center;
   border-radius: var(--radius);
   flex-shrink: 0;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(12px);
-          backdrop-filter: blur(12px);
-  border: 1px solid var(--glass-border);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
   color: var(--primary);
-  box-shadow: var(--glass-highlight);
   transition:
     background-color var(--transition),
     color var(--transition);
 }
-.title-icon.icon-primary { background: var(--glass-bg); color: var(--primary); }
-.title-icon.icon-accent  { background: var(--glass-bg); color: var(--accent-dark); }
-.title-icon.icon-warm    { background: var(--glass-bg); color: var(--accent-dark); }
-.title-icon.icon-cool    { background: var(--glass-bg); color: var(--primary); }
-.title-icon.icon-success { background: var(--glass-bg); color: var(--success); }
-.title-icon.icon-warning { background: var(--glass-bg); color: var(--warning); }
-.title-icon.icon-error   { background: var(--glass-bg); color: var(--error); }
-.title-icon.icon-muted   { background: var(--glass-bg); color: var(--text-secondary); }
+.title-icon.icon-primary { background: var(--bg-secondary); color: var(--primary); }
+.title-icon.icon-accent  { background: var(--bg-secondary); color: var(--accent-dark); }
+.title-icon.icon-warm    { background: var(--bg-secondary); color: var(--accent-dark); }
+.title-icon.icon-cool    { background: var(--bg-secondary); color: var(--primary); }
+.title-icon.icon-success { background: var(--bg-secondary); color: var(--success); }
+.title-icon.icon-warning { background: var(--bg-secondary); color: var(--warning); }
+.title-icon.icon-error   { background: var(--bg-secondary); color: var(--error); }
+.title-icon.icon-muted   { background: var(--bg-secondary); color: var(--text-secondary); }
 .title-icon-svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 
 .title-text { min-width: 0; }

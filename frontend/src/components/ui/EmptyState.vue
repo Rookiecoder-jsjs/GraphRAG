@@ -85,19 +85,21 @@ defineEmits(['action'])
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(12px);
-          backdrop-filter: blur(12px);
-  border: 1px solid var(--glass-border);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   color: var(--text-tertiary);
   margin-bottom: 0.25rem;
-  box-shadow: var(--glass-highlight);
 }
 .empty-state.variant-initial .empty-icon {
   background: var(--primary-light);
   border-color: transparent;
   color: var(--primary);
+}
+.empty-state.variant-error .empty-icon {
+  background: var(--error-light);
+  border-color: transparent;
+  color: var(--error);
 }
 .empty-icon-svg {
   width: 28px;

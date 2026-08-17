@@ -38,26 +38,17 @@ const cssVars = computed(() => ({}))
   align-items: center;
   gap: 0.875rem;
   padding: 1rem 1.125rem;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-          backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  border: 1px solid var(--glass-border);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--glass-shadow), var(--glass-highlight);
+  box-shadow: var(--shadow-sm);
   transition:
-    transform var(--transition),
+    border-color var(--transition),
     box-shadow var(--transition);
 }
 .stat:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 12px 40px -8px rgba(28, 25, 23, 0.16),
-    var(--glass-highlight);
-}
-[data-theme='dark'] .stat:hover {
-  box-shadow:
-    0 12px 40px -8px rgba(0, 0, 0, 0.60),
-    var(--glass-highlight);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
 }
 .stat.variant-inline {
   gap: 0.375rem;
@@ -68,7 +59,7 @@ const cssVars = computed(() => ({}))
   padding: 0;
   border-radius: 0;
 }
-.stat.variant-inline:hover { transform: none; box-shadow: none; }
+.stat.variant-inline:hover { border-color: transparent; box-shadow: none; }
 .stat.variant-tile {
   flex-direction: column;
   text-align: center;
@@ -79,7 +70,7 @@ const cssVars = computed(() => ({}))
   box-shadow: none;
   border-radius: 0;
 }
-.stat.variant-tile:hover { transform: none; box-shadow: none; }
+.stat.variant-tile:hover { border-color: transparent; box-shadow: none; }
 
 .stat-icon {
   width: 36px;
@@ -89,11 +80,8 @@ const cssVars = computed(() => ({}))
   justify-content: center;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(8px);
-          backdrop-filter: blur(8px);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-highlight);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
 }
 .stat-icon.icon-primary { color: var(--primary); }
 .stat-icon.icon-accent  { color: var(--accent-dark); }
