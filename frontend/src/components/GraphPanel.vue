@@ -309,6 +309,14 @@ const renderGraph = () => {
   }
 
   // Force simulation
+  //
+  // Performance-critical knobs:
+  //  - collide radius ~14 (node r=9 + small gap) — the previous 50px per-node
+  //    exclusion radius made 100+ nodes physically impossible to place in the
+  //    viewport, so the layout NEVER converged and jittered at high alpha
+  //    forever (the page feels frozen).
+  //  - alphaDecay 0.07 / alphaMin 0.01 → settles in ~1.5-2s instead of ~5s.
+  //  - lighter charge (-220) keeps 150+ nodes from blowing the bounds.
   const simulation = forceSimulation(nodes)
     .force('link', forceLink(edges)
       .id(d => d.id)
@@ -317,11 +325,14 @@ const renderGraph = () => {
         const edgeCount = d.pairTotal || 1
         return baseDistance + (edgeCount - 1) * 50
       }))
-    .force('charge', forceManyBody().strength(-400))
+    .force('charge', forceManyBody().strength(-220))
     .force('center', forceCenter(width / 2, height / 2))
-    .force('collide', forceCollide(50))
+    .force('collide', forceCollide(14))
     .force('x', forceX(width / 2).strength(0.04))
     .force('y', forceY(height / 2).strength(0.04))
+    .alphaDecay(0.07)
+    .alphaMin(0.01)
+    .velocityDecay(0.4)
 
   currentSimulation = simulation
 
@@ -412,6 +423,13 @@ const renderGraph = () => {
   // Edge labels group
   const edgeLabelGroup = g.append('g').attr('class', 'edge-labels')
 
+  // Dense graphs: edge labels overlap into noise and each one is a <text>
+  // element repositioned every tick. Above this many edges we drop them
+  // entirely — the layout gets dramatically cheaper and nothing useful is
+  // lost (the labels were unreadable in a hairball anyway).
+  const MAX_EDGE_LABELS = 120
+  const showEdgeLabels = edges.length <= MAX_EDGE_LABELS
+
   // Calculate label position for edge
   const getLabelPosition = (d) => {
     if (d.isSelfLoop) {
@@ -441,26 +459,28 @@ const renderGraph = () => {
     return { x: cx, y: cy }
   }
 
-  // Edge labels
-  const edgeLabel = edgeLabelGroup.selectAll('text')
-    .data(edges)
-    .enter()
-    .append('text')
-    .text(d => d.type || d.label || '')
-    .attr('font-size', '9px')
-    .attr('fill', C.textTertiary)
-    .attr('font-weight', '500')
-    .attr('text-anchor', 'middle')
-    .attr('dy', -3)
-    .style('pointer-events', 'none')
-    .style('font-family', 'var(--font-mono), monospace')
-    .style('opacity', d => {
-      if (!isSearchMode) return 0.7
-      const sourceId = typeof d.source === 'object' ? d.source.id : d.source
-      const targetId = typeof d.target === 'object' ? d.target.id : d.target
-      if (highlightedIds.has(sourceId) || highlightedIds.has(targetId)) return 0.85
-      return 0.15
-    })
+  // Edge labels (only when sparse enough to be readable — see showEdgeLabels)
+  const edgeLabel = showEdgeLabels
+    ? edgeLabelGroup.selectAll('text')
+        .data(edges)
+        .enter()
+        .append('text')
+        .text(d => d.type || d.label || '')
+        .attr('font-size', '9px')
+        .attr('fill', C.textTertiary)
+        .attr('font-weight', '500')
+        .attr('text-anchor', 'middle')
+        .attr('dy', -3)
+        .style('pointer-events', 'none')
+        .style('font-family', 'var(--font-mono), monospace')
+        .style('opacity', d => {
+          if (!isSearchMode) return 0.7
+          const sourceId = typeof d.source === 'object' ? d.source.id : d.source
+          const targetId = typeof d.target === 'object' ? d.target.id : d.target
+          if (highlightedIds.has(sourceId) || highlightedIds.has(targetId)) return 0.85
+          return 0.15
+        })
+    : edgeLabelGroup.selectAll('text')
 
   // Nodes group
   const nodeGroup = g.append('g').attr('class', 'nodes')
@@ -637,8 +657,16 @@ const renderGraph = () => {
   })
 }
 
+let resizeTimer = null
 const handleResize = () => {
-  nextTick(renderGraph)
+  // Debounce: renderGraph rebuilds the whole SVG + restarts the simulation,
+  // so a resize storm (window drag, panel toggles) must not queue a rebuild
+  // per event.
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null
+    nextTick(renderGraph)
+  }, 150)
 }
 
 // ---------- Export ----------
@@ -755,15 +783,21 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  if (resizeTimer) clearTimeout(resizeTimer)
   if (currentSimulation) {
     currentSimulation.stop()
   }
 })
 
-// Watch for graph data 或 主题切换 → 重渲染
-watch([() => props.graphData, theme], () => {
-  nextTick(renderGraph)
-}, { deep: true })
+// Watch for graph data / theme changes → re-render.
+//
+// NOT deep: loadFullGraph/handleSearch replace nodes/edges wholesale, and d3
+// mutates its own plain wrapper objects during the force layout (never the
+// reactive originals), so a deep watch would observe nothing useful while
+// paying a full deep-traversal of every node/edge on every reactive flush —
+// and would risk a rebuild storm if any element ever got mutated in place.
+watch(() => props.graphData, () => nextTick(renderGraph))
+watch(theme, () => nextTick(renderGraph))
 </script>
 
 <style scoped>

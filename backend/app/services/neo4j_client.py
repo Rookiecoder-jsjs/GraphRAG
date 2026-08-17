@@ -994,18 +994,32 @@ class Neo4jClient:
             }
 
     async def get_full_graph_for_visualization(self, user_id: int) -> Dict[str, Any]:
-        """Get complete graph with ALL nodes and relationships for visualization."""
-        logger.debug(f"   Getting full graph for user {user_id}")
-        async with self.session() as session:
-            nodes = {}
-            edges = []
+        """Get the entity-level graph for the Knowledge Graph visualization.
 
-            # Get all Entity nodes for this user
+        Deliberately returns ONLY entities + RELATES_TO edges, NOT the
+        document/chunk plumbing (Document/Chunk/User nodes and OWNS/CONTAINS/
+        NEXT/MENTIONS edges). The old "everything" payload ballooned the
+        visualization to (chunks + docs) extra nodes and (MENTIONS + NEXT +
+        CONTAINS) extra edges — for a big corpus that is thousands of DOM
+        elements force-animated every frame, which is what made the Graph page
+        unusably slow. The entity network is what a "Knowledge Graph" view is
+        for; chunk-level exploration lives on the document detail / cluster
+        map pages.
+
+        Caps keep the force layout bounded even for very large corpora.
+        """
+        logger.debug(f"   Getting full entity graph for user {user_id}")
+        async with self.session() as session:
+            nodes: Dict[str, Dict[str, Any]] = {}
+            edges: List[Dict[str, Any]] = []
+
+            # Entity nodes — capped so the force layout stays interactive.
             result = await session.run("""
                 MATCH (e:Entity)
                 WHERE e.user_id = $user_id
                 RETURN e.name as name, e.type as type, e.description as description
-                LIMIT 2000
+                ORDER BY e.name
+                LIMIT 500
             """, user_id=user_id)
 
             async for record in result:
@@ -1023,135 +1037,14 @@ class Neo4jClient:
                     "properties": {"entity_type": record["type"], "description": description}
                 }
 
-            # Get all Document nodes for this user
-            result = await session.run("""
-                MATCH (d:Document)
-                WHERE d.user_id = $user_id
-                RETURN d.doc_id as doc_id, d.title as title
-                LIMIT 500
-            """, user_id=user_id)
+            logger.debug(f"   Found {len(nodes)} entity nodes")
 
-            async for record in result:
-                doc_id = record["doc_id"]
-                nodes[f"doc_{doc_id}"] = {
-                    "id": f"doc_{doc_id}",
-                    "type": "Document",
-                    "label": record["title"] or doc_id,
-                    "properties": {"title": record["title"], "doc_id": doc_id}
-                }
-
-            # Get all Chunk nodes for this user
-            result = await session.run("""
-                MATCH (c:Chunk)
-                WHERE c.user_id = $user_id
-                RETURN c.chunk_id as chunk_id, c.hierarchy_path as hierarchy_path, c.position as position
-                LIMIT 2000
-            """, user_id=user_id)
-
-            async for record in result:
-                chunk_id = record["chunk_id"]
-                hierarchy = record.get("hierarchy_path") or []
-                label = "/".join(hierarchy) if hierarchy else chunk_id[:8]
-                nodes[f"chunk_{chunk_id}"] = {
-                    "id": f"chunk_{chunk_id}",
-                    "type": "Chunk",
-                    "label": label,
-                    "properties": {"hierarchy_path": hierarchy, "position": record.get("position", 0)}
-                }
-
-            # Get User node for this user
-            result = await session.run("""
-                MATCH (u:User)
-                WHERE u.user_id = $user_id
-                RETURN u.user_id as user_id
-                LIMIT 1
-            """, user_id=user_id)
-
-            async for record in result:
-                nodes[f"user_{record['user_id']}"] = {
-                    "id": f"user_{record['user_id']}",
-                    "type": "User",
-                    "label": f"User_{record['user_id']}",
-                    "properties": {"user_id": record['user_id']}
-                }
-
-            logger.debug(f"   Found {len(nodes)} total nodes")
-
-            # Get all relationships between these nodes
-            # OWNS: (User)-[:OWNS]->(Document)
-            result = await session.run("""
-                MATCH (u:User)-[r:OWNS]->(d:Document)
-                WHERE u.user_id = $user_id AND d.user_id = $user_id
-                RETURN u.user_id as uid, d.doc_id as doc_id
-                LIMIT 1000
-            """, user_id=user_id)
-
-            async for record in result:
-                edges.append({
-                    "id": f"owns_{record['uid']}_{record['doc_id']}",
-                    "source": f"user_{record['uid']}",
-                    "target": f"doc_{record['doc_id']}",
-                    "label": "OWNS",
-                    "type": "OWNS"
-                })
-
-            # CONTAINS: (Document)-[:CONTAINS]->(Chunk)
-            result = await session.run("""
-                MATCH (d:Document)-[r:CONTAINS]->(c:Chunk)
-                WHERE d.user_id = $user_id AND c.user_id = $user_id
-                RETURN d.doc_id as doc_id, c.chunk_id as chunk_id
-                LIMIT 2000
-            """, user_id=user_id)
-
-            async for record in result:
-                edges.append({
-                    "id": f"contains_{record['doc_id']}_{record['chunk_id']}",
-                    "source": f"doc_{record['doc_id']}",
-                    "target": f"chunk_{record['chunk_id']}",
-                    "label": "CONTAINS",
-                    "type": "CONTAINS"
-                })
-
-            # NEXT: (Chunk)-[:NEXT]->(Chunk)
-            result = await session.run("""
-                MATCH (c1:Chunk)-[r:NEXT]->(c2:Chunk)
-                WHERE c1.user_id = $user_id AND c2.user_id = $user_id
-                RETURN c1.chunk_id as source_id, c2.chunk_id as target_id
-                LIMIT 2000
-            """, user_id=user_id)
-
-            async for record in result:
-                edges.append({
-                    "id": f"next_{record['source_id']}_{record['target_id']}",
-                    "source": f"chunk_{record['source_id']}",
-                    "target": f"chunk_{record['target_id']}",
-                    "label": "NEXT",
-                    "type": "NEXT"
-                })
-
-            # MENTIONS: (Chunk)-[:MENTIONS]->(Entity)
-            result = await session.run("""
-                MATCH (c:Chunk)-[r:MENTIONS]->(e:Entity)
-                WHERE c.user_id = $user_id AND e.user_id = $user_id
-                RETURN c.chunk_id as chunk_id, e.name as entity_name
-                LIMIT 5000
-            """, user_id=user_id)
-
-            async for record in result:
-                edges.append({
-                    "id": f"mentions_{record['chunk_id']}_{record['entity_name']}",
-                    "source": f"chunk_{record['chunk_id']}",
-                    "target": f"entity_{record['entity_name']}",
-                    "label": "MENTIONS",
-                    "type": "MENTIONS"
-                })
-
-            # RELATES_TO: (Entity)-[:RELATES_TO]->(Entity)
+            # Entity-to-entity relations only.
             result = await session.run("""
                 MATCH (e1:Entity)-[r:RELATES_TO]->(e2:Entity)
                 WHERE e1.user_id = $user_id AND e2.user_id = $user_id
                 RETURN e1.name as source, e2.name as target, r.relation_type as relation_type
-                LIMIT 5000
+                LIMIT 2000
             """, user_id=user_id)
 
             async for record in result:
@@ -1163,7 +1056,7 @@ class Neo4jClient:
                     "type": "RELATES_TO"
                 })
 
-            logger.debug(f"   Found {len(edges)} total relationships")
+            logger.debug(f"   Found {len(edges)} entity relationships")
 
             return {
                 "nodes": list(nodes.values()),
