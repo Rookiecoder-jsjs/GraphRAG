@@ -106,7 +106,9 @@ class _FakeStreamLLM:
         self._deltas = deltas
         self.captured_messages = []
 
-    async def chat_complete_stream(self, messages, enable_thinking=None):
+    async def chat_complete_stream(
+        self, messages, enable_thinking=None, max_tokens=None
+    ):
         self.captured_messages.append(messages)
         for kind, text in self._deltas:
             yield (kind, text)

@@ -270,8 +270,13 @@ async def _build_citation_context(
 
         # Every context block leads with the source document title (even
         # outside COMPARISON mode) so the model can attribute claims to a
-        # specific doc and answer cross-document questions coherently.
-        doc_label = f"(from: {title})" if title else "(from: Untitled)"
+        # specific doc and answer cross-document questions coherently. The
+        # title is user-controlled, so collapse internal whitespace (e.g.
+        # newlines) to a single space — a raw newline would break the
+        # [Context N] block layout and blur the model's 1:1 marker mapping.
+        # The raw title is still shipped to the client in `sources` below.
+        prompt_title = " ".join(title.split()) if title else ""
+        doc_label = f"(from: {prompt_title})" if prompt_title else "(from: Untitled)"
         # The reranker (run inside build_rag_context) attaches a
         # `relevance_score` (0..1) to each chunk. Surface a coarse band in
         # the prompt so the model can weight stronger sources, and forward
@@ -627,7 +632,11 @@ async def _chat_stream_body(
     # block; the first-byte metric below stays anchored to the first
     # "content" chunk so the two modes are directly comparable.
     async for kind, text in llm_service.chat_complete_stream(
-        messages, enable_thinking=request.enable_thinking
+        messages,
+        enable_thinking=request.enable_thinking,
+        # Same answer budget as the non-streaming path (config-driven), so
+        # both chat paths truncate at the same length.
+        max_tokens=get_settings().RAG_MAX_TOKENS,
     ):
         if not text:
             continue  # defensive: never forward None/empty deltas downstream
