@@ -56,7 +56,8 @@ Rewritten query (just return the rewritten query, nothing else):"""
             rewritten = await llm.chat_complete(
                 [{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=200
+                max_tokens=200,
+                enable_thinking=False,
             )
             return rewritten.strip().strip('"').strip()
         except Exception as e:
@@ -101,7 +102,8 @@ Return ONLY a JSON array of strings, nothing else. Example format:
             response = await llm.chat_complete(
                 [{"role": "user", "content": prompt}],
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=500,
+                enable_thinking=False,
             )
 
             # Extract JSON array from response
@@ -138,7 +140,8 @@ Entities:"""
             response = await llm.chat_complete(
                 [{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300
+                max_tokens=300,
+                enable_thinking=False,
             )
 
             entities = self._extract_json_array(response)

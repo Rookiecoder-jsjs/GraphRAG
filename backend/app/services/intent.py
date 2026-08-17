@@ -47,7 +47,15 @@ async def classify_intent(query: str) -> Dict[str, Any]:
             {"role": "user", "content": query[:1000]},
         ]
         raw = await asyncio.wait_for(
-            llm.chat_complete(messages, temperature=0.0, max_tokens=64),
+            # enable_thinking=False is critical here: the default hybrid
+            # thinking on qwen3.7-flash takes 10-18s, which ALWAYS exceeds
+            # INTENT_CLASSIFY_TIMEOUT and gets cancelled — so classification
+            # both burned ~3s on every chat turn AND silently fell back to
+            # fact_retrieval every time. With thinking off it answers in <1s
+            # and the intent routing actually works.
+            llm.chat_complete(
+                messages, temperature=0.0, max_tokens=64, enable_thinking=False
+            ),
             timeout=settings.INTENT_CLASSIFY_TIMEOUT,
         )
         m = re.search(r"\{.*\}", raw, re.DOTALL)

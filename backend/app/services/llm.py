@@ -50,7 +50,8 @@ class LLMService:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 8000,
-        stream: bool = False
+        stream: bool = False,
+        enable_thinking: Optional[bool] = None,
     ) -> str:
         """
         Complete a chat conversation.
@@ -61,6 +62,16 @@ class LLMService:
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
             stream: Whether to stream response
+            enable_thinking: Qwen hybrid-thinking toggle. None = omit the
+                param (provider default — which for qwen3.7-flash is ON and
+                emits a long reasoning trace, 10-18s per non-streaming call).
+                False = answer directly. Retrieval preprocessing (rewrite /
+                variants / entity extraction) MUST pass False: those calls
+                only need fast JSON and the default reasoning trace turns a
+                ~1s call into ~13s, which dominates chat latency. True =
+                force reasoning. Non-thinking model tiers reject the param
+                with HTTP 400 — handled below by dropping it and retrying
+                once, so a stale toggle degrades gracefully.
 
         Returns:
             Generated response text
@@ -86,6 +97,8 @@ class LLMService:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if enable_thinking is not None:
+            payload["enable_thinking"] = enable_thinking
 
         def _extract_content(data: Dict[str, Any]) -> str:
             """Pull the answer text out of a chat completion response.
@@ -115,6 +128,20 @@ class LLMService:
             return await _post_once()
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
+            # Non-thinking model tiers reject the enable_thinking param with
+            # HTTP 400. Drop it and retry ONCE (mirrors chat_complete_stream);
+            # the preprocessing call then degrades to a normal answer instead
+            # of failing the whole retrieval.
+            if status == 400 and enable_thinking is not None:
+                logger.warning(
+                    "chat_complete enable_thinking=%s rejected (HTTP 400: %.120s); retrying without it",
+                    enable_thinking, e.response.text if e.response is not None else "",
+                )
+                payload.pop("enable_thinking", None)
+                try:
+                    return await _post_once()
+                except Exception as retry_error:
+                    raise retry_error from e
             if status is not None and status not in _RETRYABLE_STATUS_CODES:
                 # 4xx (except 429) won't fix themselves — fail fast, no retry.
                 raise
@@ -313,6 +340,7 @@ If no entities are found, return an empty array."""
                         response = await self.chat_complete(
                             messages, temperature=0.1,
                             max_tokens=self.settings.LLM_EXTRACT_MAX_TOKENS,
+                            enable_thinking=False,
                         )
                         json_match = self._extract_json(response)
                         if json_match:
@@ -378,6 +406,7 @@ Extract relationships between the entities."""
                         response = await self.chat_complete(
                             messages, temperature=0.1,
                             max_tokens=self.settings.LLM_EXTRACT_MAX_TOKENS,
+                            enable_thinking=False,
                         )
                         json_match = self._extract_json(response)
                         if json_match:
@@ -446,6 +475,7 @@ Rules:
                         response = await self.chat_complete(
                             messages, temperature=0.1,
                             max_tokens=self.settings.LLM_EXTRACT_MAX_TOKENS,
+                            enable_thinking=False,
                         )
                         return self._parse_extraction_response(response)
                     except Exception as e:
