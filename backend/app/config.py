@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # the provider reserve/allocate far more generation budget than any
     # extraction response could ever use.
     LLM_EXTRACT_MAX_TOKENS: int = 1024
+    # max_tokens for RAG answer generation. Was hard-coded at 8000 in the
+    # service; a knowledge-base answer rarely exceeds 4k tokens and a lower
+    # ceiling cuts provider generation-budget reservation latency.
+    RAG_MAX_TOKENS: int = 4000
 
     # CORS - comma-separated list of allowed origins (no wildcards with credentials)
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"

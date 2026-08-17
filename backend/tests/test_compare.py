@@ -6,9 +6,11 @@ Standalone runner:
 
 Coverage:
   1. ChatRequest.compare_mode defaults to False
-  2. _build_citation_context formats the prompt context with "(from: Doc
-     Title)" inline markers when comparison_mode=True; without them
-     when False. We mock the DB call so this stays a pure-function test.
+  2. _build_citation_context always formats the prompt context with
+     "(from: Doc Title)" inline markers (titles were promoted from a
+     comparison-mode-only affordance to the default), plus a relevance
+     band when the reranker scored the chunk. We mock the DB call so this
+     stays a pure-function test.
 """
 from __future__ import annotations
 
@@ -172,29 +174,14 @@ FAKE_TITLES = {
 }
 
 
-def test_context_str_no_doc_titles_by_default():
-    """Without comparison_mode, the prompt context shouldn't mention doc names."""
+def test_context_str_includes_doc_titles_by_default():
+    """Every [Context N] block leads with '(from: Doc Title)' — titles are
+    now the default, not a comparison-mode-only affordance."""
     from app.api import chat as chat_mod
     import unittest.mock as _mock
     with _mock.patch.object(chat_mod, "get_db", _make_fake_get_db(FAKE_TITLES)):
         result = asyncio.run(chat_mod._build_citation_context(
             chunks=SAMPLE_CHUNKS, user_id=1,
-        ))
-    ctx = result["context_str"]
-    check("context_str: no '(from: ...)' markers by default",
-          "(from:" not in ctx)
-    check("context_str: still includes [Context N] markers",
-          "[Context 1]" in ctx and "[Context 4]" in ctx)
-
-
-def test_context_str_includes_doc_titles_when_compare_mode():
-    """With comparison_mode=True, every [Context N] block should lead with
-    '(from: Doc Title)' so the LLM can attribute claims to a source."""
-    from app.api import chat as chat_mod
-    import unittest.mock as _mock
-    with _mock.patch.object(chat_mod, "get_db", _make_fake_get_db(FAKE_TITLES)):
-        result = asyncio.run(chat_mod._build_citation_context(
-            chunks=SAMPLE_CHUNKS, user_id=1, comparison_mode=True,
         ))
     ctx = result["context_str"]
     check("context_str: includes (from: Doc Title) for chunk 1 (doc-a)",
@@ -213,32 +200,30 @@ def test_context_str_uses_untitled_when_doc_lookup_empty():
     import unittest.mock as _mock
     with _mock.patch.object(chat_mod, "get_db", _make_empty_get_db()):
         result = asyncio.run(chat_mod._build_citation_context(
-            chunks=SAMPLE_CHUNKS[:1], user_id=1, comparison_mode=True,
+            chunks=SAMPLE_CHUNKS[:1], user_id=1,
         ))
     ctx = result["context_str"]
     check("context_str: falls back to '(from: Untitled)' when doc is missing",
           "[Context 1] (from: Untitled)" in ctx)
 
 
-def test_sources_array_unchanged_by_compare_mode():
-    """The sources array (sent to the client) is independent of how the
-    prompt context is formatted — it should be the same shape either way."""
+def test_sources_array_shape_stable():
+    """The sources array (sent to the client) keeps its shape: one record
+    per chunk with title and document_id, independent of prompt formatting."""
     from app.api import chat as chat_mod
     import unittest.mock as _mock
     with _mock.patch.object(chat_mod, "get_db", _make_fake_get_db(FAKE_TITLES)):
-        result_off = asyncio.run(chat_mod._build_citation_context(
+        result = asyncio.run(chat_mod._build_citation_context(
             chunks=SAMPLE_CHUNKS, user_id=1,
         ))
-        result_on = asyncio.run(chat_mod._build_citation_context(
-            chunks=SAMPLE_CHUNKS, user_id=1, comparison_mode=True,
-        ))
-    check("sources: same length regardless of compare_mode",
-          len(result_off["sources"]) == len(result_on["sources"]) == 4)
-    check("sources: titles identical regardless of compare_mode",
-          [s["title"] for s in result_off["sources"]]
-          == [s["title"] for s in result_on["sources"]])
+    sources = result["sources"]
+    check("sources: one record per chunk",
+          len(sources) == 4)
+    check("sources: titles match the doc lookup",
+          [s["title"] for s in sources]
+          == ["硅基流动产品手册", "硅基流动产品手册", "百炼 API 文档", "百炼 API 文档"])
     check("sources: each still has document_id",
-          all("document_id" in s for s in result_on["sources"]))
+          all("document_id" in s for s in sources))
 
 
 # =========================================================================
@@ -265,10 +250,9 @@ def test_llm_generate_rag_response_accepts_comparison_mode():
 ALL_TESTS = [
     test_chat_request_default_compare_mode_is_false,
     test_chat_request_explicit_compare_mode,
-    test_context_str_no_doc_titles_by_default,
-    test_context_str_includes_doc_titles_when_compare_mode,
+    test_context_str_includes_doc_titles_by_default,
     test_context_str_uses_untitled_when_doc_lookup_empty,
-    test_sources_array_unchanged_by_compare_mode,
+    test_sources_array_shape_stable,
     test_llm_generate_rag_response_accepts_comparison_mode,
 ]
 
