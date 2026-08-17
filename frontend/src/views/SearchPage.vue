@@ -39,13 +39,18 @@
     <div class="results-content">
       <LoadingState v-if="loading" message="Searching..." />
 
+      <ErrorState
+        v-else-if="searchError"
+        title="Search failed"
+        description="Something went wrong while searching your documents."
+        @retry="handleSearch"
+      />
+
       <EmptyState
         v-else-if="results.length === 0 && hasSearched"
         :icon="SearchIcon"
         title="No Results Found"
         description="Try different keywords or upload more documents"
-        decor="geometric"
-        decor-tone="primary"
       />
 
       <EmptyState
@@ -96,7 +101,7 @@
 <script setup>
 import { ref, h } from 'vue'
 import { searchApi } from '../api/search'
-import { PageHeader, EmptyState, LoadingState, Button, Tag } from '../components/ui'
+import { PageHeader, EmptyState, LoadingState, ErrorState, Button, Tag } from '../components/ui'
 
 const SearchIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
@@ -107,6 +112,7 @@ const SearchIcon = {
 
 const query = ref('')
 const loading = ref(false)
+const searchError = ref(false)
 const results = ref([])
 const hasSearched = ref(false)
 
@@ -115,6 +121,7 @@ const handleSearch = async () => {
 
   loading.value = true
   hasSearched.value = true
+  searchError.value = false
 
   try {
     const { data } = await searchApi.search(query.value, 10, true)
@@ -128,6 +135,7 @@ const handleSearch = async () => {
     }))
   } catch (error) {
     console.error('Search error:', error)
+    searchError.value = true
     results.value = []
   } finally {
     loading.value = false

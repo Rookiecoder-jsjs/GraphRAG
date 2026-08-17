@@ -22,6 +22,13 @@
     <div class="document-content">
       <LoadingState v-if="loading" message="Loading document…" />
 
+      <ErrorState
+        v-else-if="loadError"
+        title="Failed to load document"
+        description="Something went wrong while fetching this document."
+        @retry="loadDetail"
+      />
+
       <EmptyState
         v-else-if="notFound"
         :icon="XCircleIcon"
@@ -126,7 +133,7 @@ import { ref, onMounted, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { documentApi } from '../api/documents'
 import {
-  PageHeader, BackButton, Stat, Card, Tag, LoadingState, EmptyState
+  PageHeader, BackButton, Stat, Card, Tag, LoadingState, EmptyState, ErrorState
 } from '../components/ui'
 
 const DocumentIcon = {
@@ -149,12 +156,14 @@ const router = useRouter()
 const detail = ref(null)
 const loading = ref(true)
 const notFound = ref(false)
+const loadError = ref(false)
 
 const docId = () => route.params.id
 
 const loadDetail = async () => {
   loading.value = true
   notFound.value = false
+  loadError.value = false
   detail.value = null
   try {
     const { data } = await documentApi.getDetail(docId())
@@ -164,6 +173,7 @@ const loadDetail = async () => {
       notFound.value = true
     } else {
       console.error('Failed to load document detail:', err)
+      loadError.value = true
     }
   } finally {
     loading.value = false

@@ -18,6 +18,13 @@
     <div class="entity-content">
       <LoadingState v-if="loading" message="Loading entity…" />
 
+      <ErrorState
+        v-else-if="loadError"
+        title="Failed to load entity"
+        description="Something went wrong while fetching this entity."
+        @retry="load"
+      />
+
       <EmptyState
         v-else-if="notFound"
         :icon="XCircleIcon"
@@ -123,7 +130,7 @@ import { ref, onMounted, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { graphApi } from '../api/graph'
 import {
-  PageHeader, BackButton, Stat, Card, Tag, LoadingState, EmptyState
+  PageHeader, BackButton, Stat, Card, Tag, LoadingState, EmptyState, ErrorState
 } from '../components/ui'
 
 const EntityIcon = {
@@ -164,6 +171,7 @@ const router = useRouter()
 const detail = ref(null)
 const loading = ref(true)
 const notFound = ref(false)
+const loadError = ref(false)
 const entityName = ref('')
 
 let lastName = null
@@ -176,6 +184,7 @@ const load = async () => {
   entityName.value = name
   loading.value = true
   notFound.value = false
+  loadError.value = false
   detail.value = null
   try {
     const { data } = await graphApi.getEntityDetail(name)
@@ -185,7 +194,7 @@ const load = async () => {
       notFound.value = true
     } else {
       console.error('Failed to load entity detail:', error)
-      notFound.value = true
+      loadError.value = true
     }
   } finally {
     loading.value = false
@@ -365,7 +374,7 @@ const formatDate = (s) => {
 }
 .related-dir :deep(svg) { width: 12px; height: 12px; }
 .related-dir.dir-outgoing { color: var(--primary); background: var(--primary-light); }
-.related-dir.dir-incoming { color: #8b5cf6; background: rgba(139,92,246,0.12); }
+.related-dir.dir-incoming { color: var(--graph-concept); background: var(--primary-light); }
 .related-name {
   font-size: 0.875rem;
   font-weight: 500;

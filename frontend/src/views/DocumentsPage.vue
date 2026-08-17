@@ -167,6 +167,13 @@
 
       <LoadingState v-if="loading" message="Loading documents..." />
 
+      <ErrorState
+        v-else-if="loadError"
+        title="Failed to load documents"
+        description="Something went wrong while fetching your documents."
+        @retry="loadDocuments"
+      />
+
       <div v-else-if="documents.length === 0 && !processingDoc" class="empty-state">
         <div class="empty-icon">
           <DocumentIcon class="empty-icon-svg" />
@@ -264,7 +271,9 @@ import { ref, onMounted, onUnmounted, onDeactivated, reactive, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { documentApi } from '../api/documents'
 import { tagApi } from '../api/tags'
-import { PageHeader, Button, Tag, LoadingState } from '../components/ui'
+import { PageHeader, Button, Tag, LoadingState, ErrorState } from '../components/ui'
+import { useToast } from '../composables/toast'
+import { useConfirm } from '../composables/confirm'
 
 const DocumentIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
@@ -326,9 +335,12 @@ const XCircleIcon = {
 }
 
 const router = useRouter()
+const { toast } = useToast()
+const { confirm } = useConfirm()
 
 const documents = ref([])
 const loading = ref(false)
+const loadError = ref(false)
 const uploading = ref(false)
 const fileInput = ref(null)
 const isDragging = ref(false)
@@ -410,11 +422,13 @@ const resetStages = () => {
 
 const loadDocuments = async () => {
   loading.value = true
+  loadError.value = false
   try {
     const { data } = await documentApi.list(activeTagFilter.value || undefined)
     documents.value = data.documents || data || []
   } catch (error) {
     console.error('Failed to load documents:', error)
+    loadError.value = true
     documents.value = []
   } finally {
     loading.value = false
@@ -468,8 +482,7 @@ const submitAddTag = async (docId) => {
     loadUserTags()
   } catch (error) {
     console.error('Failed to add tag:', error)
-    const msg = error?.response?.data?.detail || 'Could not add tag.'
-    alert(msg)
+    toast.error(error?.response?.data?.detail || 'Could not add tag.')
   } finally {
     tagBusy.value = false
   }
@@ -484,6 +497,7 @@ const removeTag = async (docId, tag) => {
     loadUserTags()
   } catch (error) {
     console.error('Failed to remove tag:', error)
+    toast.error(error?.response?.data?.detail || `Could not remove tag “${tag}”.`)
   } finally {
     tagBusy.value = false
   }
@@ -526,6 +540,9 @@ const uploadFiles = async (files) => {
 
   if (rejected.length > 0) {
     console.warn('Skipped files:', rejected)
+    const names = rejected.map(r => r.name).slice(0, 3).join(', ')
+    const more = rejected.length > 3 ? ` and ${rejected.length - 3} more` : ''
+    toast.warning(`Skipped ${rejected.length} file${rejected.length === 1 ? '' : 's'}: ${names}${more} (unsupported type or over 10 MB)`)
   }
 
   if (accepted.length === 0) return
@@ -540,6 +557,7 @@ const uploadFiles = async (files) => {
   } catch (error) {
     console.error('Upload failed:', error)
     uploading.value = false
+    toast.error(error?.response?.data?.detail || 'Upload failed. Please try again.')
   }
 }
 
@@ -705,14 +723,23 @@ const viewProgress = async (doc) => {
 }
 
 const handleDelete = async (id) => {
-  if (!confirm('Are you sure you want to delete this document?')) return
+  const doc = documents.value.find(d => d.id === id)
+  const ok = await confirm({
+    title: 'Delete document?',
+    message: `“${doc?.title || doc?.original_filename || id}” will be permanently removed, along with its chunks and extracted entities.`,
+    confirmLabel: 'Delete',
+    danger: true
+  })
+  if (!ok) return
 
   try {
     await documentApi.delete(id)
     await loadDocuments()
     loadUserTags()
+    toast.success('Document deleted')
   } catch (error) {
     console.error('Delete failed:', error)
+    toast.error(error?.response?.data?.detail || 'Failed to delete document. Please try again.')
   }
 }
 
@@ -929,12 +956,11 @@ onDeactivated(() => {
 .drop-overlay {
   position: fixed;
   inset: 0;
-  z-index: 900;
+  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(20, 20, 19, 0.35);
-  backdrop-filter: blur(2px);
+  background: var(--scrim);
   pointer-events: auto;
 }
 .drop-card {
@@ -967,12 +993,11 @@ onDeactivated(() => {
 .progress-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(20, 20, 19, 0.45);
-  backdrop-filter: blur(2px);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-modal);
 }
 .progress-modal {
   width: 90%;

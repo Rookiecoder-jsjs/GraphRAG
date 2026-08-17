@@ -1,20 +1,10 @@
 <template>
   <div class="login-page">
-    <div class="bg-stage" aria-hidden="true">
-      <div class="blob blob-1"></div>
-      <div class="blob blob-2"></div>
-      <div class="blob blob-3"></div>
-    </div>
-
     <div class="login-container">
       <div class="login-card">
         <div class="login-header">
           <div class="logo-wrapper">
-            <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-              <line x1="12" y1="22" x2="12" y2="15.5" />
-              <polyline points="22 8.5 12 15.5 2 8.5" />
-            </svg>
+            <LogoIcon class="logo-icon" />
           </div>
           <h1 class="login-title">智能知识库</h1>
           <p class="login-subtitle">Intelligent Knowledge Base</p>
@@ -79,6 +69,7 @@ import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import { Button } from '../components/ui'
+import { LogoIcon } from '../components/ui/icons'
 
 const router = useRouter()
 const route = useRoute()
@@ -129,32 +120,9 @@ const handleSubmit = async () => {
   background: var(--bg-base);
 }
 
-.bg-stage {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(120px);
-  opacity: 0.65;
-  will-change: transform;
-}
-.blob-1 { width: 60vw; height: 60vw; background: var(--blob-1); top: -15%; left: -10%; animation: drift-1 30s ease-in-out infinite; }
-.blob-2 { width: 55vw; height: 55vw; background: var(--blob-2); top: 25%;  right: -15%; animation: drift-2 35s ease-in-out infinite; }
-.blob-3 { width: 65vw; height: 65vw; background: var(--blob-3); bottom: -20%; left: 15%; animation: drift-3 40s ease-in-out infinite; }
-[data-theme='dark'] .blob { opacity: 0.32; }
-@media (prefers-reduced-motion: reduce) {
-  .blob { animation: none !important; }
-}
-
 .login-container {
   position: relative;
-  z-index: 10;
+  z-index: 1;
   width: 100%;
   max-width: 420px;
   padding: 1rem;
@@ -162,12 +130,10 @@ const handleSubmit = async () => {
 
 .login-card {
   padding: 3rem 2.5rem;
-  background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(var(--glass-blur-lg)) saturate(180%);
-          backdrop-filter: blur(var(--glass-blur-lg)) saturate(180%);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-2xl);
-  box-shadow: var(--glass-shadow), var(--glass-highlight);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
 }
 
 .login-header { text-align: center; margin-bottom: 2rem; }
@@ -178,14 +144,11 @@ const handleSubmit = async () => {
   justify-content: center;
   width: 60px;
   height: 60px;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(12px);
-          backdrop-filter: blur(12px);
-  border: 1px solid var(--glass-border);
+  background: var(--primary-light);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   color: var(--primary);
   margin-bottom: 1.25rem;
-  box-shadow: var(--glass-highlight);
 }
 
 .logo-icon { width: 32px; height: 32px; }
@@ -220,20 +183,18 @@ const handleSubmit = async () => {
 
 .form-input {
   padding: 0.875rem 1rem;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 0.9375rem;
   color: var(--text-primary);
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(8px);
-          backdrop-filter: blur(8px);
-  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  background: var(--bg-primary);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .form-input:focus {
   outline: none;
   border-color: var(--primary);
-  background: var(--glass-bg-strong);
+  box-shadow: 0 0 0 3px var(--primary-light);
 }
 .form-input::placeholder { color: var(--text-tertiary); }
 

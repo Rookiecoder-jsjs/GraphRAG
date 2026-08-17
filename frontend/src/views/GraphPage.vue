@@ -67,8 +67,6 @@
         :icon="GraphIcon"
         title="No Graph Data"
         description="Upload documents to initialize the knowledge graph"
-        decor="contour"
-        decor-tone="primary"
       />
 
       <template v-else>
@@ -265,6 +263,7 @@ import { useRouter } from 'vue-router'
 import { graphApi } from '../api/graph'
 import { categoryLabel, categoryColorToken, CATEGORY_COLOR_TOKEN } from '../utils/categorize'
 import { PageHeader, Button, Tag, Stat, EmptyState } from '../components/ui'
+import { useToast } from '../composables/toast'
 import GraphPanel from '../components/GraphPanel.vue'
 
 const GraphIcon = {
@@ -303,6 +302,7 @@ const ExternalLinkIcon = {
 }
 
 const router = useRouter()
+const { toast } = useToast()
 
 const ENTITY_TYPE_OPTIONS = ['PERSON', 'ORGANIZATION', 'LOCATION', 'CONCEPT', 'EVENT', 'TIME', 'OTHER']
 
@@ -535,13 +535,16 @@ const cancelDelete = () => {
 const confirmDeleteEntity = async () => {
   if (!selectedEntity.value) return
   deleteSaving.value = true
+  const name = selectedEntity.value.name
   try {
-    await graphApi.deleteEntity(selectedEntity.value.name)
+    await graphApi.deleteEntity(name)
     confirmDelete.value = false
     closeEntityPanel()
     loadFullGraph()
+    toast.success(`Deleted “${name}”`)
   } catch (err) {
     console.error('Delete failed:', err)
+    toast.error(err?.response?.data?.detail || `Failed to delete “${name}”. Please try again.`)
   } finally {
     deleteSaving.value = false
   }
@@ -975,12 +978,11 @@ onUnmounted(() => {
 .confirm-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(20, 20, 19, 0.45);
-  backdrop-filter: blur(2px);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  z-index: var(--z-modal);
 }
 .confirm-dialog {
   background: var(--bg-primary);

@@ -6,39 +6,33 @@
         <Button
           variant="secondary"
           size="sm"
-          mono
+          icon-position="only"
+          :icon="RefreshIcon"
           :loading="loading"
           @click="$emit('refresh')"
           title="Refresh"
-          class="tool-btn-mono"
         >
-          <RefreshIcon v-if="!loading" class="tool-icon" />
-          <span>Refresh</span>
         </Button>
         <div class="export-group">
           <Button
             variant="secondary"
             size="sm"
-            mono
+            icon-position="only"
+            :icon="DownloadIcon"
             :disabled="!graphData"
             @click="exportSVG"
             title="Download as SVG"
-            class="tool-btn-mono"
           >
-            <DownloadIcon class="tool-icon" />
-            <span>SVG</span>
           </Button>
           <Button
             variant="secondary"
             size="sm"
-            mono
+            icon-position="only"
+            :icon="ImageIcon"
             :disabled="!graphData"
             @click="exportPNG"
             title="Download as PNG"
-            class="tool-btn-mono"
           >
-            <ImageIcon class="tool-icon" />
-            <span>PNG</span>
           </Button>
         </div>
       </div>
@@ -58,7 +52,13 @@
 
       <!-- Empty state -->
       <div v-else-if="!loading" class="graph-state">
-        <div class="empty-icon">&#x2756;</div>
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="8 12 12 16 16 12" />
+            <line x1="12" y1="8" x2="12" y2="16" />
+          </svg>
+        </div>
         <p class="empty-text">No graph data available</p>
       </div>
     </div>
@@ -896,63 +896,79 @@ watch(theme, () => nextTick(renderGraph))
   position: absolute;
   bottom: 1.25rem;
   left: 1.25rem;
-  background: var(--bg-primary);
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius-sm);
+  z-index: var(--z-sticky);
+  min-width: 148px;
+  padding: 0.875rem 1.125rem;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  z-index: 10;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
 }
 
 .legend-title {
   display: block;
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 700;
-  color: var(--text-tertiary);
-  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 .legend-items {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 0.875rem;
-  max-width: 280px;
+  flex-direction: column;
+  gap: 0.5625rem;
 }
 
 .legend-item {
   display: flex;
   align-items: flex-start;
-  gap: 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
+  gap: 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  cursor: default;
 }
 
 .legend-dot {
-  width: 9px;
-  height: 9px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
-  margin-top: 4px;
+  margin-top: 3px;
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 .legend-text {
   display: flex;
   flex-direction: column;
-  gap: 0.125rem;
+  gap: 0.1875rem;
   min-width: 0;
 }
 
 .legend-row {
   display: flex;
   align-items: baseline;
-  gap: 0.375rem;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.legend-count {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  padding: 0.0625rem 0.4375rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  line-height: 1.4;
 }
 
 .legend-raws {
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   color: var(--text-tertiary);
   letter-spacing: 0.02em;
   white-space: nowrap;

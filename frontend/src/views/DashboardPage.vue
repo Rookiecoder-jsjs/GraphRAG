@@ -10,14 +10,19 @@
     <div class="dashboard-content">
       <LoadingState v-if="loading" message="Loading dashboard..." />
 
+      <ErrorState
+        v-else-if="loadError"
+        title="Failed to load dashboard"
+        description="Something went wrong while fetching your knowledge overview."
+        @retry="loadSummary"
+      />
+
       <EmptyState
         v-else-if="isEmpty"
         :icon="LayoutIcon"
         title="Your knowledge base is empty"
         description="Upload a document or start a chat to populate the dashboard."
         action-label="Upload document"
-        decor="paper"
-        decor-tone="muted"
         @action="goUpload"
       />
 
@@ -134,15 +139,16 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, h } from 'vue'
+import { ref, computed, onMounted, onActivated, onUnmounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { dashboardApi } from '../api/dashboard'
 import {
-  PageHeader, Card, Tag, Stat, LoadingState, EmptyState
+  PageHeader, Card, Tag, Stat, LoadingState, EmptyState, ErrorState
 } from '../components/ui'
 
 const router = useRouter()
 const loading = ref(true)
+const loadError = ref(false)
 const summary = ref({
   stats: {},
   recent_activity: [],
@@ -223,12 +229,14 @@ const loadSummary = async () => {
   summaryCtrl?.abort()
   summaryCtrl = new AbortController()
   loading.value = true
+  loadError.value = false
   try {
     const { data } = await dashboardApi.getSummary({ signal: summaryCtrl.signal })
     summary.value = data || { stats: {}, recent_activity: [], top_entities: [], top_tags: [], growth: [] }
   } catch (error) {
     if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return
     console.error('Failed to load dashboard:', error)
+    loadError.value = true
     summary.value = { stats: {}, recent_activity: [], top_entities: [], top_tags: [], growth: [] }
   } finally {
     loading.value = false
@@ -423,8 +431,8 @@ onUnmounted(() => summaryCtrl?.abort())
   align-items: center;
   justify-content: center;
 }
-.activity-icon.kind-document { background: var(--glass-bg); color: var(--primary); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border: 1px solid var(--glass-border); }
-.activity-icon.kind-message  { background: var(--glass-bg); color: var(--primary); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); border: 1px solid var(--glass-border); }
+.activity-icon.kind-document { background: var(--bg-secondary); color: var(--primary); border: 1px solid var(--border-light); }
+.activity-icon.kind-message  { background: var(--bg-secondary); color: var(--primary); border: 1px solid var(--border-light); }
 .activity-icon :deep(svg) { width: 100%; height: 100%; }
 .activity-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
 .activity-title {

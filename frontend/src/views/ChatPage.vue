@@ -1240,8 +1240,8 @@ const onCitationClick = (event) => {
 }
 .coverage-indicator.coverage-good .coverage-bar-fill { background: var(--success, #10b981); }
 .coverage-indicator.coverage-good .coverage-label { color: var(--success, #10b981); }
-.coverage-indicator.coverage-okay .coverage-bar-fill { background: #f59e0b; }
-.coverage-indicator.coverage-okay .coverage-label { color: #f59e0b; }
+.coverage-indicator.coverage-okay .coverage-bar-fill { background: var(--warning); }
+.coverage-indicator.coverage-okay .coverage-label { color: var(--warning); }
 .coverage-indicator.coverage-low .coverage-bar-fill { background: var(--error, #ef4444); }
 .coverage-indicator.coverage-low .coverage-label { color: var(--error, #ef4444); }
 

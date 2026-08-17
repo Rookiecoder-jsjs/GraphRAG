@@ -141,7 +141,7 @@
                     :cx="xForDate(e.first_seen)"
                     :cy="yForType(e.type || 'Unknown')"
                     :r="radiusFor(e.mention_count)"
-                    :fill="colorForType(e.type || 'Unknown')"
+                    :style="{ fill: colorForType(e.type || 'Unknown') }"
                     :opacity="hoveredName === e.name ? 1 : 0.78"
                     :stroke="hoveredName === e.name ? 'var(--text-primary)' : 'none'"
                     stroke-width="1.5"
@@ -199,7 +199,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, h } from 'vue'
+import { ref, computed, onMounted, onDeactivated, onUnmounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { timelineApi } from '../api/timeline'
 import { entitiesVisibleAt, dateRangeOf } from '../utils/timelineAnim'
@@ -275,11 +275,12 @@ const typeList = computed(() => {
   return Array.from(set).sort()
 })
 
+// 图表调色板走 CSS 变量（--chart-*），随主题自动切换且与令牌体系一致
 const PALETTE = [
-  '#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-  '#06b6d4', '#84cc16', '#f97316', '#ec4899', '#14b8a6',
+  'var(--chart-4)', 'var(--chart-3)', 'var(--chart-2)', 'var(--error)', 'var(--graph-concept)',
+  'var(--chart-5)', 'var(--chart-6)', 'var(--accent)', 'var(--chart-1)', 'var(--success)',
 ]
-const FALLBACK = '#9ca3af'
+const FALLBACK = 'var(--graph-other)'
 
 function colorForType(t) {
   const i = typeList.value.indexOf(t.toUpperCase())

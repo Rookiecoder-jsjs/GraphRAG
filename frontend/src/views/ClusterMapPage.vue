@@ -72,15 +72,22 @@
                 :key="p.doc_id"
                 class="point-group"
                 :class="{ hovered: hoveredId === p.doc_id }"
+                :tabindex="0"
+                role="button"
+                :aria-label="p.title || 'Open document'"
                 @mouseenter="hoveredId = p.doc_id"
                 @mouseleave="hoveredId = null"
+                @focus="hoveredId = p.doc_id"
+                @blur="hoveredId = null"
                 @click="goToDetail(p.doc_id)"
+                @keydown.enter="goToDetail(p.doc_id)"
+                @keydown.space.prevent="goToDetail(p.doc_id)"
               >
                 <circle
                   :cx="p._vx"
                   :cy="p._vy"
                   :r="hoveredId === p.doc_id ? 9 : 6"
-                  :fill="colorFor(p.file_type)"
+                  :style="{ fill: colorFor(p.file_type) }"
                   :stroke="hoveredId === p.doc_id ? 'var(--text-primary)' : 'none'"
                   stroke-width="1.5"
                 />
@@ -129,11 +136,12 @@ const loading = ref(true)
 const errorMessage = ref(null)
 const hoveredId = ref(null)
 
+// 图表调色板走 CSS 变量（--chart-*），随主题自动切换且与令牌体系一致
 const PALETTE = [
-  '#6366f1', '#10b981', '#f59e0b',
-  '#ef4444', '#8b5cf6', '#06b6d4',
+  'var(--chart-4)', 'var(--chart-3)', 'var(--chart-2)',
+  'var(--error)', 'var(--graph-concept)', 'var(--chart-5)',
 ]
-const FALLBACK_COLOR = '#9ca3af'
+const FALLBACK_COLOR = 'var(--graph-other)'
 
 const fileTypeColorIndex = computed(() => {
   const map = {}
@@ -275,8 +283,12 @@ onMounted(loadMap)
 .map-card { padding: 1rem; }
 .map-svg { width: 100%; height: auto; display: block; }
 
-.point-group { cursor: pointer; }
+.point-group { cursor: pointer; outline: none; }
 .point-group circle { transition: r 0.15s ease, stroke-width 0.15s ease; }
+.point-group:focus-visible circle {
+  stroke: var(--primary);
+  stroke-width: 2;
+}
 
 .point-label {
   font-family: var(--font-display);

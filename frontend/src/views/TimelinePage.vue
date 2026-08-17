@@ -9,6 +9,13 @@
     <div class="timeline-content">
       <LoadingState v-if="loading" message="Loading timeline..." />
 
+      <ErrorState
+        v-else-if="loadError"
+        title="Failed to load timeline"
+        description="Something went wrong while fetching your knowledge history."
+        @retry="loadTimeline"
+      />
+
       <EmptyState
         v-else-if="!hasAnything"
         :icon="ClockIcon"
@@ -114,7 +121,7 @@
 <script setup>
 import { ref, computed, onMounted, h } from 'vue'
 import { timelineApi } from '../api/timeline'
-import { PageHeader, Card, EmptyState, LoadingState } from '../components/ui'
+import { PageHeader, Card, EmptyState, LoadingState, ErrorState } from '../components/ui'
 
 const ClockIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
@@ -124,6 +131,7 @@ const ClockIcon = {
 }
 
 const loading = ref(true)
+const loadError = ref(false)
 const documentsByMonth = ref([])
 const recentDocuments = ref([])
 const entityTimeline = ref([])
@@ -139,6 +147,7 @@ const hasAnything = computed(() =>
 
 const loadTimeline = async () => {
   loading.value = true
+  loadError.value = false
   try {
     const { data } = await timelineApi.get()
     documentsByMonth.value = data?.documents_by_month || []
@@ -146,9 +155,7 @@ const loadTimeline = async () => {
     entityTimeline.value = data?.entity_timeline || []
   } catch (error) {
     console.error('Failed to load timeline:', error)
-    documentsByMonth.value = []
-    recentDocuments.value = []
-    entityTimeline.value = []
+    loadError.value = true
   } finally {
     loading.value = false
   }
@@ -353,11 +360,11 @@ onMounted(loadTimeline)
   margin: 0 auto;
   z-index: 1;
 }
-.marker-person .marker-dot { background: #8b6cef; }
+.marker-person .marker-dot { background: var(--graph-person); }
 .marker-product .marker-dot { background: var(--primary); }
-.marker-org .marker-dot { background: #d97706; }
-.marker-place .marker-dot { background: #059669; }
-.marker-concept .marker-dot { background: #6366f1; }
+.marker-org .marker-dot { background: var(--accent); }
+.marker-place .marker-dot { background: var(--chart-5); }
+.marker-concept .marker-dot { background: var(--graph-concept); }
 .marker-default .marker-dot { background: var(--text-tertiary); }
 
 .entity-info { flex: 1; min-width: 0; }
