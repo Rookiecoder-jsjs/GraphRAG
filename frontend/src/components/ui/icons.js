@@ -106,6 +106,23 @@ export const InboxIcon = make(
   p('path', { d: 'M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' })
 )
 
+export const ClockIcon = make(
+  p('circle', { cx: '12', cy: '12', r: '10' }),
+  p('polyline', { points: '12 6 12 12 16 14' })
+)
+
+export const PlusIcon = make(
+  p('line', { x1: '12', y1: '5', x2: '12', y2: '19' }),
+  p('line', { x1: '5', y1: '12', x2: '19', y2: '12' })
+)
+
+export const TrashIcon = make(
+  p('polyline', { points: '3 6 5 6 21 6' }),
+  p('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }),
+  p('line', { x1: '10', y1: '11', x2: '10', y2: '17' }),
+  p('line', { x1: '14', y1: '11', x2: '14', y2: '17' })
+)
+
 // 品牌 Logo（知识图谱六边形）
 export const LogoIcon = make(
   p('polygon', { points: '12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2' }),

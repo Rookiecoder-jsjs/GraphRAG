@@ -6,6 +6,7 @@ const Home = () => import('../views/Home.vue')
 const DocumentsPage = () => import('../views/DocumentsPage.vue')
 const GraphPage = () => import('../views/GraphPage.vue')
 const ChatPage = () => import('../views/ChatPage.vue')
+const ConversationHistoryPage = () => import('../views/ConversationHistoryPage.vue')
 const SearchPage = () => import('../views/SearchPage.vue')
 const TimelinePage = () => import('../views/TimelinePage.vue')
 const DashboardPage = () => import('../views/DashboardPage.vue')
@@ -72,6 +73,13 @@ const routes = [
         path: 'chat',
         name: 'Chat',
         component: ChatPage
+      },
+      {
+        // Conversation history management. Literal path so it never
+        // collides with anything under /chat.
+        path: 'chat/history',
+        name: 'ChatHistory',
+        component: ConversationHistoryPage
       },
       {
         path: 'search',

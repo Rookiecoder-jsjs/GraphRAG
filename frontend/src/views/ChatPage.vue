@@ -46,6 +46,18 @@
             <div v-if="conversations.length === 0" class="dropdown-empty">
               暂无会话历史
             </div>
+            <div class="dropdown-divider" />
+            <Button
+              variant="ghost"
+              size="sm"
+              block
+              :icon="ClockIcon"
+              icon-position="left"
+              class="dropdown-manage"
+              @click="goHistory"
+            >
+              管理全部会话
+            </Button>
           </div>
         </div>
       </template>
@@ -283,6 +295,7 @@
 
 <script setup>
 import { ref, watch, nextTick, onMounted, onActivated, onDeactivated, onUnmounted, h } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { chatApi } from '../api/chat'
 import { createSseParser } from '../utils/sse'
 import { PageHeader, Button, Tag, Dot, Switch, EmptyState } from '../components/ui'
@@ -338,6 +351,24 @@ const ThumbsDownIcon = {
   ])
 }
 
+const route = useRoute()
+const router = useRouter()
+
+// Deep-link from the history-management page: /chat?conversation=<id> loads
+// that conversation on arrival (and on re-activation, e.g. picking a different
+// one from the history page while ChatPage stays cached in KeepAlive).
+const handleDeepLink = () => {
+  const id = route.query.conversation
+  if (id && String(id) !== currentConversationId.value) {
+    loadConversation(String(id))
+  }
+}
+
+const goHistory = () => {
+  showDropdown.value = false
+  router.push('/chat/history')
+}
+
 const handleClickOutside = (event) => {
   if (showDropdown.value && !event.target.closest('.conversation-dropdown')) {
     showDropdown.value = false
@@ -348,11 +379,13 @@ onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   messagesContainer.value?.addEventListener('click', onCitationClick)
   loadConversations()
+  handleDeepLink()
   scrollToBottom()
 })
 
 onActivated(() => {
   loadConversations()
+  handleDeepLink()
 })
 
 onDeactivated(() => {

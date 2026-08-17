@@ -85,7 +85,7 @@ import { useTheme } from '../../composables/useTheme'
 import { useSidebar } from '../../composables/sidebar'
 import {
   LayoutGridIcon, FileTextIcon, SearchIcon, Share2Icon,
-  MessageSquareIcon, BarChartIcon, MapIcon, PlayIcon,
+  MessageSquareIcon, BarChartIcon, MapIcon, PlayIcon, ClockIcon,
   SunIcon, MoonIcon, LogOutIcon, ChevronLeftIcon, ChevronRightIcon,
   LogoIcon
 } from '../ui/icons'
@@ -129,7 +129,8 @@ const navGroups = [
   {
     label: '协作',
     items: [
-      { path: '/chat', label: '对话', icon: MessageSquareIcon }
+      { path: '/chat', label: '对话', icon: MessageSquareIcon },
+      { path: '/chat/history', label: '历史会话', icon: ClockIcon }
     ]
   }
 ]

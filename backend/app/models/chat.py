@@ -40,11 +40,20 @@ class ChatResponse(BaseModel):
 
 
 class Conversation(BaseModel):
-    """Conversation model."""
+    """Conversation model.
+
+    ``message_count`` / ``last_message`` / ``last_activity`` are enrichment
+    fields populated by the list endpoint (subqueries over messages) so the
+    history-management UI can show a preview, a message count and a
+    last-activity time without N+1 round-trips.
+    """
     id: str
     user_id: int
     title: Optional[str] = None
     created_at: datetime
+    message_count: int = 0
+    last_message: Optional[str] = None
+    last_activity: Optional[datetime] = None
 
     class Config:
         from_attributes = True

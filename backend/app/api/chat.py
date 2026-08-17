@@ -744,12 +744,29 @@ async def chat_stream(
 async def list_conversations(
     current_user: dict = Depends(get_current_user)
 ):
-    """List user's conversations."""
+    """List user's conversations.
+
+    Enriched with message count, last-message preview and last-activity time
+    (one query, no N+1) and ordered by last activity so the most recently
+    touched conversation surfaces first in the history-management page.
+    """
     user_id = current_user["id"]
 
     async with get_db() as db:
         async with db.execute(
-            "SELECT id, user_id, title, created_at FROM conversations WHERE user_id = ? ORDER BY created_at DESC",
+            """
+            SELECT c.id, c.user_id, c.title, c.created_at,
+                   (SELECT COUNT(*) FROM messages m
+                     WHERE m.conversation_id = c.id) AS message_count,
+                   (SELECT m.content FROM messages m
+                     WHERE m.conversation_id = c.id
+                     ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS last_message,
+                   (SELECT MAX(m.created_at) FROM messages m
+                     WHERE m.conversation_id = c.id) AS last_activity
+            FROM conversations c
+            WHERE c.user_id = ?
+            ORDER BY COALESCE(last_activity, c.created_at) DESC
+            """,
             (user_id,)
         ) as cursor:
             rows = await cursor.fetchall()
