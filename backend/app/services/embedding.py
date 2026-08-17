@@ -136,10 +136,22 @@ class EmbeddingService:
                     )
                     return None
                 try:
-                    return _deserialize_embedding(blob)
+                    embedding = _deserialize_embedding(blob)
                 except (ValueError, UnicodeDecodeError) as e:
                     await self._delete_corrupt_cache_row(db, text_hash, str(e))
                     return None
+                # Dimension guard: vectors cached by an older model config
+                # (or before the `dimensions` param was added — Qwen3
+                # defaults to 4096) would be rejected by Chroma with
+                # InvalidDimensionException. Treat length mismatch as stale
+                # and re-embed rather than surfacing a 500 later.
+                if len(embedding) != self.settings.EMBEDDING_DIM:
+                    await self._delete_corrupt_cache_row(
+                        db, text_hash,
+                        f"dim {len(embedding)} != {self.settings.EMBEDDING_DIM}",
+                    )
+                    return None
+                return embedding
         return None
 
     async def _cache_embedding(self, text_hash: str, text: str, embedding: List[float]) -> None:
@@ -233,7 +245,16 @@ class EmbeddingService:
 
         async with self._semaphore:
             data = await self._call_with_retry(
-                {"model": self.model, "input": text, "encoding_format": "float"}
+                {
+                    "model": self.model,
+                    "input": text,
+                    "encoding_format": "float",
+                    # Qwen3-Embedding-8B defaults to 4096 dims; without an
+                    # explicit `dimensions` the vector won't match the
+                    # collection dimensionality (EMBEDDING_DIM) and Chroma
+                    # rejects the query with InvalidDimensionException.
+                    "dimensions": self.settings.EMBEDDING_DIM,
+                }
             )
 
         try:
@@ -287,6 +308,9 @@ class EmbeddingService:
                         "model": self.model,
                         "input": batch_texts,
                         "encoding_format": "float",
+                        # Keep batch and single-embed dimensions in sync with
+                        # the collection (EMBEDDING_DIM); see embed_single.
+                        "dimensions": self.settings.EMBEDDING_DIM,
                     }
                 )
 
