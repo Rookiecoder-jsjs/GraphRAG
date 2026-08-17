@@ -119,11 +119,24 @@ CHROMA_PORT=8000
 ```
 
 ### 启动
+
+> ⚠️ **虚拟环境位置**：后端 Python 环境在**仓库根 `.venv`**（依赖齐全，清单在根 `requirements.txt`）。
+> `backend/.venv` 是空壳（只有 pip/setuptools，无依赖），**不要**在它里面激活或装包。
+> 首次部署：`python -m venv .venv` 建在根目录，然后
+> `./.venv/Scripts/python.exe -m pip install -r requirements.txt`（Windows；mac/Linux 为 `bin/python`）。
+> 一键启动推荐 `npm run dev` / `npm run backend` —— 走 `scripts/run-backend.mjs`，会**自动按优先级**找到根 `.venv`（根 → 上级 → backend），无需手动指定 Python。
+
 ```bash
-# 后端
+# 推荐：一键启动前后端（根目录执行）
+npm run dev                   # concurrently 同时起后端(8001)+前端(5173)
+
+# 或分开启动：
+npm run backend               # 仅后端（launcher 自动发现根 .venv）
+npm run frontend              # 仅前端
+
+# 手动启动后端（显式用根 .venv，CWD 必须是 backend 以锚定 ./data 与 .env）
 cd backend
-.venv/Scripts/activate        # Windows
-uvicorn app.main:app --reload --port 8001
+../.venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8001
 
 # 前端
 cd frontend
