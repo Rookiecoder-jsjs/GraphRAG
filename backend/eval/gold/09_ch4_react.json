@@ -1,0 +1,12 @@
+{
+  "_comment": "第4章 智能体经典范式构建：ReAct（Reason+Act）核心思想——思考与行动结合。实体锚定（ReAct 是书中具体概念）。",
+  "id": "ch4-react",
+  "query": "ReAct 范式的核心思想是什么？",
+  "expected_chunk_ids": [
+    "eeb68437-9df6-4bbe-889c-49ed6cc05ac5"
+  ],
+  "expected_keywords": ["ReAct", "推理", "行动"],
+  "expected_answer": "ReAct 由 Shunyu Yao 于 2022 年提出，其核心思想是模仿人类解决问题的方式，将推理（Reasoning）与行动（Acting）紧密结合，让智能体边想边做、动态调整。",
+  "difficulty": "medium",
+  "tags": ["entity-anchored", "paradigm"]
+}

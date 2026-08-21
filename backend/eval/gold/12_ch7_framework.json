@@ -1,0 +1,14 @@
+{
+  "_comment": "第7章 构建你的Agent框架：框架核心模块。gold 修正——补充 7.3 框架接口实现与 7.3.3 Agent 抽象基类（核心模块的实际实现段落），多候选降低 rewrite 随机性影响。",
+  "id": "ch7-framework",
+  "query": "第七章构建的 Agent 框架包含哪些核心模块？",
+  "expected_chunk_ids": [
+    "584fdf31-e2b1-40d9-98e2-bac3a453c1d8",
+    "c1c70728-60e1-42c0-8009-c46a9deeb959",
+    "a0db3ed1-ee2f-4254-84d4-ebfe85c199f0"
+  ],
+  "expected_keywords": ["框架", "agent", "工具"],
+  "expected_answer": "第七章构建的 HelloAgents 框架包含核心框架层（core/，含 agent.py 等）、工具系统（tools/，含 search.py 等）等模块：HelloAgentsLLM（与大模型通信）、Agent 抽象基类（智能体顶层抽象）、Agent 范式的框架化实现等，从零实现每个组件。",
+  "difficulty": "medium",
+  "tags": ["factual", "framework"]
+}

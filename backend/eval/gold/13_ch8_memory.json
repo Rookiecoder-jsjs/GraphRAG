@@ -1,0 +1,14 @@
+{
+  "_comment": "第8章 记忆与检索：记忆系统组成部分。gold 二次修正——expected_answer 对齐『记忆类型』路径（模型按查询『包含哪些部分』合理作答为记忆类型，原基准误设『架构组成』导致 judge 错位扣分）。",
+  "id": "ch8-memory",
+  "query": "智能体的记忆系统包含哪些部分？",
+  "expected_chunk_ids": [
+    "006a6013-3495-4a45-a93f-c0ef01badbad",
+    "3cdd8a28-94a7-42a0-b35d-53279cd670ce",
+    "e6176ae5-378a-44ba-ac61-e397f6bf1778"
+  ],
+  "expected_keywords": ["记忆", "memory", "RAG"],
+  "expected_answer": "智能体的记忆系统包含多种记忆类型：工作记忆（短期、会话绑定）、情景记忆（长期交互事件）、语义记忆（抽象知识与概念）、感知记忆（多模态信息），并有记忆的添加、检索、整合与遗忘等管理机制，以及 RAG 系统提供外部知识检索能力。",
+  "difficulty": "medium",
+  "tags": ["factual", "memory-rag"]
+}

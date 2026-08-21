@@ -1,0 +1,12 @@
+{
+  "_comment": "第3章 大语言模型基础：Transformer 相比 RNN 解决的核心问题（并行计算/长距离依赖）。gold chunk 是 3.1.2 Transformer 架构解析。",
+  "id": "ch3-llm",
+  "query": "Transformer 相比 RNN 解决了什么问题？",
+  "expected_chunk_ids": [
+    "3994e737-cc04-4289-a7b2-1f3ef995f95a"
+  ],
+  "expected_keywords": ["Transformer", "RNN", "注意力"],
+  "expected_answer": "RNN 及 LSTM 通过循环结构处理序列数据，但必须按顺序计算（第 t 步要等第 t-1 步完成），无法并行、难以捕捉长距离依赖。Transformer 通过注意力机制解决了顺序计算的瓶颈，可并行处理序列数据并更好地捕捉长距离依赖。",
+  "difficulty": "medium",
+  "tags": ["factual", "llm"]
+}

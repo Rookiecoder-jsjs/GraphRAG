@@ -1,0 +1,13 @@
+{
+  "_comment": "第6章 框架开发实践：AutoGen 的核心思想。gold 修正——原只填主 chunk（6.1.2 总述段，AutoGen 实质在子 chunk），改为 AutoGen 实质内容所在 chunk：6.2 框架一 AutoGen 总述 + 6.1.2 子 chunk（AutoGen 通过对话协作）。",
+  "id": "ch6-autogen",
+  "query": "AutoGen 的核心思想是什么？",
+  "expected_chunk_ids": [
+    "640d1a7a-a9ec-43b0-b371-11c763137f85",
+    "d640f2ad-adc3-4125-bcd7-4d3220c1bb1d_4"
+  ],
+  "expected_keywords": ["AutoGen", "对话", "协作"],
+  "expected_answer": "AutoGen 的设计哲学根植于『以对话驱动协作』，将复杂的任务解决流程映射为不同角色的智能体之间的多轮对话，智能体自主对话、相互启发配合，共同完成任务。",
+  "difficulty": "medium",
+  "tags": ["entity-anchored", "framework"]
+}

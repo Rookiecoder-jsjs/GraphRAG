@@ -1,0 +1,12 @@
+{
+  "_comment": "第5章 基于低代码平台的智能体搭建：Coze（扣子）是具体实体。gold chunk 是 5.2 平台一的介绍。",
+  "id": "ch5-coze",
+  "query": "Coze 是什么？有什么特点？",
+  "expected_chunk_ids": [
+    "601de625-6b66-41e9-bca3-f82131b90050"
+  ],
+  "expected_keywords": ["Coze", "智能体", "可视化"],
+  "expected_answer": "Coze（扣子）是一个 AI 智能体制作工具，也是市面上应用最广泛的智能体平台之一。以直观的可视化界面和丰富的功能模块让用户轻松创建各种智能体应用，一大亮点是其强大的生态集成能力。",
+  "difficulty": "medium",
+  "tags": ["entity-anchored", "lowcode"]
+}

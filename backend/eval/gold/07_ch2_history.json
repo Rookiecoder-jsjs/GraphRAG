@@ -1,0 +1,12 @@
+{
+  "_comment": "第2章 智能体发展史：发展阶段与演进阶梯。gold chunk 是章节开头的总述段。",
+  "id": "ch2-history",
+  "query": "智能体发展经历了哪些阶段？",
+  "expected_chunk_ids": [
+    "4c85d474-672a-486a-831c-6d236bcea1e6"
+  ],
+  "expected_keywords": ["智能体", "发展", "演进"],
+  "expected_answer": "智能体发展从人工智能领域的古典时代出发：先通过逻辑与符号的规则体系定义最早的『智能』，继而从单一、集中的智能模型转向分布式、协作式智能思想，最终『学习』范式彻底改变了智能体获取能力的方式。",
+  "difficulty": "easy",
+  "tags": ["factual", "history"]
+}
