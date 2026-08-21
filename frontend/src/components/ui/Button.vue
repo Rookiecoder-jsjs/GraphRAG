@@ -5,7 +5,6 @@
     :type="tag === 'button' ? type : undefined"
     :disabled="disabled || loading"
     :to="to"
-    :style="cssVars"
     @click="$emit('click', $event)"
   >
     <Spinner v-if="loading" size="sm" class="btn-spinner" />
@@ -36,7 +35,6 @@ defineEmits(['click'])
 
 const isIconOnly = computed(() => props.iconPosition === 'only')
 const tag = computed(() => (props.to ? 'router-link' : 'button'))
-const cssVars = computed(() => ({}))
 </script>
 
 <style scoped>
