@@ -1,16 +1,14 @@
 {
-  "_comment": [
-    "Cross-chunk synthesis — the answer requires combining info from",
-    "multiple chunks. Good test for whether the reranker surfaces the",
-    "right context to the LLM (recall@k matters more than hit@k here)."
-  ],
-  "id": "cross-chunk-01",
-  "query": "How do A and B relate to each other according to the documentation?",
+  "_comment": "跨 chunk 综合：Workflow 与 Agent 的差异。答案需要综合 1.4.3 节主句（Workflow 按部就班 vs Agent 自主达目标）+ 工作流定义段 + Agent 自主执行示例段。",
+  "id": "synthesis-01",
+  "query": "Workflow 和 Agent 有什么区别？",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_1",
-    "REPLACE_WITH_REAL_CHUNK_UUID_2"
+    "2740f6ef-4e1a-4335-be24-7bafdb3fb75f",
+    "2740f6ef-4e1a-4335-be24-7bafdb3fb75f_1",
+    "2740f6ef-4e1a-4335-be24-7bafdb3fb75f_2"
   ],
-  "expected_keywords": [],
+  "expected_keywords": ["Workflow", "Agent", "预先定义"],
+  "expected_answer": "Workflow 是让 AI 按部就班地执行预先定义、结构化编排的指令（静态流程图，每一步、每个判断条件都被精确预设）；Agent 则是赋予 AI 自由度去自主达成目标（能理解环境、推理、制定计划并动态采取行动）。前者是确定的执行，后者是目标导向的自主决策。",
   "difficulty": "medium",
   "tags": ["synthesis", "multi-chunk"]
 }

@@ -1,19 +1,12 @@
 {
-  "_comment": [
-    "Entity-anchored question designed to benefit from the graph-RAG path.",
-    "The user is asking about a specific entity (e.g. 硅基流动) — the",
-    "graph should MENTION this entity, and the chunks that MENTION it are",
-    "the right answers. Use --use-graph-rag to see if this case's hit@5",
-    "improves vs the baseline (no graph).",
-    "Replace expected_chunk_ids with chunk IDs that actually contain",
-    "information about the entity you care about."
-  ],
-  "id": "graph-rag-01",
-  "query": "Tell me about 硅基流动 (SiliconFlow).",
+  "_comment": "实体锚定问题：Trae 是知识库中的一个具体实体（AI 编程工具）。启用 --use-graph-rag 时，图谱 MENTIONS 通道应让该 chunk 排名更靠前——用于对比实验（graph-rag 开 vs 关）。",
+  "id": "entity-01",
+  "query": "Trae 是什么？它有什么特点？",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_1"
+    "30814415-ed78-43e8-b8d3-6c33b0a5baa5_2"
   ],
-  "expected_keywords": [],
+  "expected_keywords": ["Trae", "代码", "开发"],
+  "expected_answer": "Trae 是新兴的 AI 编程工具，专注于为开发者提供智能化的代码生成和优化服务，通过深度学习分析代码模式提供精准的代码建议和自动化重构方案。特色是轻量级设计、快速响应，适合频繁迭代和快速原型开发的场景。",
   "difficulty": "medium",
   "tags": ["entity-anchored", "graph-rag"]
 }

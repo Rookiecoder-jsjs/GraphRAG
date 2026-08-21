@@ -1,25 +1,13 @@
 {
-  "_comment": [
-    "Cross-document comparison question. The user wants the LLM to",
-    "organize the answer to highlight agreements and disagreements",
-    "between at least two sources. Toggle Compare on (in the chat UI",
-    "or pass compare_mode=True to the API) so the prompt context is",
-    "augmented with '(from: Doc Title)' markers and the COMPARISON MODE",
-    "instruction.",
-    "expected_keywords: hand-pick 1-2 phrases that prove the LLM did",
-    "an actual cross-doc comparison (e.g. 'Doc A says ...', 'in",
-    "contrast', 'however', 'on the other hand')."
-  ],
+  "_comment": "工具对比问题：Copilot 与 Trae 的差异，答案需综合同一节内的两个子 chunk。可配合 compare_mode 让 prompt 带 COMPARISON 指令。",
   "id": "compare-01",
-  "query": "Compare and contrast 硅基流动 with 阿里云百炼.",
+  "query": "Copilot 和 Trae 有什么不同？",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_FROM_DOC_A",
-    "REPLACE_WITH_REAL_CHUNK_UUID_FROM_DOC_B"
+    "30814415-ed78-43e8-b8d3-6c33b0a5baa5_1",
+    "30814415-ed78-43e8-b8d3-6c33b0a5baa5_2"
   ],
-  "expected_keywords": [
-    "百炼",
-    "硅基流动"
-  ],
+  "expected_keywords": ["Copilot", "Trae", "GitHub"],
+  "expected_answer": "Copilot 由 GitHub 与 OpenAI 联合开发，深度集成于 VS Code 等主流编辑器，以强大的代码自动补全能力闻名，并通过 Copilot Chat 扩展对话式编程；Trae 是新兴的 AI 编程工具，专注智能化代码生成和优化，通过深度学习分析代码模式，特色是轻量级设计和快速响应，适合快速迭代与原型开发。",
   "difficulty": "medium",
   "tags": ["comparison", "multi-doc"]
 }

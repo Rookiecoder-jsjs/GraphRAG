@@ -1,17 +1,13 @@
 {
-  "_comment": [
-    "Single-document factual lookup. The model should retrieve the right",
-    "chunk and answer from it. Replace expected_chunk_ids with real IDs",
-    "from your knowledge base — see README 'How to add gold'.",
-    "expected_keywords is a cheap fallback: pass [] or omit if you have",
-    "chunk_ids filled in; the eval will use the more precise chunk metrics."
-  ],
+  "_comment": "单文档事实查询：智能体的定义。gold chunk 是 1.1 节的『什么是智能体』定义段（传感器感知环境、执行器采取行动、自主达成目标）。",
   "id": "factual-01",
-  "query": "What does the document say about the [main topic]?",
+  "query": "什么是智能体？请给出定义。",
   "expected_chunk_ids": [
-    "REPLACE_WITH_REAL_CHUNK_UUID_1"
+    "bb2b88bc-85ee-422e-af18-ca55b756bb92",
+    "e521de91-6766-43f4-bd4c-c1f4af98dec4"
   ],
-  "expected_keywords": [],
+  "expected_keywords": ["智能体", "传感器", "执行器", "目标"],
+  "expected_answer": "智能体被定义为任何能够通过传感器感知其所处环境，并自主地通过执行器采取行动以达成特定目标的实体。定义包含四个基本要素：环境、感知、执行与自主性。",
   "difficulty": "easy",
   "tags": ["factual", "single-doc"]
 }

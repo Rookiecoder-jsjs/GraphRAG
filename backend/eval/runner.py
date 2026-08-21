@@ -42,6 +42,13 @@ from .metrics import (
 # A retriever takes a query and returns chunk_ids in rank order.
 Retriever = Callable[[str, int], Awaitable[List[str]]]
 
+# A judge scores the generation step: (query, answer, context_chunks, case)
+# -> generation metrics dict. `context_chunks` is the list of retrieved chunk
+# dicts (each with a content/text key) that the RAG answer was built from.
+Judge = Callable[
+    [str, str, List[Dict[str, Any]], "GoldCase"], Awaitable[Dict[str, Any]]
+]
+
 DEFAULT_K_VALUES = (1, 3, 5, 10)
 
 
@@ -61,6 +68,7 @@ class GoldCase:
     query: str
     expected_chunk_ids: List[str] = field(default_factory=list)
     expected_keywords: List[str] = field(default_factory=list)
+    expected_answer: str = ""
     difficulty: str = ""
     tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -88,6 +96,7 @@ def _case_from_json(path: Path) -> GoldCase:
         query=data["query"],
         expected_chunk_ids=list(data.get("expected_chunk_ids") or []),
         expected_keywords=list(data.get("expected_keywords") or []),
+        expected_answer=data.get("expected_answer") or "",
         difficulty=data.get("difficulty", ""),
         tags=list(data.get("tags") or []),
         metadata=meta,
@@ -153,22 +162,35 @@ async def evaluate_case(
     case: GoldCase,
     retriever: Retriever,
     k_values: Sequence[int] = DEFAULT_K_VALUES,
-    answer_provider: Optional[Callable[[str], Awaitable[str]]] = None,
+    answer_provider: Optional[Callable[[str], Awaitable[Any]]] = None,
+    judge: Optional[Judge] = None,
 ) -> Dict[str, Any]:
     """Run one gold case through the retriever and return a result row.
 
     If `answer_provider` is given (a callable that runs the full RAG
     generation for the query), we also score keyword coverage — useful
-    for refusal cases that don't have gold chunk IDs.
+    for refusal cases that don't have gold chunk IDs. The provider may
+    return a plain answer string (legacy) OR a `(answer, context_chunks)`
+    tuple; the chunks are passed to `judge` so generation metrics can
+    verify the answer against the actual retrieved context.
     """
     top_k = max(k_values)
     retrieved = await retriever(case.query, top_k)
 
     metrics = compute_chunk_metrics(retrieved, case.expected_chunk_ids, k_values)
 
-    if answer_provider is not None and case.expected_keywords:
-        answer = await answer_provider(case.query)
-        metrics.update(compute_keyword_metrics(answer, case.expected_keywords))
+    answer_text = ""
+    if answer_provider is not None:
+        provider_result = await answer_provider(case.query)
+        if isinstance(provider_result, tuple):
+            answer_text, context_chunks = provider_result
+        else:
+            answer_text, context_chunks = provider_result, []
+        if case.expected_keywords:
+            metrics.update(compute_keyword_metrics(answer_text, case.expected_keywords))
+        if judge is not None:
+            gen_metrics = await judge(case.query, answer_text, context_chunks, case)
+            metrics.update(gen_metrics or {})
 
     return {
         "id": case.id,
@@ -177,6 +199,7 @@ async def evaluate_case(
         "tags": case.tags,
         "retrieved": list(retrieved),
         "metrics": metrics,
+        "answer": answer_text,  # empty unless an answer provider ran
     }
 
 
@@ -186,7 +209,8 @@ async def run_evaluation(
     retriever: Retriever,
     gold_set: Sequence[GoldCase],
     k_values: Sequence[int] = DEFAULT_K_VALUES,
-    answer_provider: Optional[Callable[[str], Awaitable[str]]] = None,
+    answer_provider: Optional[Callable[[str], Awaitable[Any]]] = None,
+    judge: Optional[Judge] = None,
 ) -> Dict[str, Any]:
     """Run every case sequentially. Returns a structured report dict."""
     started = time.time()
@@ -205,7 +229,7 @@ async def run_evaluation(
             )
             continue
         per_case.append(
-            await evaluate_case(case, retriever, k_values, answer_provider)
+            await evaluate_case(case, retriever, k_values, answer_provider, judge)
         )
     elapsed = time.time() - started
 
@@ -249,8 +273,13 @@ def format_markdown_report(report: Dict[str, Any]) -> str:
 
     lines.append("## Per-case results")
     lines.append("")
-    lines.append("| ID | Difficulty | Hit@1 | Hit@5 | MRR | nDCG@5 | Tags |")
-    lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+    lines.append(
+        "| ID | Difficulty | Hit@1 | Hit@5 | MRR | nDCG@5 | "
+        "Faith | Halluc | Relv | Cite | Corr | Tags |"
+    )
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    gen_keys = ("faithfulness", "hallucination_rate", "answer_relevance",
+                "citation_accuracy", "answer_correctness")
     for row in report["cases"]:
         m = row["metrics"]
         hit1 = m.get("hit@1")
@@ -261,10 +290,15 @@ def format_markdown_report(report: Dict[str, Any]) -> str:
         hit5_s = f"{hit5:.2f}" if isinstance(hit5, (int, float)) else "-"
         mrr_s = f"{mrr_v:.2f}" if isinstance(mrr_v, (int, float)) else "-"
         ndcg_s = f"{ndcg5:.2f}" if isinstance(ndcg5, (int, float)) else "-"
+        gen_s = []
+        for k in gen_keys:
+            v = m.get(k)
+            gen_s.append(f"{v:.2f}" if isinstance(v, (int, float)) else "-")
         lines.append(
             f"| {row['id']} | {row['difficulty'] or '-'} | "
             f"{hit1_s} | {hit5_s} | {mrr_s} | {ndcg_s} | "
-            f"{', '.join(row['tags'])} |"
+            + " | ".join(gen_s)
+            + f" | {', '.join(row['tags'])} |"
         )
     return "\n".join(lines)
 
@@ -296,24 +330,45 @@ async def _build_rag_context_retriever(
     return _retrieve
 
 
-async def _build_rag_answer_provider(user_id: int):
-    """Optional: produce the LLM-generated answer for keyword coverage."""
+async def _build_rag_answer_provider(user_id: int, use_graph_rag: bool = False):
+    """Optional: produce the LLM-generated answer for the generation step.
+
+    Returns a `(answer, context_chunks)` tuple so the judge can verify the
+    answer against the exact chunks the RAG answer was built from.
+    """
     from app.api.chat import build_rag_context
     from app.services.llm import get_llm_service
 
-    async def _answer(query: str) -> str:
+    async def _answer(query: str):
         ctx = await build_rag_context(
             query=query, user_id=user_id, top_k=5,
             use_hybrid=True, use_query_rewrite=True,
+            use_graph_rag=use_graph_rag,
         )
         llm = await get_llm_service()
-        return await llm.generate_rag_response(
+        answer = await llm.generate_rag_response(
             query=query,
             context_chunks=ctx["chunks"],
             related_entities=ctx["entities"],
             related_relations=ctx["relations"],
         )
+        return answer, ctx["chunks"]
     return _answer
+
+
+def _build_judge():
+    """Wire the LLM-as-judge to the runner's Judge callable signature."""
+    from .judge import judge as run_judge
+
+    async def _judge(query: str, answer: str, context_chunks, case):
+        return await run_judge(
+            query=query,
+            answer=answer,
+            context_chunks=context_chunks,
+            expected_answer=getattr(case, "expected_answer", "") or "",
+            expected_keywords=case.expected_keywords,
+        )
+    return _judge
 
 
 def _build_argparser() -> argparse.ArgumentParser:
@@ -374,13 +429,18 @@ async def main_async(argv: Optional[Sequence[str]] = None) -> int:
     retriever = await _build_rag_context_retriever(
         args.user_id, use_graph_rag=args.use_graph_rag,
     )
-    answer_provider = None if args.no_llm else await _build_rag_answer_provider(args.user_id)
+    answer_provider = None if args.no_llm else await _build_rag_answer_provider(
+        args.user_id, use_graph_rag=args.use_graph_rag,
+    )
+    # LLM-as-judge for generation metrics; skipped with --no-llm.
+    judge = None if args.no_llm else _build_judge()
 
     report = await run_evaluation(
         retriever=retriever,
         gold_set=gold_set,
         k_values=args.k_values,
         answer_provider=answer_provider,
+        judge=judge,
     )
 
     if args.json:

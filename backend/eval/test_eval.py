@@ -65,16 +65,12 @@ def check(name: str, cond: bool, detail: str = ""):
         _failures.append(name)
 
 
-# `pytest.approx` may not be importable when running standalone, so provide
-# a minimal shim.
-try:
-    import pytest  # noqa: F401
-    _HAS_PYTEST = True
-    _approx = pytest.approx
-except ImportError:
-    _HAS_PYTEST = False
-    def _approx(value, expected, tol=1e-9):
-        return abs(value - expected) <= tol
+# Approximate equality used inside check(cond), which needs a real bool.
+# `pytest.approx` returns an Approx object (truthy in weird ways and it
+# raises in a boolean context when pytest is installed), so always compare
+# numerically to a tolerance — works both standalone and under pytest.
+def _approx(value, expected, tol=1e-9):
+    return abs(value - expected) <= tol
 
 
 # =========================================================================
@@ -446,8 +442,8 @@ def main() -> int:
         try:
             fn()
         except TypeError as e:
-            if "tmp_path" in str(e) and not _HAS_PYTEST:
-                # Use stdlib tmp_path stand-in
+            if "tmp_path" in str(e):
+                # Use stdlib tmp_path stand-in (no pytest fixture standalone)
                 import tempfile
                 with tempfile.TemporaryDirectory() as td:
                     tmp_path = Path(td)
