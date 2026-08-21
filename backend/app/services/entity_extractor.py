@@ -2,14 +2,13 @@
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import jieba
 import jieba.posseg as pseg
 
 from app.config import get_settings
 from app.services.llm import get_llm_service
-from app.services.progress_tracker import get_progress_emitter
 
 logger = logging.getLogger(__name__)
 
@@ -154,76 +153,6 @@ class EntityExtractor:
             )
 
         return rule_entities
-
-    async def extract_relations(self, text: str, entities: List[ExtractedEntity]) -> List[ExtractedRelation]:
-        """Extract relations between entities (co-occurrence heuristic).
-
-        Not used by the main ingestion pipeline - ``process_chunks`` runs the
-        combined LLM path (``_extract_entities_and_relations_llm``) instead.
-        Kept for callers that want a cheap non-LLM relation pass.
-        """
-        relations = []
-
-        if len(entities) < 2:
-            logger.debug("Not enough entities for relations: %d", len(entities))
-            return relations
-
-        logger.debug(
-            "Extracting relations from text (%d chars) for %d entities",
-            len(text), len(entities),
-        )
-
-        # Simple co-occurrence based relations
-        entity_names = [e.name for e in entities]
-        entity_positions = {name: [] for name in entity_names}
-
-        for name in entity_names:
-            try:
-                for match in re.finditer(re.escape(name), text):
-                    entity_positions[name].append(match.start())
-            except re.error:
-                continue
-
-        # Debug: log positions found
-        for name, positions in entity_positions.items():
-            if positions:
-                logger.debug("Found '%s' at positions: %s", name, positions[:3])
-
-        # Create relations for entities that appear close together
-        created_pairs = set()
-        for name1 in entity_names:
-            for name2 in entity_names:
-                if name1 >= name2:  # Skip self and duplicates
-                    continue
-
-                pair_key = tuple(sorted([name1, name2]))
-                if pair_key in created_pairs:
-                    continue
-
-                positions1 = entity_positions.get(name1, [])
-                positions2 = entity_positions.get(name2, [])
-
-                if not positions1 or not positions2:
-                    continue
-
-                # Check if any positions are close
-                for pos1 in positions1:
-                    for pos2 in positions2:
-                        if abs(pos1 - pos2) < 300:  # Within 300 characters
-                            relations.append(ExtractedRelation(
-                                source=name1,
-                                target=name2,
-                                relation_type="MENTIONS"
-                            ))
-                            created_pairs.add(pair_key)
-                            logger.debug("Created relation: %s -> %s", name1, name2)
-                            break
-                    else:
-                        continue
-                    break
-
-        logger.debug("Total relations extracted: %d", len(relations))
-        return relations
 
     async def _extract_entities_and_relations_llm(
         self, chunks: List[Any]

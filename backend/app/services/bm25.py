@@ -210,11 +210,6 @@ class BM25Service:
         with self._lock:
             self._user_indexes.pop(user_id, None)
 
-    def clear_all(self):
-        """Clear all user indexes."""
-        with self._lock:
-            self._user_indexes = {}
-
     def has_index(self, user_id: int) -> bool:
         """Check if user has BM25 index."""
         return user_id in self._user_indexes

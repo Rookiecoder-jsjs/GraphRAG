@@ -1,6 +1,5 @@
 """ChromaDB client for vector operations."""
 import chromadb
-from chromadb.config import Settings as ChromaSettings
 from typing import List, Dict, Any, Optional
 
 from app.config import get_settings

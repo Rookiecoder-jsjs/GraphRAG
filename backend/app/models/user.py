@@ -45,16 +45,6 @@ class UserCreate(UserBase):
         return value
 
 
-class UserInDB(UserBase):
-    """User model as stored in database."""
-    id: int
-    password_hash: str
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
 class UserResponse(UserBase):
     """User response model (without sensitive data)."""
     id: int
@@ -68,8 +58,3 @@ class Token(BaseModel):
     """JWT token response."""
     access_token: str
     token_type: str = "bearer"
-
-
-class TokenData(BaseModel):
-    """Token payload data."""
-    username: Optional[str] = None

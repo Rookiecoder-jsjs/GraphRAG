@@ -66,37 +66,3 @@ def reciprocal_rank_fusion_multi(
     return results
 
 
-def reciprocal_rank_fusion(
-    vector_results: List[Dict[str, Any]],
-    bm25_results: List[Dict[str, Any]],
-    k: int = 60,
-    top_k: int = 50,
-) -> List[Dict[str, Any]]:
-    """Backward-compatible 2-list RRF (vector + BM25).
-
-    Thin wrapper over :func:`reciprocal_rank_fusion_multi` so existing
-    callers keep working.
-    """
-    return reciprocal_rank_fusion_multi(
-        [vector_results, bm25_results], k=k, top_k=top_k,
-        labels=["vector", "bm25"],
-    )
-
-
-def deduplicate_results(
-    results: List[Dict[str, Any]],
-    key: str = "id"
-) -> List[Dict[str, Any]]:
-    """Remove duplicate results, keeping the first occurrence.
-
-    Falls back to ``chunk_id`` when ``key`` is missing, since graph/Chroma
-    chunks use ``chunk_id`` rather than ``id``.
-    """
-    seen = set()
-    unique = []
-    for doc in results:
-        doc_key = doc.get(key) or doc.get("chunk_id")
-        if doc_key and doc_key not in seen:
-            seen.add(doc_key)
-            unique.append(doc)
-    return unique

@@ -149,37 +149,6 @@ Entities:"""
         except Exception:
             return []
 
-    async def expand_query(self, query: str) -> Dict[str, Any]:
-        """
-        Comprehensive query expansion combining all techniques.
-
-        Args:
-            query: Original user query
-
-        Returns:
-            Dict with rewritten query, variants, and entities
-        """
-        # Run expansions in parallel
-        rewritten_task = self.rewrite_query(query)
-        variants_task = self.generate_query_variants(query, num_variants=3)
-        entities_task = self.extract_entities(query)
-
-        # Gather results
-        import asyncio
-        rewritten, variants, entities = await asyncio.gather(
-            rewritten_task,
-            variants_task,
-            entities_task
-        )
-
-        return {
-            "original_query": query,
-            "rewritten_query": rewritten,
-            "variants": variants,
-            "entities": entities,
-            "all_queries": [rewritten] + variants if rewritten else variants
-        }
-
     def _extract_json_array(self, text: str) -> List:
         """Extract JSON array from LLM response."""
         # Try to find JSON array
@@ -190,21 +159,6 @@ Entities:"""
             except json.JSONDecodeError:
                 pass
         return []
-
-    def simple_tokenize(self, text: str) -> List[str]:
-        """
-        Simple query tokenization for keyword matching.
-
-        Args:
-            text: Query text
-
-        Returns:
-            List of tokens
-        """
-        # Extract alphanumeric and CJK characters
-        tokens = re.findall(r'[\w\u4e00-\u9fff]+', text.lower())
-        # Filter short tokens
-        return [t for t in tokens if len(t) >= 2]
 
 
 # Singleton instance

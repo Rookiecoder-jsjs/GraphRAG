@@ -1,7 +1,7 @@
 """Knowledge graph API endpoints."""
 import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status

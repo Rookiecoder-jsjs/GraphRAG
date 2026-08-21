@@ -75,7 +75,3 @@ def configure_logging() -> None:
     _CONFIGURED = True
 
 
-def get_logger(name: str) -> logging.Logger:
-    """Return a module-level logger, configuring logging on first use."""
-    configure_logging()
-    return logging.getLogger(name)

@@ -4,12 +4,6 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 
-class ChatMessage(BaseModel):
-    """Chat message model."""
-    role: str = Field(..., pattern="^(user|assistant|system)$")
-    content: str
-
-
 class ChatRequest(BaseModel):
     """Chat request model."""
     # Upper bound so one oversized message can't be persisted verbatim and

@@ -1,7 +1,7 @@
 """Neo4j client for knowledge graph operations."""
 import logging
 from typing import List, Dict, Any, Optional
-from neo4j import AsyncGraphDatabase, AsyncSession
+from neo4j import AsyncGraphDatabase
 from contextlib import asynccontextmanager
 
 from app.config import get_settings
@@ -96,23 +96,6 @@ class Neo4jClient:
             """, chunk_id=chunk_id, document_id=document_id, user_id=user_id,
                 content=content, hierarchy_path=hierarchy_path, position=position)
 
-    async def create_chunk_links(self, chunk_id: str, prev_chunk_id: Optional[str],
-                                 next_chunk_id: Optional[str]):
-        """Create NEXT links between chunks."""
-        async with self.session() as session:
-            if prev_chunk_id:
-                await session.run("""
-                    MATCH (prev:Chunk {chunk_id: $prev_id})
-                    MATCH (curr:Chunk {chunk_id: $chunk_id})
-                    MERGE (prev)-[:NEXT]->(curr)
-                """, prev_id=prev_chunk_id, chunk_id=chunk_id)
-            if next_chunk_id:
-                await session.run("""
-                    MATCH (curr:Chunk {chunk_id: $chunk_id})
-                    MATCH (next:Chunk {chunk_id: $next_id})
-                    MERGE (curr)-[:NEXT]->(next)
-                """, chunk_id=chunk_id, next_id=next_chunk_id)
-
     async def create_chunk_nodes_batch(
         self, doc_id: str, user_id: int, chunks: List[Dict[str, Any]]
     ) -> int:
@@ -172,20 +155,6 @@ class Neo4jClient:
             """, links=links)
             record = await result.single()
             return record["linked"] if record else 0
-
-    async def create_entity(self, name: str, entity_type: str, description: Optional[str],
-                           user_id: int) -> str:
-        """Create or update an entity node."""
-        async with self.session() as session:
-            result = await session.run("""
-                MERGE (e:Entity {name: $name, user_id: $user_id})
-                SET e.type = $entity_type,
-                    e.description = COALESCE($description, e.description),
-                    e.updated_at = datetime()
-                RETURN elementId(e) as entity_id
-            """, name=name, entity_type=entity_type, description=description, user_id=user_id)
-            record = await result.single()
-            return record["entity_id"] if record else None
 
     # ---------- Entity curation (PATCH / DELETE / merge) ---------------
     #
@@ -446,19 +415,6 @@ class Neo4jClient:
             """, links=links, user_id=user_id)
             record = await result.single()
             return record["linked"] if record else 0
-
-    async def create_relation(self, source: str, target: str, relation_type: str,
-                              user_id: int, properties: Dict[str, Any] = None):
-        """Create a relation between two entities."""
-        props = properties or {}
-        async with self.session() as session:
-            await session.run("""
-                MATCH (s:Entity {name: $source, user_id: $user_id})
-                MATCH (t:Entity {name: $target, user_id: $user_id})
-                MERGE (s)-[r:RELATES_TO {relation_type: $relation_type}]->(t)
-                SET r += $properties, r.updated_at = datetime()
-            """, source=source, target=target, relation_type=relation_type,
-                user_id=user_id, properties=props)
 
     async def create_relations_batch(
         self, relations: List[Dict[str, Any]], user_id: int
@@ -929,69 +885,6 @@ class Neo4jClient:
                 limit=limit,
             )
             return [record["chunk_id"] async for record in result]
-
-    async def get_entity_graph_for_visualization(self, query: str, user_id: int,
-                                                  limit: int = 50) -> Dict[str, Any]:
-        """Get graph data for visualization starting from query."""
-        async with self.session() as session:
-            # Find matching entities
-            result = await session.run("""
-                MATCH (e:Entity)
-                WHERE e.user_id = $user_id AND toLower(e.name) CONTAINS toLower($query)
-                RETURN e.name as name, e.type as type
-                LIMIT 10
-            """, query=query, user_id=user_id)
-
-            start_nodes = [record.data() async for record in result]
-
-            if not start_nodes:
-                return {"nodes": [], "edges": []}
-
-            start_names = [n["name"] for n in start_nodes]
-
-            # Get related graph
-            result = await session.run("""
-                MATCH (start:Entity)-[r:RELATES_TO]-(other:Entity)
-                WHERE start.user_id = $user_id AND start.name IN $start_names
-                AND other.user_id = $user_id
-                RETURN start, r, other
-                LIMIT $limit
-            """, start_names=start_names, user_id=user_id, limit=limit)
-
-            nodes = {}
-            edges = []
-
-            async for record in result:
-                start = record["start"]
-                other = record["other"]
-                rel = record["r"]
-
-                nodes[start["name"]] = {
-                    "id": start["name"],
-                    "type": "Entity",
-                    "label": start["name"],
-                    "properties": {"type": start["type"]}
-                }
-
-                nodes[other["name"]] = {
-                    "id": other["name"],
-                    "type": "Entity",
-                    "label": other["name"],
-                    "properties": {"type": other["type"]}
-                }
-
-                edges.append({
-                    "id": f"{start['name']}-{rel['relation_type']}-{other['name']}",
-                    "source": start["name"],
-                    "target": other["name"],
-                    "label": rel["relation_type"],
-                    "type": "RELATES_TO"
-                })
-
-            return {
-                "nodes": list(nodes.values()),
-                "edges": edges
-            }
 
     async def get_full_graph_for_visualization(self, user_id: int) -> Dict[str, Any]:
         """Get the entity-level graph for the Knowledge Graph visualization.

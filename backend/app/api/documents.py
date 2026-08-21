@@ -6,7 +6,7 @@ import time
 import uuid
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, BackgroundTasks
@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status,
 from app.config import get_settings
 from app.database import get_db
 from app.api.auth import get_current_user
-from app.models.document import DocumentResponse, TagCreate, TagResponse
+from app.models.document import DocumentResponse, TagCreate
 from app.utils.md_parser import convert_document_to_markdown, clean_markdown, extract_title_from_markdown
 from app.services.chunker import chunk_markdown
 from app.services.embedding import get_embedding_service, EmbeddingServiceError
@@ -633,7 +633,6 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
 
     except Exception as e:
         # Log error but don't fail the upload
-        import traceback
         logger.error("Background processing error for doc %s: %s", doc_id, e, exc_info=True)
         # Mark the document failed so it doesn't linger in an in-progress
         # checkpoint forever. Wrapped so a status-write failure can't mask the

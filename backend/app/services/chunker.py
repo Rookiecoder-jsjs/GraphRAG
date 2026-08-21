@@ -59,13 +59,6 @@ class MarkdownChunker:
 
         return headers
 
-    def _get_header_level(self, line: str) -> Tuple[Optional[int], Optional[str]]:
-        """Get header level and title from a line."""
-        match = re.match(r'^(#{1,6})\s+(.+)$', line.strip())
-        if match:
-            return len(match.group(1)), match.group(2).strip()
-        return None, None
-
     def _extract_section_content(
         self,
         lines: List[str],

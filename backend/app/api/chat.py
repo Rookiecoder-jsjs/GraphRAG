@@ -14,19 +14,12 @@ from app.auth.rate_limit import chat_limiter, enforce_rate_limit
 from app.services.intent import classify_intent
 from app.config import get_settings
 from app.database import get_db
-from app.models.chat import ChatRequest, ChatResponse, Conversation
-from app.services.embedding import get_embedding_service
-from app.services.chroma_client import get_chroma_client
-from app.services.bm25 import get_bm25_service
-from app.services.fusion import reciprocal_rank_fusion, deduplicate_results
-from app.services.query_processor import get_query_processor
-from app.services.neo4j_client import get_neo4j_client
+from app.models.chat import ChatRequest, Conversation
 from app.services.llm import (
     _CITATION_INSTRUCTION,
     build_rag_system_prompt,
     get_llm_service,
 )
-from app.services.reranker import get_rerank_service
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
