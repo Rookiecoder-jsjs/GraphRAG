@@ -207,13 +207,6 @@ watch(() => route.params.name, loadIfChanged)
 // 关系方向的 tooltip：后端返回 outgoing/incoming 原始值，展示时映射为中文
 const directionLabel = (d) => (d === 'outgoing' ? '指向该实体' : '来自该实体')
 
-const goBack = () => {
-  if (window.history.length > 1) {
-    router.back()
-  } else {
-    router.push('/graph')
-  }
-}
 
 const goEntity = (name) => {
   // LLM-extracted entity names are unconstrained (?/#//…); the route is

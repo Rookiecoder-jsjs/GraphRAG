@@ -138,7 +138,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { chatApi } from '../api/chat'
 import { PageHeader, Button, Tag, Stat, EmptyState, LoadingState, ErrorState } from '../components/ui'

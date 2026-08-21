@@ -13,14 +13,6 @@ export const graphApi = {
   // GET /api/graph/visualization — full graph for the current user.
   getFullGraph: () => service.get('/graph/visualization'),
 
-  // GET /api/graph/visualization — alias kept for the GraphPage call
-  // site that already used the (missing) `getFullGraph` name.
-  getVisualization: (query = '') =>
-    service.get('/graph/visualization', { params: { query } }),
-
-  listEntities: (query = '') =>
-    service.get('/graph/entities', { params: { query } }),
-
   // Find a single entity by exact name match. The list endpoint returns
   // an array; we collapse to `{found, entity}` so the merge-pill UI
   // can do `if (data?.found && data.entity)` without further matching.

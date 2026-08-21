@@ -261,8 +261,8 @@
 import { ref, onMounted, onUnmounted, watch, computed, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { graphApi } from '../api/graph'
-import { categoryLabel, categoryColorToken, CATEGORY_COLOR_TOKEN } from '../utils/categorize'
-import { PageHeader, Button, Tag, Stat, EmptyState } from '../components/ui'
+import { categoryLabel, categoryColorToken } from '../utils/categorize'
+import { PageHeader, Button, Stat, EmptyState } from '../components/ui'
 import { useToast } from '../composables/toast'
 import GraphPanel from '../components/GraphPanel.vue'
 

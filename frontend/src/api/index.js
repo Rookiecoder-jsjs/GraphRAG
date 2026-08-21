@@ -45,22 +45,4 @@ service.interceptors.response.use(
   }
 )
 
-// Request with retry mechanism (exponential backoff, abort on 4xx)
-export const requestWithRetry = async (requestFn, maxRetries = 3, delay = 1000) => {
-  let lastError
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      return await requestFn()
-    } catch (error) {
-      lastError = error
-      const status = error?.response?.status
-      if (status && status >= 400 && status < 500) throw error
-      if (i === maxRetries - 1) throw error
-      console.warn(`Request failed, retrying (${i + 1}/${maxRetries})...`)
-      await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)))
-    }
-  }
-  throw lastError
-}
-
 export default service

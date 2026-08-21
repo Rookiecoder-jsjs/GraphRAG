@@ -98,7 +98,7 @@ import {
 } from 'd3'
 import { useTheme } from '../composables/useTheme'
 import { CATEGORIES, CATEGORY_OTHER, CATEGORY_COLOR_TOKEN, categorize, topRawTypes } from '../utils/categorize'
-import { Button, Tag } from './ui'
+import { Button } from './ui'
 
 const RefreshIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [

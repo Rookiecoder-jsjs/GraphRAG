@@ -130,7 +130,7 @@
 
 <script setup>
 import { ref, onMounted, watch, h } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { documentApi } from '../api/documents'
 import {
   PageHeader, BackButton, Stat, Card, Tag, LoadingState, EmptyState, ErrorState
@@ -151,7 +151,6 @@ const XCircleIcon = {
 }
 
 const route = useRoute()
-const router = useRouter()
 
 const detail = ref(null)
 const loading = ref(true)
@@ -180,13 +179,6 @@ const loadDetail = async () => {
   }
 }
 
-const goBack = () => {
-  if (window.history.length > 1) {
-    router.back()
-  } else {
-    router.push({ name: 'Documents' })
-  }
-}
 
 let lastId = null
 const loadIfChanged = async () => {

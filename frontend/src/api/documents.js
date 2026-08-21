@@ -15,8 +15,6 @@ export const documentApi = {
 
   delete: (id) => service.delete(`/documents/${id}`),
 
-  getChunks: (id) => service.get(`/documents/${id}/chunks`),
-
   // Aggregated "knowledge unit" view: metadata + tags + chunk count +
   // sample chunks + key entities + related documents.
   getDetail: (id) => service.get(`/documents/${id}/detail`),
@@ -26,17 +24,10 @@ export const documentApi = {
   // Empty when the user has < 2 docs with chunks.
   getClusterMap: () => service.get('/documents/cluster-map'),
 
-  // Connect to SSE progress stream
-  getProgressStream: (docId) => {
-    const token = localStorage.getItem('token')
-    const eventSource = new EventSource(`/api/progress/${docId}?token=${token}`)
-    return eventSource
-  },
-
   // Get progress history. This is a normal axios call, so it already sends
   // the Authorization header via the request interceptor — the token must
   // NOT also be appended to the query string, where it would leak into
-  // server/proxy access logs and the browser's Referer. (getProgressStream
-  // keeps ?token= only because native EventSource cannot set headers.)
+  // server/proxy access logs and the browser's Referer. (The SSE progress
+  // stream keeps ?token= only because native EventSource cannot set headers.)
   getProgressHistory: (docId) => service.get(`/progress/${docId}/history`)
 }

@@ -525,15 +525,6 @@ const coverageTone = (ratio) => {
 
 const QUALITY_LABELS = { high: '高', medium: '中', low: '低' }
 const qualityLabel = (q) => QUALITY_LABELS[q] || q
-const qualityTitle = (src) => {
-  if (!src || !src.quality) return ''
-  const label = QUALITY_LABELS[src.quality] || src.quality
-  const score = src.relevance_score
-  if (score === null || score === undefined) {
-    return `质量：${label}（无相关度评分）`
-  }
-  return `质量：${label}（相关度 ${Math.round(score * 100)}%）`
-}
 
 const toggleDropdown = () => {
   showDropdown.value = !showDropdown.value
