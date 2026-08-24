@@ -110,6 +110,17 @@ class Settings(BaseSettings):
     # ceiling cuts provider generation-budget reservation latency.
     RAG_MAX_TOKENS: int = 4000
 
+    # Context injection budget (GUIDE-003 T1-2): hard cap for the <context>
+    # block spliced into the RAG system prompt. 8000 tokens ≈ current full
+    # load (8 chunks x 600 chars ≈ 7200 estimated) so normal traffic never
+    # trips; only abnormal growth does. CJK weight 1.5 is a conservative
+    # UPPER bound for qwen Chinese tokenization (~1.0-1.6 tokens/char) —
+    # a breaker must over-estimate, never under-count.
+    CONTEXT_BUDGET_ENABLED: bool = True
+    CONTEXT_BUDGET_TOKENS: int = 8000
+    CONTEXT_ESTIMATE_CJK_WEIGHT: float = 1.5
+    CONTEXT_ESTIMATE_ASCII_BYTES_PER_TOKEN: int = 4
+
     # CORS - comma-separated list of allowed origins (no wildcards with credentials)
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 
