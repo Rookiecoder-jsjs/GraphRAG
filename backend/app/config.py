@@ -121,6 +121,17 @@ class Settings(BaseSettings):
     CONTEXT_ESTIMATE_CJK_WEIGHT: float = 1.5
     CONTEXT_ESTIMATE_ASCII_BYTES_PER_TOKEN: int = 4
 
+    # Conversation history bounding (GUIDE-003 T2-2): old turns fold into one
+    # 'summary' row; prompts then receive summary + recent window instead of a
+    # naive tail. WINDOW_LIMIT replaces the hard-coded "LIMIT 10" both chat
+    # paths used to duplicate. THRESHOLD counts normal messages since the last
+    # summary; compaction folds everything except the newest KEEP_RECENT.
+    HISTORY_COMPACT_ENABLED: bool = True
+    HISTORY_WINDOW_LIMIT: int = 10
+    HISTORY_COMPACT_THRESHOLD: int = 24
+    HISTORY_KEEP_RECENT: int = 6
+    HISTORY_SUMMARY_MAX_CHARS: int = 400
+
     # CORS - comma-separated list of allowed origins (no wildcards with credentials)
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 

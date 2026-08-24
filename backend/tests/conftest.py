@@ -26,3 +26,9 @@ if "SQLITE_PATH" not in os.environ:
     os.environ["SQLITE_PATH"] = str(
         Path(tempfile.gettempdir()) / f"kg-test-{os.getpid()}.db"
     )
+
+# History compaction spawns fire-and-forget background tasks on every saved
+# assistant message; the default-on setting would make every chat-path unit
+# test open real DB connections behind pytest's back. Tests that exercise
+# compaction re-enable it explicitly.
+os.environ.setdefault("HISTORY_COMPACT_ENABLED", "false")

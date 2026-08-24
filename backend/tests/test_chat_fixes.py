@@ -50,7 +50,9 @@ class _FakeCursor:
     """
 
     def __init__(self, rows=None):
-        self._rows = rows or []
+        # load_chat_history indexes row["id"]/row["role"]/row["content"] —
+        # aiosqlite.Row supports key access, so the fake must hand back dicts.
+        self._rows = [dict(r) if not isinstance(r, dict) else r for r in (rows or [])]
         self.lastrowid = 1
 
     def __await__(self):
@@ -79,8 +81,12 @@ class _FakeDB:
 
     def execute(self, sql, params=()):
         self.statements.append((sql, tuple(params)))
-        if sql.startswith("SELECT role, content"):
+        if "FROM messages" in sql and "role != ?" in sql:
+            # Bounded window loader (services/history.py): newest-first.
             return _FakeCursor(self._history)
+        if "role = ?" in sql and "ORDER BY id DESC LIMIT 1" in sql:
+            # Latest-summary lookup inside the loader / compactor.
+            return _FakeCursor([])
         return _FakeCursor([])
 
     async def executemany(self, sql, params):
@@ -189,12 +195,13 @@ def _intent(value):
 
 
 def _history_rows():
-    # What the DESC-ordered SELECT returns: current (just-saved) user turn
-    # first, then prior turns newest-first. The generator reverses this.
+    # What the DESC-ordered bounded loader SELECT returns: current
+    # (just-saved) user turn first, then prior turns newest-first, each with
+    # the id key load_chat_history reads. The loader reverses this.
     return [
-        {"role": "user", "content": "just-saved current turn"},
-        {"role": "assistant", "content": "prev answer"},
-        {"role": "user", "content": "prev question"},
+        {"id": 3, "role": "user", "content": "just-saved current turn"},
+        {"id": 2, "role": "assistant", "content": "prev answer"},
+        {"id": 1, "role": "user", "content": "prev question"},
     ]
 
 

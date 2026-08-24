@@ -429,8 +429,16 @@ def assert_templates_exist(names: Iterable[str]) -> None:
 
 ### T2-2 会话历史有界加载（压缩即边界）
 
-> 状态: 未开始
+> 状态: 已完成（2026-08-24）
 > 触发条件（满足其一即启动）：① 单会话消息数常态超过 30 条；② 聊天 token 成本肉眼可见上升；③ 出现"长对话后半程回答变差"的用户反馈。
+>
+> **实施记录**（2026-08-24）：落地为 `app/services/history.py`（加载器 `load_chat_history` + 压缩器 `maybe_compact_history` + 后台任务派生 `spawn_history_compaction`）。与设计的四处偏差：
+> 1. **折叠候选集 = 全部普通消息**（设计草案是"最后一条 summary 之后的 segment"）。原因：上一轮刻意保留在 summary 行**之前**的 KEEP_RECENT 原始消息会被 segment 定义漏掉，二次压缩生成的新摘要就不再代表"其之前全部历史"，不变式被破坏；测试 `test_second_compaction_merges_old_summary` 实测确认。旧摘要文本进 transcript、旧行删除的设计保持不变。
+> 2. `spawn_history_compaction` 用模块级 `_pending_tasks: set` 持强引用 + done-callback 自清理——asyncio 只持弱引用，裸 create_task 可能在首个 await 被 GC 静默取消（同 main.py 已修过的坑）。
+> 3. 新增配置 `HISTORY_COMPACT_ENABLED / HISTORY_WINDOW_LIMIT(=10) / HISTORY_COMPACT_THRESHOLD(=24) / HISTORY_KEEP_RECENT(=6) / HISTORY_SUMMARY_MAX_CHARS(=400)`；两处硬编码 `LIMIT 10` 由 WINDOW_LIMIT 取代。查询一律按 `id` 排序（AUTOINCREMENT 单调），不再用 created_at（同秒插入会并列）。
+> 4. 测试环境 conftest 默认 `HISTORY_COMPACT_ENABLED=false`（否则每个 chat 单测都触发真实 DB 的后台压缩）；压缩专项测试显式开启。
+>
+> 新模板 `templates/history_compact.md`（Codex 交接骨架四节 + 反补充/逐字一致规则）已注册 TEMPLATE_NAMES 并纳入启动自检；12 个新测试（tests/test_history.py）。
 
 #### 目标
 
@@ -494,7 +502,7 @@ async def load_chat_history(db, conversation_id, limit: int) -> list[dict]:
 
 #### 验收清单
 
-- [ ] 单测：阈值触发 / 幂等（重复调用只一行 summary）/ 二次压缩合并 / 读取组装顺序 / 前端接口过滤
+- [x] 单测：阈值触发 / 幂等（重复调用只一行 summary）/ 二次压缩合并 / 读取组装顺序 / 前端接口过滤
 - [ ] 手工验证：25+ 条会话的第二轮提问仍能正确指代早期内容
 - [ ] 军规②评测回归
 
@@ -612,6 +620,6 @@ T1-3 mock 测试 ────┘（为以上提供回归网）                �
 | T1-3 mock LLM 测试 | ✅ 已完成 | 2026-08-24 | mock_llm.py + 14 用例；238 全量绿 |
 | T1-1 judge v2 | ✅ 已完成 | 2026-08-24 | 提示词+judge_confidence+14 测试；真跑回归待 API key 环境 |
 | T2-1 提示词模板化 | ✅ 已完成 | 2026-08-24 | loader+10 模板+启动自检；250 全量绿 |
-| T2-2 历史有界加载 | ⬜ 未开始 | — | 等触发条件（§4） |
+| T2-2 历史有界加载 | ✅ 已完成 | 2026-08-24 | services/history.py + history_compact 模板 + 12 测试；262 全量绿；手工验证与评测回归待办 |
 | T2-3 MCP server | ⬜ 未开始 | — | 等触发条件（§4） |
 | T3-1~T3-4 | 📋 仅登记 | — | 各带触发条件，见 §5 |

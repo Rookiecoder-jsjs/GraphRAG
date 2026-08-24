@@ -16,6 +16,11 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.chat import ChatRequest, Conversation
 from app.prompts import load_prompt
+from app.services.history import (
+    SUMMARY_ROLE,
+    load_chat_history,
+    spawn_history_compaction,
+)
 from app.services.llm import (
     _CITATION_INSTRUCTION,
     build_rag_system_prompt,
@@ -111,6 +116,10 @@ async def _save_assistant_message(
                 ],
             )
         await db.commit()
+    # Off-request-path history bounding (GUIDE-003 T2-2): fold old turns into
+    # a summary row once the segment crosses the threshold. Fire-and-forget;
+    # failures inside only log.
+    spawn_history_compaction(conversation_id)
 
 
 # -------------------------------------------------------------------------
@@ -369,19 +378,14 @@ async def chat(
         )
         await db.commit()
 
-    # Get conversation history (10 most recent, chronological) FIRST so it
-    # can feed both retrieval (conversational rewrite) and generation.
+    # Get the bounded conversation window FIRST so it can feed both
+    # retrieval (conversational rewrite) and generation. One summary entry
+    # rides in front when older turns were folded (services/history.py).
     conversation_history = []
     async with get_db() as db:
-        async with db.execute(
-            "SELECT role, content FROM messages "
-            "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT 10",
-            (conversation_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-        conversation_history = [
-            {"role": r["role"], "content": r["content"]} for r in reversed(rows)
-        ]
+        conversation_history = await load_chat_history(
+            db, conversation_id, get_settings().HISTORY_WINDOW_LIMIT,
+        )
 
     # Intent routing: chitchat / should_reject skip retrieval (the LLM
     # answers directly or refuses); only fact_retrieval pays for RAG.
@@ -517,18 +521,12 @@ async def _chat_stream_body(
         )
         await db.commit()
 
-    # Fetch prior turns for the conversational query rewrite.
+    # Fetch the bounded prior-turns window for rewrite + generation.
     conversation_history: list = []
     async with get_db() as db:
-        async with db.execute(
-            "SELECT role, content FROM messages "
-            "WHERE conversation_id = ? ORDER BY created_at DESC, id DESC LIMIT 10",
-            (conversation_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-        conversation_history = [
-            {"role": r["role"], "content": r["content"]} for r in reversed(rows)
-        ]
+        conversation_history = await load_chat_history(
+            db, conversation_id, get_settings().HISTORY_WINDOW_LIMIT,
+        )
 
     # Intent routing: chitchat / should_reject skip retrieval; only
     # fact_retrieval pays for RAG. Failure falls back to fact_retrieval.
@@ -794,10 +792,13 @@ async def get_conversation_messages(
             if not await cursor.fetchone():
                 raise HTTPException(status_code=404, detail="Conversation not found")
 
-        # Return id so the client can correlate feedback to a specific message
+        # Return id so the client can correlate feedback to a specific
+        # message. role='summary' rows are internal fold markers
+        # (services/history.py) — users see the raw turns only.
         async with db.execute(
-            "SELECT id, role, content, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at",
-            (conversation_id,)
+            "SELECT id, role, content, created_at FROM messages "
+            "WHERE conversation_id = ? AND role != ? ORDER BY created_at",
+            (conversation_id, SUMMARY_ROLE),
         ) as cursor:
             rows = await cursor.fetchall()
 
