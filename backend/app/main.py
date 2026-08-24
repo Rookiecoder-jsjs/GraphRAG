@@ -12,6 +12,8 @@ from app.config import get_settings
 from app.database import get_db, init_db
 from app.logger import configure_logging
 from app.middleware import RequestBodyLimitMiddleware, RequestIDMiddleware
+from app.prompts import assert_templates_exist
+from app.prompts.templates import TEMPLATE_NAMES as _PROMPT_TEMPLATE_NAMES
 from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.api import auth, documents, search, graph, chat, progress, tags, timeline, dashboard
@@ -30,6 +32,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     configure_logging()
     settings = get_settings()
+
+    # Fail fast when a prompt template is missing — otherwise the gap only
+    # explodes at the first chat turn, mid-request (GUIDE-003 T2-1).
+    assert_templates_exist(_PROMPT_TEMPLATE_NAMES)
 
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(settings.SQLITE_PATH), exist_ok=True)

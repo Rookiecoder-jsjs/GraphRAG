@@ -2,6 +2,7 @@
 import re
 import json
 from typing import List, Dict, Any, Optional
+from app.prompts import load_prompt
 from app.services.llm import get_llm_service
 
 
@@ -38,19 +39,12 @@ class QueryProcessor:
                     "references using the conversation context."
                 )
 
-        prompt = f"""You are a query rewriting assistant for search retrieval.
-Rewrite the following search query to improve retrieval quality.
-
-Guidelines:
-- Expand abbreviations and technical terms to full forms
-- Make implicit concepts explicit
-- Keep the original intent but express it more clearly
-- Use more precise terminology where applicable
-- Keep it concise (preferably under 100 characters){standalone_instruction}
-
-Original query: "{query}"{history_block}
-
-Rewritten query (just return the rewritten query, nothing else):"""
+        prompt = load_prompt(
+            "query_rewrite",
+            query=query,
+            standalone_instruction=standalone_instruction,
+            history_block=history_block,
+        )
 
         try:
             rewritten = await llm.chat_complete(
@@ -84,19 +78,11 @@ Rewritten query (just return the rewritten query, nothing else):"""
         """
         llm = await get_llm_service()
 
-        prompt = f"""Generate {num_variants} different search query variations
-that would help find relevant documents for answering the original query.
-
-Guidelines:
-- Vary the wording and phrasing
-- Include synonyms and related terms
-- Some can be more specific, some more general
-- Include different question forms (what, how, why, etc.)
-
-Original query: "{query}"
-
-Return ONLY a JSON array of strings, nothing else. Example format:
-["variant 1", "variant 2", "variant 3"]"""
+        prompt = load_prompt(
+            "query_variants",
+            num_variants=num_variants,
+            query=query,
+        )
 
         try:
             response = await llm.chat_complete(

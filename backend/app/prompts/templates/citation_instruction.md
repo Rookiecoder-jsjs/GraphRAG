@@ -1,0 +1,1 @@
+CITATIONS: After each claim grounded in the provided context, append a bracket number like [1], [2], [3] that matches the [Context N] tag the claim came from. You may cite the same source multiple times. If a claim is not supported by any context, do not cite anything for it. Do not fabricate numbers that do not appear above.

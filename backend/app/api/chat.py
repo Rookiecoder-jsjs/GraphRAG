@@ -15,6 +15,7 @@ from app.services.intent import classify_intent
 from app.config import get_settings
 from app.database import get_db
 from app.models.chat import ChatRequest, Conversation
+from app.prompts import load_prompt
 from app.services.llm import (
     _CITATION_INSTRUCTION,
     build_rag_system_prompt,
@@ -75,21 +76,18 @@ _SOURCE_CONTENT_CHARS = 2000
 # (opinions / advice / unsafe / out-of-scope). Without this the classified
 # intent produced no behavioural difference - the model free-generated an
 # answer from an empty context, defeating the point of the classification.
-_REJECTION_TEMPLATE = (
-    "抱歉，这个问题超出了我能回答的范围——我专注于基于你知识库文档的"
-    "事实性问答。请尝试把它改写成与文档内容相关的事实性问题。"
-)
+# Typed refusal for queries the intent router classifies as should_reject
+# (opinions / advice / unsafe / out-of-scope). Without this the classified
+# intent produced no behavioural difference - the model free-generated an
+# ungrounded answer. Text lives in templates/rejection_template.md.
+_REJECTION_TEMPLATE = load_prompt("rejection_template")
 # Lightweight system prompt for queries the intent router classified as
 # chitchat (greetings / small talk / thanks). Deliberately NO <context> block
 # and NO citation instruction — the model should give a friendly, brief reply
 # rather than pretending it searched the knowledge base. (The RAG prompt with
 # an empty context would instead produce a "context is empty, so I can't
-# answer" refusal-style reply.)
-_CHITCHAT_SYSTEM_PROMPT = (
-    "你是知识库助手的闲聊模式。用户正在问候、寒暄或闲聊，而不是提问知识库内容。"
-    "请用友好、简短、自然的中文回应（一两句话即可），可以顺势邀请用户提问文档相关的问题；"
-    "不要假装检索过任何文档，不要编造知识库内容，不要长篇大论。"
-)
+# answer" refusal-style reply.) Text: templates/chitchat_system.md.
+_CHITCHAT_SYSTEM_PROMPT = load_prompt("chitchat_system")
 
 
 async def _save_assistant_message(
