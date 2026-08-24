@@ -556,8 +556,12 @@ const uploadFiles = async (files) => {
     }
   } catch (error) {
     console.error('Upload failed:', error)
-    uploading.value = false
     toast.error(error?.response?.data?.detail || '上传失败，请重试。')
+  } finally {
+    // Reset on the success path too: the button must not stay stuck on
+    // "上传中…" once the HTTP uploads have finished (the progress dialog
+    // tracks processing independently).
+    uploading.value = false
   }
 }
 
@@ -583,6 +587,10 @@ const handleProgressEvent = (e) => {
         stage.error = true
         stage.active = false
       }
+      // The backend closes the stream after a terminal event; close our side
+      // too, or EventSource auto-reconnects into an empty queue and the
+      // connection lingers until the dialog is dismissed.
+      closeProgressStream()
       return
     }
 
@@ -598,6 +606,7 @@ const handleProgressEvent = (e) => {
         s.active = false
       })
       localStorage.setItem('graph_refresh', Date.now())
+      closeProgressStream()
       return
     }
 
@@ -629,11 +638,15 @@ const handleProgressError = () => {
   processingError.value = '连接已断开，请关闭并重新打开进度对话框以查看最新状态。'
 }
 
-const connectProgressStream = (docId) => {
+const closeProgressStream = () => {
   if (eventSource) {
     eventSource.close()
     eventSource = null
   }
+}
+
+const connectProgressStream = (docId) => {
+  closeProgressStream()
   const token = localStorage.getItem('token')
   eventSource = new EventSource(`/api/progress/${docId}?token=${token}`)
   eventSource.onmessage = handleProgressEvent
@@ -641,10 +654,7 @@ const connectProgressStream = (docId) => {
 }
 
 const cancelProcessing = () => {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  closeProgressStream()
   processingDoc.value = null
   processingComplete.value = false
   processingError.value = null
@@ -764,9 +774,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (eventSource) {
-    eventSource.close()
-  }
+  closeProgressStream()
   document.removeEventListener('paste', onPaste)
   isDragging.value = false
   dragDepth = 0
@@ -777,10 +785,7 @@ onDeactivated(() => {
   // onDeactivated (NOT onUnmounted): close the progress stream here or it
   // lingers - and after "complete" the browser auto-reconnects against the
   // finished doc in a request loop.
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  closeProgressStream()
   isDragging.value = false
   dragDepth = 0
 })

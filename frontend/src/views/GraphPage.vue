@@ -65,8 +65,8 @@
       <EmptyState
         v-if="nodes.length === 0 && !loading"
         :icon="GraphIcon"
-        title="暂无图谱数据"
-        description="上传文档以初始化知识图谱"
+        :title="isShowingFullGraph ? '暂无图谱数据' : `没有匹配「${query.trim()}」的实体`"
+        :description="isShowingFullGraph ? '上传文档以初始化知识图谱' : '试试其他关键词，或点击右侧按钮返回完整图谱'"
       />
 
       <template v-else>
@@ -387,10 +387,8 @@ const handleSearch = async () => {
     if (seq !== graphRequestSeq) return
     nodes.value = data.nodes || []
     edges.value = data.edges || []
-    const backendStats = data.stats || {}
-    stats.value = (backendStats.entities > 0 || backendStats.relations > 0)
-      ? backendStats
-      : { entities: nodes.value.length, relations: edges.value.length }
+    // The query endpoint returns no stats of its own; keep the full-graph
+    // counts so the header doesn't flip to 0 while a filtered view shows.
     isShowingFullGraph.value = false
   } catch (err) {
     if (seq !== graphRequestSeq) return
@@ -454,11 +452,13 @@ const saveEntityEdits = async () => {
   entityEditError.value = ''
   entityEditSuccess.value = ''
   try {
-    const { data } = await graphApi.updateEntity(selectedEntity.value.name, {
+    await graphApi.updateEntity(selectedEntity.value.name, {
       entity_type: editingEntityType.value,
       description: editingEntityDescription.value,
     })
-    entityEditSuccess.value = data?.message || '已保存。'
+    // PATCH returns the updated entity object (no message field) — a
+    // successful response IS the confirmation.
+    entityEditSuccess.value = '已保存。'
     originalEntityType.value = editingEntityType.value
     originalEntityDescription.value = editingEntityDescription.value
     loadFullGraph()

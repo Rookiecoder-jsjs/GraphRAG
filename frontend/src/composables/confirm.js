@@ -10,10 +10,18 @@ const state = reactive({
   cancelLabel: 'Cancel',
   danger: false,
   busy: false,
-  _resolve: null
+  _resolve: null,
+  _promise: null
 })
 
 function ask(opts) {
+  // Re-entrant guard: a second ask() while the dialog is open (e.g. a
+  // double-click racing the overlay render) must not clobber the pending
+  // _resolve, or the first caller's promise never settles. Reuse it instead
+  // — both callers await the same dialog outcome.
+  if (state.open && state._resolve) {
+    return state._promise
+  }
   state.title = opts.title ?? 'Confirm'
   state.message = opts.message ?? ''
   state.confirmLabel = opts.confirmLabel ?? 'Confirm'
@@ -21,15 +29,17 @@ function ask(opts) {
   state.danger = opts.danger ?? false
   state.busy = false
   state.open = true
-  return new Promise(resolve => {
+  state._promise = new Promise(resolve => {
     state._resolve = resolve
   })
+  return state._promise
 }
 
 function settle(value) {
   state.open = false
   state._resolve?.(value)
   state._resolve = null
+  state._promise = null
 }
 
 function setBusy(v) {

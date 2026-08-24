@@ -513,6 +513,12 @@ const startNewChat = () => {
   messages.value = []
   currentConversationId.value = null
   showDropdown.value = false
+  // Drop any ?conversation=<id> from the URL: if it lingered, browser-back
+  // would re-trigger handleDeepLink with the OLD id after a new conversation
+  // has been created, replacing the fresh view with the stale one.
+  if (route.query.conversation) {
+    router.replace({ path: '/chat' })
+  }
 }
 
 

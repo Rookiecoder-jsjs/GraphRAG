@@ -138,7 +138,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { chatApi } from '../api/chat'
 import { PageHeader, Button, Tag, Stat, EmptyState, LoadingState, ErrorState } from '../components/ui'
@@ -168,7 +168,11 @@ const load = async () => {
     loading.value = false
   }
 }
+// Layout caches pages in <keep-alive>, so returning here fires onActivated
+// without re-running onMounted — reload, or the list/stats go stale after
+// chatting elsewhere. (Same pattern as DashboardPage/ChatPage.)
 onMounted(load)
+onActivated(load)
 
 const totalMessages = computed(() =>
   conversations.value.reduce((sum, c) => sum + (c.message_count || 0), 0)

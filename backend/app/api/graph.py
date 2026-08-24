@@ -2,7 +2,6 @@
 import asyncio
 import logging
 from typing import List
-from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
@@ -174,9 +173,12 @@ async def get_visualization(
 #
 # The entity name is a path parameter, but entity names can contain almost
 # any character (we don't restrict at the LLM extraction layer), so we
-# accept it as `str` and URL-decode it before querying. FastAPI's
-# path matching stops at `/`, so the frontend must `encodeURIComponent`
-# names that contain slashes (rare, but possible).
+# accept it as `str`. Percent-decoding happens exactly once — at the ASGI
+# layer, before routing — so the handler receives the original name that
+# the frontend `encodeURIComponent`d. Do NOT add another unquote() here:
+# names containing a literal `%XX` sequence would be decoded twice and
+# miss (or hit the wrong entity). Slashes inside names still work because
+# the `{entity_name:path}` converter matches across `/`.
 
 @router.patch("/entities/{entity_name:path}")
 async def update_entity(
@@ -186,7 +188,7 @@ async def update_entity(
 ):
     """Edit an entity's type and/or description. Returns the updated row."""
     user_id = current_user["id"]
-    name = unquote(entity_name).strip()
+    name = entity_name.strip()
     if not name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -225,7 +227,7 @@ async def delete_entity(
 ):
     """Delete an entity and clean up all references. Idempotent (404 if absent)."""
     user_id = current_user["id"]
-    name = unquote(entity_name).strip()
+    name = entity_name.strip()
     if not name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -308,7 +310,7 @@ async def get_entity_detail(
     exist for this user (or belongs to a different user — same
     response either way, so we never leak existence)."""
     user_id = current_user["id"]
-    name = unquote(entity_name).strip()
+    name = entity_name.strip()
     if not name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

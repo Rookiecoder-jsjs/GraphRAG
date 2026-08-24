@@ -50,6 +50,13 @@ export const useAuthStore = defineStore('auth', () => {
       return { success: true }
     } catch (error) {
       console.error('Login error:', error)
+      // Roll back the half-committed session: the token was stored before
+      // /auth/me ran, so a non-401 failure there (5xx, network blip) must not
+      // leave isAuthenticated=true with user=null. (A 401 is additionally
+      // cleaned up by the global auth:logout interceptor.)
+      token.value = ''
+      user.value = null
+      localStorage.removeItem('token')
       const message = error.response?.data?.detail || 'Login failed'
       return { success: false, error: message }
     } finally {
