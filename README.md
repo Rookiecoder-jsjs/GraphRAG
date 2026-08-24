@@ -17,11 +17,13 @@
 1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块
 2. 🔍 **混合检索**：多查询 + 硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + 图谱通道 + RRF 融合 + Qwen3-Reranker 重排序 + 父文档扩展再重排（统一管线 `services/retriever.py`，TTL+LRU 缓存）
 3. 🕸️ **知识图谱可视化**：d3 + Vue 3 实现的交互式力导向图谱，支持节点拖拽、实体编辑、合并与删除
-4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）
+4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）；**会话历史有界加载**（超过阈值自动折叠为 LLM 摘要，成本与质量不随对话变长恶化）
 5. 📊 **仪表盘与时间线**：文档 / 实体 / 标签统计、月度增长、近期活动、实体首现时间线
 6. 🗺️ **文档聚类地图**：2D PCA 投影可视化所有文档的语义分布
-7. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
-8. 🛡️ **健壮性**：统一 logging（请求级 `X-Request-ID` 关联）、请求体大小全局兜底（413）、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、BM25 启动预热、卡死文档启动对账（reconcile）、检索结果 TTL+LRU 缓存、向量索引零成本重建脚本、SQLite 增量迁移（`schema_version` 追踪）、全量备份脚本
+7. 🔌 **MCP Server**：标准 MCP (stdio) 把检索 / 图谱能力暴露给 Claude Desktop / Claude Code / codex 等客户端，四个只读工具零前端投入直接查询知识库
+8. 📏 **RAG 测评框架**：检索指标（Hit@K / MRR / Precision@K / Recall@K / nDCG@K）+ LLM-as-judge 生成指标（Faithfulness / Hallucination / Relevance / Citation / Correctness + 置信度），13 个 gold 用例，提示词改动的回归门禁（见 `backend/eval/`）
+9. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
+10. 🛡️ **健壮性**：统一 logging（请求级 `X-Request-ID` 关联）、请求体大小全局兜底（413）、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、BM25 启动预热、卡死文档启动对账（reconcile）、检索结果 TTL+LRU 缓存、向量索引零成本重建脚本、SQLite 增量迁移（`schema_version` 追踪）、全量备份脚本、上下文注入预算熔断（`<context>` 区硬 token 上限，超限按块裁剪不炸窗口）
 
 ## 技术架构
 
@@ -73,10 +75,13 @@ D:/NC/
 │   │   │   ├── fusion.py        # RRF / 加权融合
 │   │   │   ├── reranker.py      # 硅基流动 Rerank
 │   │   │   ├── query_processor.py  # 查询改写 / 变体 / 实体抽取
+│   │   │   ├── history.py       # 会话历史有界加载 + LLM 摘要折叠（summary 行）
+│   │   │   ├── context_budget.py # 注入预算熔断（token 估算 + 按块裁剪）
 │   │   │   ├── reconcile.py     # 卡死文档启动对账（标记 failed）
 │   │   │   ├── progress_tracker.py  # SSE 进度跟踪
 │   │   │   └── doc_status.py    # 文档处理状态机（pending/document_created/indexed/graphed/ready/failed）
 │   │   ├── auth/                # JWT 鉴权 + bcrypt 密码哈希 + 限流中间件
+│   │   ├── prompts/             # LLM 提示词模板（templates/*.md + loader，启动自检）
 │   │   ├── middleware.py        # 纯 ASGI 中间件（请求体限流 + X-Request-ID）
 │   │   ├── utils/md_parser.py   # Markdown 解析（markitdown 防御性封装）
 │   │   ├── config.py            # 配置管理（含 CORS 白名单 + JWT 占位符拦截）
@@ -84,6 +89,8 @@ D:/NC/
 │   │   ├── logger.py            # 统一 logging 配置（请求 ID 关联）
 │   │   └── main.py              # FastAPI 入口（lifespan：预热 / 对账 / 就绪探针）
 │   ├── migrations/001_baseline.sql  # 迁移基线（stamp version 1，未来增量迁移按序应用）
+│   ├── mcp_server/              # 知识库 MCP Server（stdio，四个只读工具；见其 README）
+│   ├── eval/                    # RAG 测评框架（gold 用例 + 检索指标 + LLM-as-judge + 历次报告）
 │   ├── scripts/rebuild_chroma.py # 向量索引零成本重建（SQLite chunks + embedding 缓存 → Chroma）
 │   ├── clean_user_data.py        # 跨 SQLite/Chroma/Neo4j/BM25 清理单个用户数据（破坏性，需确认）
 │   └── Dockerfile                # 从仓库根构建：docker build -f backend/Dockerfile .
@@ -170,10 +177,9 @@ cp .env.example .env
 ### 3. 📦 安装后端依赖
 
 ```bash
-# 推荐：使用根目录 .venv（依赖清单在仓库根 requirements.txt）
-cd ..
+# 使用仓库根 .venv（依赖清单在根 requirements.txt；Windows 为 Scripts/，mac/Linux 为 bin/）
+python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
-.venv/Scripts/python.exe -m spacy download zh_core_web_sm
 ```
 
 ### 4. ▶️ 运行后端服务
@@ -270,6 +276,18 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `GET /api/progress/{doc_id}` — SSE 流式进度事件（30 秒 keepalive，完成/错误自动关闭）
 - `GET /api/progress/{doc_id}/history` — 历史进度事件列表
 
+### 🔌 MCP Server（stdio，非 HTTP）
+标准 Model Context Protocol 服务，任何 MCP 客户端可直接挂载（配置示例见 `backend/mcp_server/README.md`）：
+
+| 工具 | 签名 | 说明 |
+|------|------|------|
+| `search_knowledge` | `(query, user_id, top_k=5)` | 混合检索，返回 chunk 预览与来源标题 |
+| `search_graph` | `(entity_or_query, user_id, depth=1)` | 实体名搜索 + 1–3 跳邻域展开 |
+| `get_entity_detail` | `(name, user_id)` | 实体详情（统计 / 文档 / 关联实体 / 样例 chunk） |
+| `list_documents` | `(user_id,)` | 文档清单（状态 + 时间戳） |
+
+全部只读、按 `user_id` 显式隔离；启动需环境变量 `KG_MCP_TOKEN`（缺失或占位符拒绝启动）。运行：`KG_MCP_TOKEN=<token> python mcp_server/server.py`。
+
 ### 💓 健康检查
 - `GET /health` — 存活探针（liveness），返回 `{"status": "healthy"}`
 - `GET /health/ready` — 就绪探针（readiness），逐个 ping SQLite / ChromaDB / Neo4j，任一核心存储不可用返回 503
@@ -301,7 +319,7 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
         7. 扩展：前后邻居 (Chroma) + 父文档同节兄弟 (SQLite)，去重
         8. 扩展集再重排（按 relevance 排序，不驱逐邻居）
         9. 实体 / 关系富化 (Neo4j)
-        → 构建 Prompt → Kimi / 百炼 LLM → 流式返回结果
+        → 构建 Prompt（提示词模板 app/prompts/templates/ + <context> 注入预算熔断）→ Kimi / 百炼 LLM → 流式返回结果
         ├─ enable_thinking=true:  先流式 reasoning_content (event: thinking)
         └─ 默认:                  直接流式正文 (data: chunk)
 ```
@@ -415,6 +433,14 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | `ENTITY_EXTRACTION_DELAY` | 实体提取批间延迟（秒） | `0` | 否 |
 | `LLM_EXTRACTION_CONCURRENCY` | 实体提取并发上限 | `20` | 否 |
 | `LLM_EXTRACT_MAX_TOKENS` | 实体提取 max_tokens | `1024` | 否 |
+| `RAG_MAX_TOKENS` | RAG 回答 max_tokens | `4000` | 否 |
+| `CONTEXT_BUDGET_ENABLED` | 上下文注入预算熔断开关 | `True` | 否 |
+| `CONTEXT_BUDGET_TOKENS` | `<context>` 区 token 硬上限 | `8000` | 否 |
+| `HISTORY_COMPACT_ENABLED` | 会话历史自动折叠开关 | `True` | 否 |
+| `HISTORY_WINDOW_LIMIT` | 发给模型的近期消息窗口条数 | `10` | 否 |
+| `HISTORY_COMPACT_THRESHOLD` | 触发折叠的消息数阈值 | `24` | 否 |
+| `HISTORY_KEEP_RECENT` | 折叠时保留的最近原始消息数 | `6` | 否 |
+| `KG_MCP_TOKEN` | MCP Server 访问令牌（仅 mcp_server 进程） | - | MCP 必填 |
 | `LOG_DIR` / `LOG_LEVEL` | 日志目录与级别 | `./data/logs` / `INFO` | 否 |
 
 ## 🧭 前端路由总览
@@ -446,19 +472,12 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 ### 🧪 测试
 
 ```bash
-# 冒烟测试（无需 Neo4j/ChromaDB）
+# 全量测试（271 项；无需真实密钥，conftest 注入临时 JWT_SECRET 与隔离 SQLite）
 cd backend
-../.venv/Scripts/python.exe -c "
-from app.main import app
-from fastapi.testclient import TestClient
-c = TestClient(app)
-assert c.get('/health').status_code == 200
-print('OK')
-"
+../.venv/Scripts/python.exe -m pytest tests/ -q
 
-# 集成测试（需启动 Docker 服务）
-docker-compose up -d
-../.venv/Scripts/python.exe -m pytest backend/tests
+# RAG 测评（军规②：提示词改动的回归门禁；需要 Docker 服务 + API key）
+../.venv/Scripts/python.exe -m eval.runner --user-id 1 --markdown
 ```
 
 > 单元测试无需真实密钥：`conftest.py` 会 `setdefault` 一个临时 `JWT_SECRET`（CI 中也显式注入），JWT 占位符拦截不会阻断测试。
@@ -528,23 +547,23 @@ python-multipart==0.0.17
 neo4j==6.1.0
 chromadb==0.4.18
 numpy==1.26.4
-httpx==0.27.0
-aiofiles==24.1.0
+httpx==0.28.1
+starlette==0.38.6
+pydantic==2.13.4
+pydantic-settings==2.11.0
+mcp==1.29.0
 markitdown==0.0.1a3
-markdown-it-py==3.0.0
 jieba==0.42.1
-spacy==3.7.5
 rank-bm25==0.2.2
 python-dotenv==1.0.0
-pydantic==2.9.2
-pydantic-settings==2.6.0
-sqlalchemy==2.0.36
 aiosqlite==0.20.0
 
 # dev / test only
 pytest==8.3.3
 pytest-asyncio==0.24.0
 ```
+
+> **注意**：httpx / starlette / pydantic / pydantic-settings 与 `mcp` 是一组联动版本——mcp 2.x 会拖入 starlette≥1.0 导致 fastapi 0.115 启动即崩（`on_startup` 参数被移除），因此锁死 mcp 1.x 并整组固定。升级 fastapi 时必须连带重验这一组。
 
 ```
 # frontend
@@ -572,6 +591,8 @@ vite ^7.2.4
 9. ⚠️ **实体合并**：`POST /api/graph/entities/merge` 会硬删 source 并将所有引用指向 target，操作不可逆
 10. 🔧 **Chroma entrypoint 绕过**：`docker-compose.yml` 覆盖了 chromadb 0.4.18 镜像 entrypoint——原 entrypoint 每次启动 `pip install --force-reinstall chroma-hnswlib`，新版会拉入 numpy 2.x 导致 `np.float_` 崩溃。改为直接跑 uvicorn，沿用镜像内可用的 hnswlib
 11. ♻️ **向量索引重建**：若 Chroma 向量丢失（容器重建/误删/迁移），运行 `backend/scripts/rebuild_chroma.py` 可从 SQLite `chunks` + `embedding_cache`（md5-keyed）零 API 成本回灌，复用 `get_chroma_client` 保证集合名/cosine/upsert 与摄入路径一致
+12. 🔌 **MCP 依赖联动**：`mcp` / `httpx` / `starlette` / `pydantic` 四个版本必须整组升级——单独升 mcp 到 2.x 会拉崩 fastapi（见关键依赖版本的注意说明）
+13. 📏 **提示词纪律**：所有 LLM 提示词集中在 `backend/app/prompts/templates/`；**改提示词必须重跑 RAG 测评**（`python -m eval.runner --user-id 1`）作为回归门禁，缺模板会在启动时 fail-fast
 
 ## 📜 许可证
 
