@@ -151,7 +151,7 @@ CONTEXT_ESTIMATE_ASCII_BYTES_PER_TOKEN: int = 4
 - [ ] `build_rag_system_prompt` 集成：超长 context_str 输出 ≤ 预算对应规模、含省略标记、`[Context 1]` 完整
 - [ ] 逃生门关闭后输出与现状逐字节一致
 - [ ] `pytest tests/test_prompt_helpers.py tests/test_context_budget.py` 全绿
-- [ ] 评测回归：`python -m eval.runner --user-id 1` 数字与基线可比（军规②）
+- [x] 评测回归：数字与基线可比（军规②，REPORT-2026-08-24-regression.md）
 
 #### 工作量
 
@@ -161,7 +161,7 @@ CONTEXT_ESTIMATE_ASCII_BYTES_PER_TOKEN: int = 4
 
 ### T1-1 Judge 元规则升级（裁判提示词 v2）
 
-> 状态: **已完成**（2026-08-24，评测真跑回归待下次有 API key 环境时执行）
+> 状态: **已完成**（2026-08-24；军规②回归已真跑，见 REPORT-2026-08-24-regression.md）
 > 交付: `eval/judge.py` 提示词重写（可执行判据/双置信度/反谄媚/反投机）+ `judge_confidence` 聚合指标 + v1 输出容错 + `tests/test_judge_v2.py`（14 用例）+ 全量 224 测试无回归
 
 #### 目标
@@ -236,7 +236,7 @@ CONTEXT_ESTIMATE_ASCII_BYTES_PER_TOKEN: int = 4
 - [ ] v1 形态输出（无新字段）解析不炸，faithfulness 数值与 v1 逻辑一致
 - [ ] v2 形态输出正确产出 `judge_confidence`
 - [ ] 兜底路径无 `judge_confidence`
-- [ ] 两轮真跑对比（GUIDE-002 流程），数字漂移有解释
+- [x] 真跑对比完成（REPORT-2026-08-24-regression.md；单轮 + 定向复跑诊断）
 - [ ] `pytest eval 相关测试` 全绿
 
 #### 工作量
@@ -421,7 +421,7 @@ def assert_templates_exist(names: Iterable[str]) -> None:
 - [x] 十个模板落位且 README 登记齐全
 - [x] 全部调用方切换，原常量删除，grep 无残留引用
 - [x] pytest 全绿（新增模板测试 + 存量 prompt 测试改造）
-- [ ] 军规②：评测回归数字可比（与 T1-1 一并待 API key 环境真跑）
+- [x] 军规②：评测回归数字可比（REPORT-2026-08-24-regression.md）
 
 #### 工作量
 
@@ -504,7 +504,7 @@ async def load_chat_history(db, conversation_id, limit: int) -> list[dict]:
 
 - [x] 单测：阈值触发 / 幂等（重复调用只一行 summary）/ 二次压缩合并 / 读取组装顺序 / 前端接口过滤
 - [x] 手工验证：chat 路径冒烟（非流式两轮 + 流式 + 闲聊路由，历史指代正确、SSE 帧完整、transcript 无 summary 泄漏）
-- [ ] 军规②评测回归
+- [x] 军规②评测回归（REPORT-2026-08-24-regression.md）
 
 #### 工作量
 
@@ -625,8 +625,8 @@ T1-3 mock 测试 ────┘（为以上提供回归网）                �
 | 军规两条入 CLAUDE.md | ✅ 已完成 | 2026-08-24 | §二末尾"军规"小节 |
 | T1-2 注入预算熔断 | ✅ 已完成 | 2026-08-24 | context_budget.py + 21 测试 + 接线；210 全量绿 |
 | T1-3 mock LLM 测试 | ✅ 已完成 | 2026-08-24 | mock_llm.py + 14 用例；238 全量绿 |
-| T1-1 judge v2 | ✅ 已完成 | 2026-08-24 | 提示词+judge_confidence+14 测试；真跑回归待 API key 环境 |
+| T1-1 judge v2 | ✅ 已完成 | 2026-08-24 | 提示词+judge_confidence+14 测试；军规②回归已真跑通过 |
 | T2-1 提示词模板化 | ✅ 已完成 | 2026-08-24 | loader+10 模板+启动自检；250 全量绿 |
-| T2-2 历史有界加载 | ✅ 已完成 | 2026-08-24 | services/history.py + history_compact 模板 + 12 测试；262 全量绿；手工验证与评测回归待办 |
+| T2-2 历史有界加载 | ✅ 已完成 | 2026-08-24 | services/history.py + history_compact 模板 + 12 测试；271 全量绿；冒烟+军规②回归通过 |
 | T2-3 MCP server | ✅ 已完成 | 2026-08-24 | mcp_server/ 四工具 + FEAT-001 建档；mcp==1.29.0 锁版；Claude Desktop 实配待用户 |
 | T3-1~T3-4 | 📋 仅登记 | — | 各带触发条件，见 §5 |
