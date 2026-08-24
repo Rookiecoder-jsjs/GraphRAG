@@ -512,8 +512,15 @@ async def load_chat_history(db, conversation_id, limit: int) -> list[dict]:
 
 ### T2-3 知识库 MCP Server
 
-> 状态: 未开始
+> 状态: 已完成（2026-08-24）
 > 触发条件（满足其一即启动）：① 需要在 Claude Code/Codex/Claude Desktop 里直接查询知识库；② 需要 PM 演示"MCP 生态接入"能力。
+>
+> **实施记录**（2026-08-24）：落地为 `backend/mcp_server/`（server.py + auth.py + README.md + __init__.py）。与设计的偏差：
+> 1. **依赖版本**：设计写"mcp>=1.x"，实际锁死 `mcp==1.29.0`——mcp 2.0 会拖入 starlette>=1.0，与 fastapi 0.115（需要 starlette<0.39）不兼容，实测 `Router.__init__() got an unexpected keyword argument 'on_startup'` 崩溃。requirements.txt 同步固定 httpx==0.28.1 / starlette==0.38.6 / pydantic==2.13.4 / pydantic-settings==2.11.0。
+> 2. **鉴权形态**：stdio 传输本身是进程级隔离（只有持有 env 的父进程能对话），故 token 是启动门禁（缺失/占位符 → exit 2）而非每调用校验；auth.verify 预留给未来 SSE/HTTP 传输。日志只写 stderr（stdout 是协议通道）。
+> 3. `search_knowledge` 调 retriever 时 `enable_rewrite=False`（跳过 LLM 重写，工具调用要快）；top_k 上限 20、depth 白名单 1–3（get_related_entities 内部同样钳制）。
+>
+> 端到端冒烟已过：stdio 握手 + list_tools 四工具 + list_documents 真实数据返回。9 个离线单测（tests/test_mcp_server.py）。FEAT-001 已建档登记。
 
 #### 目标
 
@@ -549,10 +556,10 @@ backend/mcp_server/
 
 #### 验收清单
 
-- [ ] stdio 模式在 Claude Desktop 配置后四个工具可调通
-- [ ] 无 token 启动被拒
-- [ ] 只读验证：全部工具无写路径（代码评审 + 集成冒烟）
-- [ ] FEAT 建档（首个功能条目文档，按 CLAUDE.md §3.4 从索引领号）
+- [ ] stdio 模式在 Claude Desktop 配置后四个工具可调通（端到端 stdio 冒烟已过；Claude Desktop 实配待用户操作）
+- [x] 无 token 启动被拒
+- [x] 只读验证：全部工具无写路径（代码评审 + 静态守卫测试 + 端到端冒烟）
+- [x] FEAT 建档（首个功能条目文档，按 CLAUDE.md §3.4 从索引领号）
 
 #### 工作量
 
@@ -621,5 +628,5 @@ T1-3 mock 测试 ────┘（为以上提供回归网）                �
 | T1-1 judge v2 | ✅ 已完成 | 2026-08-24 | 提示词+judge_confidence+14 测试；真跑回归待 API key 环境 |
 | T2-1 提示词模板化 | ✅ 已完成 | 2026-08-24 | loader+10 模板+启动自检；250 全量绿 |
 | T2-2 历史有界加载 | ✅ 已完成 | 2026-08-24 | services/history.py + history_compact 模板 + 12 测试；262 全量绿；手工验证与评测回归待办 |
-| T2-3 MCP server | ⬜ 未开始 | — | 等触发条件（§4） |
+| T2-3 MCP server | ✅ 已完成 | 2026-08-24 | mcp_server/ 四工具 + FEAT-001 建档；mcp==1.29.0 锁版；Claude Desktop 实配待用户 |
 | T3-1~T3-4 | 📋 仅登记 | — | 各带触发条件，见 §5 |
