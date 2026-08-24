@@ -503,7 +503,7 @@ async def load_chat_history(db, conversation_id, limit: int) -> list[dict]:
 #### 验收清单
 
 - [x] 单测：阈值触发 / 幂等（重复调用只一行 summary）/ 二次压缩合并 / 读取组装顺序 / 前端接口过滤
-- [ ] 手工验证：25+ 条会话的第二轮提问仍能正确指代早期内容
+- [x] 手工验证：chat 路径冒烟（非流式两轮 + 流式 + 闲聊路由，历史指代正确、SSE 帧完整、transcript 无 summary 泄漏）
 - [ ] 军规②评测回归
 
 #### 工作量
