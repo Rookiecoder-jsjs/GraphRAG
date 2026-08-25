@@ -32,6 +32,27 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
+# Anchor relative data paths to backend/ BEFORE importing app.config. The
+# FastAPI app always runs with CWD=backend so its "./data/..." defaults
+# resolve there; an MCP client spawns this process with an arbitrary CWD
+# (its own project dir), which would silently create an empty SQLite file
+# in the wrong place ("no such table: documents"). Same convention as the
+# launcher scripts: the data root follows the app package, not the CWD.
+import os  # noqa: E402
+
+os.chdir(_BACKEND_ROOT)
+
+# Pre-import every app service module the tools touch BEFORE the stdio
+# (anyio) event loop starts. First-import of some packages (notably neo4j)
+# deadlocks when it happens inside a running anyio loop — observed as tools
+# hanging forever on their first Neo4j call while the same import in a plain
+# asyncio process completes in <1s. Importing eagerly at module scope, where
+# no loop is running yet, avoids that entirely and also moves any import
+# error to startup instead of mid-request.
+import app.services.neo4j_client  # noqa: F401,E402
+import app.services.retriever  # noqa: F401,E402
+import app.database  # noqa: F401,E402
+
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from mcp_server import auth  # noqa: E402
@@ -153,7 +174,9 @@ async def search_graph(
     graph_view = await neo4j.get_related_entities(names, int(user_id), depth=depth)
     return {
         "entities": matches,
-        "related": graph_view.get("related_entities", []),
+        # get_related_entities returns center_nodes/related_nodes/relations.
+        "center_nodes": graph_view.get("center_nodes", []),
+        "related_nodes": graph_view.get("related_nodes", []),
         "relations": graph_view.get("relations", []),
     }
 

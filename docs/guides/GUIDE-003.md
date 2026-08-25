@@ -519,6 +519,7 @@ async def load_chat_history(db, conversation_id, limit: int) -> list[dict]:
 > 1. **依赖版本**：设计写"mcp>=1.x"，实际锁死 `mcp==1.29.0`——mcp 2.0 会拖入 starlette>=1.0，与 fastapi 0.115（需要 starlette<0.39）不兼容，实测 `Router.__init__() got an unexpected keyword argument 'on_startup'` 崩溃。requirements.txt 同步固定 httpx==0.28.1 / starlette==0.38.6 / pydantic==2.13.4 / pydantic-settings==2.11.0。
 > 2. **鉴权形态**：stdio 传输本身是进程级隔离（只有持有 env 的父进程能对话），故 token 是启动门禁（缺失/占位符 → exit 2）而非每调用校验；auth.verify 预留给未来 SSE/HTTP 传输。日志只写 stderr（stdout 是协议通道）。
 > 3. `search_knowledge` 调 retriever 时 `enable_rewrite=False`（跳过 LLM 重写，工具调用要快）；top_k 上限 20、depth 白名单 1–3（get_related_entities 内部同样钳制）。
+> 4. **实测修复两个 bug**（2026-08-25）：① server 进程 CWD 由 MCP 客户端决定，相对路径 `SQLITE_PATH=./data/...` 会在错误位置建空库（"no such table: documents"）→ 启动时 `os.chdir(_BACKEND_ROOT)` 锚定数据根；② 首次 `from neo4j import ...` 在 anyio 运行中的事件循环里挂死（裸 asyncio 进程 <1s 完成，FastMCP 工具内永久卡住；二分定位到 import 期而非 driver 连接期）→ 模块顶层预导入全部 app 服务模块。另修 search_graph 返回键名与 get_related_entities 实际返回（center_nodes/related_nodes）不匹配的 bug。
 >
 > 端到端冒烟已过：stdio 握手 + list_tools 四工具 + list_documents 真实数据返回。9 个离线单测（tests/test_mcp_server.py）。FEAT-001 已建档登记。
 

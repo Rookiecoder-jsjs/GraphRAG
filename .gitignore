@@ -57,3 +57,6 @@ RAG_检索优化指南.md
 
 codex
 
+
+# MCP project config carries a plaintext KG_MCP_TOKEN (local scope only)
+.mcp.json
