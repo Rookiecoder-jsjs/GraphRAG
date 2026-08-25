@@ -1,8 +1,13 @@
 """Silicon Flow rerank service."""
+import logging
+from typing import Any, Dict, List, Optional
+
 import httpx
-from typing import List, Dict, Any, Optional
 
 from app.config import get_settings
+from app.services.retry import run_with_retry
+
+logger = logging.getLogger(__name__)
 
 
 class RerankService:
@@ -27,50 +32,63 @@ class RerankService:
         chunks: List[Dict[str, Any]],
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
-        """Rerank chunks by relevance to query."""
+        """Rerank chunks by relevance to query.
+
+        Retries transient provider failures (5xx / 429 / transport) with
+        backoff; on final failure falls back to the input order so the
+        chat/search request still gets results — the fallback is logged as
+        a warning (it silently degraded retrieval quality before).
+        """
         if not chunks:
             return []
 
-        documents = [chunk["content"] for chunk in chunks]
         client = await self._get_client()
+        url = f"{self.base_url}/rerank"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        documents = [chunk["content"] for chunk in chunks]
 
-        try:
+        async def post_once() -> Dict[str, Any]:
             response = await client.post(
-                f"{self.base_url}/rerank",
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                url,
+                headers=headers,
                 json={
                     "model": self.model,
                     "query": query,
                     "documents": documents,
-                    "top_n": top_k
-                }
+                    "top_n": top_k,
+                },
             )
             response.raise_for_status()
-            data = response.json()
+            return response.json()
 
-            # Map reranked results back to original chunks, attaching
-            # the relevance score so the chat layer can show a quality
-            # badge to the user (e.g. "[1] high" vs "[2] low"). We
-            # accept either `relevance_score` (siliconflow default) or
-            # `score` (jina / cohere style) — different vendors name
-            # the field differently, but they're both 0..1 floats.
-            reranked = []
-            for result in data["results"][:top_k]:
-                idx = result["index"]
-                chunk = dict(chunks[idx])  # shallow copy so we don't
-                                           # mutate the caller's chunk
-                score = result.get("relevance_score", result.get("score"))
-                if score is not None:
-                    chunk["relevance_score"] = float(score)
-                reranked.append(chunk)
-
-            return reranked
-
-        except httpx.HTTPError:
+        try:
+            data = await run_with_retry("rerank", post_once, max_attempts=3)
+        except Exception as e:
             # Fallback to original order on error — no scores available
             # since the API never responded. Callers (chat) treat a
             # missing score as "unknown quality" (rendered as medium).
+            logger.warning(
+                "rerank failed after retries, falling back to input order: %s", e,
+            )
             return chunks[:top_k]
+
+        # Map reranked results back to original chunks, attaching
+        # the relevance score so the chat layer can show a quality
+        # badge to the user (e.g. "[1] high" vs "[2] low"). We
+        # accept either `relevance_score` (siliconflow default) or
+        # `score` (jina / cohere style) — different vendors name
+        # the field differently, but they're both 0..1 floats.
+        reranked = []
+        for result in data["results"][:top_k]:
+            idx = result["index"]
+            chunk = dict(chunks[idx])  # shallow copy so we don't
+                                       # mutate the caller's chunk
+            score = result.get("relevance_score", result.get("score"))
+            if score is not None:
+                chunk["relevance_score"] = float(score)
+            reranked.append(chunk)
+
+        return reranked
 
     async def close(self):
         """Close HTTP client."""

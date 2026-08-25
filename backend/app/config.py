@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # falls back to fact_retrieval so RAG always runs.
     ENABLE_INTENT_ROUTING: bool = True
     INTENT_CLASSIFY_TIMEOUT: float = 3.0
+    # Streaming chat: SSE comment-frame heartbeat emitted while retrieval
+    # runs (which can take tens of seconds cold). Keeps proxies/clients from
+    # timing out an idle connection; 0 disables the ping loop entirely.
+    CHAT_SSE_PING_INTERVAL_SECONDS: float = 5.0
     # Graph-RAG mode: "auto" (default) enables the graph channel only when
     # the query matches >=2 of the user's entities; "on"/"off" force it.
     GRAPH_RAG_MODE: str = "auto"

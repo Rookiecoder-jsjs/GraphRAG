@@ -54,6 +54,7 @@ import app.services.retriever  # noqa: F401,E402
 import app.database  # noqa: F401,E402
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.types import ToolAnnotations  # noqa: E402
 
 from mcp_server import auth  # noqa: E402
 
@@ -82,7 +83,14 @@ mcp = FastMCP(
 # Tool 1: semantic search over indexed chunks (hybrid BM25+vector+rerank)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+# All four tools are pure reads over SQLite/Chroma/Neo4j. Declaring
+# readOnlyHint lets MCP clients (Claude Desktop, codex — which gates tool
+# calls on this annotation) run them without user confirmation, matching the
+# server's read-only contract that tests/test_mcp_server.py pins.
+_READ_ONLY = ToolAnnotations(readOnlyHint=True)
+
+
+@mcp.tool(annotations=_READ_ONLY)
 async def search_knowledge(
     query: str,
     user_id: int,
@@ -149,7 +157,7 @@ async def _doc_titles_for_chunks(chunks, user_id) -> Dict[str, str]:
 # Tool 2: entity-name search in the knowledge graph
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def search_graph(
     entity_or_query: str,
     user_id: int,
@@ -194,7 +202,7 @@ async def _neo4j():
 # Tool 3: full entity detail envelope
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def get_entity_detail(name: str, user_id: int) -> Optional[Dict[str, Any]]:
     """Full detail for one entity: stats, mentioning documents, related
     entities, and sample chunk previews. Returns null when unknown."""
@@ -229,7 +237,7 @@ async def get_entity_detail(name: str, user_id: int) -> Optional[Dict[str, Any]]
 # Tool 4: document inventory
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY)
 async def list_documents(user_id: int) -> List[Dict[str, Any]]:
     """List the user's indexed documents with status and timestamps."""
     from app.database import get_db

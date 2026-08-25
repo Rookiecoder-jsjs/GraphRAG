@@ -1,4 +1,5 @@
 """Chat API endpoints."""
+import asyncio
 import json
 import logging
 import math
@@ -541,12 +542,31 @@ async def _chat_stream_body(
         return
     if intent["intent"] == "fact_retrieval" and request.include_context:
         from app.services.retriever import retrieve
-        context = await retrieve(
+        # Retrieval (LLM preprocess + vector/BM25 + rerank) can take tens of
+        # seconds cold. Emit an SSE comment frame every
+        # CHAT_SSE_PING_INTERVAL_SECONDS so proxies/clients see liveness and
+        # don't time out an idle connection. Comment frames (`: ping`) carry
+        # no data line, so the frontend SSE parser returns null for them and
+        # drops them by design.
+        retrieval_task = asyncio.ensure_future(retrieve(
             request.message,
             user_id,
             use_graph_rag=request.use_graph_rag,
             conversation_history=conversation_history[:-1],
-        )
+        ))
+        ping_interval = get_settings().CHAT_SSE_PING_INTERVAL_SECONDS
+        try:
+            if ping_interval <= 0:
+                # Disabled by config — plain await, no heartbeat frames.
+                context = await retrieval_task
+            else:
+                while not retrieval_task.done():
+                    yield ": ping\n\n"
+                    await asyncio.wait({retrieval_task}, timeout=ping_interval)
+                context = retrieval_task.result()  # re-raises retrieve() failures
+        finally:
+            if not retrieval_task.done():
+                retrieval_task.cancel()
     else:
         context = {"chunks": [], "entities": [], "relations": []}
 

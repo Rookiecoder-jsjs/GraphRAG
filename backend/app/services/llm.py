@@ -9,22 +9,15 @@ import json
 from app.config import get_settings
 from app.prompts import load_prompt
 from app.services.context_budget import enforce_rag_context_budget
+# Retry classification is shared with embedding.py/reranker.py (one
+# definition of "worth retrying"); the schedules differ per service.
+from app.services.retry import (
+    RETRYABLE_EXCEPTIONS as _RETRYABLE_EXCEPTIONS,
+    backoff_delay,
+    run_with_retry,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# Retry policy for chat_complete: only 5xx / 429 / transport-timeout errors
-# are worth a single retry; other 4xx (auth, bad request) won't fix themselves
-# and fail fast. Mirrors embedding.py's RETRYABLE classification.
-_RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
-_RETRYABLE_EXCEPTIONS = (
-    httpx.RemoteProtocolError,
-    httpx.ConnectError,
-    httpx.ReadTimeout,
-    httpx.WriteTimeout,
-    httpx.PoolTimeout,
-    httpx.LocalProtocolError,
-)
 
 # Suffix appended to a RAG answer that hit the max_tokens ceiling
 # (finish_reason == "length") so a cut-off reply is never shown or persisted
@@ -330,9 +323,13 @@ class LLMService:
             response.raise_for_status()
             return _extract_content(response.json())
 
-        last_error: Optional[BaseException] = None
+        # Retryable failures (5xx / 429 / transport timeout) get exponential
+        # backoff via the shared policy — the old single fixed sleep(1) retry
+        # gave up on exactly the transient bursts where a second pause would
+        # have succeeded. run_with_retry chains the last failure via `from`
+        # so the original exception stays visible in logs.
         try:
-            return await _post_once()
+            return await run_with_retry("chat_complete", _post_once, max_attempts=3)
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
             # Non-thinking model tiers reject the enable_thinking param with
@@ -349,27 +346,7 @@ class LLMService:
                     return await _post_once()
                 except Exception as retry_error:
                     raise retry_error from e
-            if status is not None and status not in _RETRYABLE_STATUS_CODES:
-                # 4xx (except 429) won't fix themselves — fail fast, no retry.
-                raise
-            last_error = e
-            logger.warning(
-                "chat_complete got HTTP %s, retrying once: %.200s",
-                status,
-                e.response.text if e.response is not None else "",
-            )
-        except _RETRYABLE_EXCEPTIONS as e:
-            last_error = e
-            logger.warning("chat_complete transport error, retrying once: %s", e)
-
-        # Single retry for retryable failures (5xx / 429 / transport
-        # timeout). Chained via `from` so the original exception stays visible
-        # in logs even when the retry fails too.
-        await asyncio.sleep(1)
-        try:
-            return await _post_once()
-        except Exception as retry_error:
-            raise retry_error from last_error
+            raise
 
     async def chat_complete_stream(
         self,
@@ -424,39 +401,63 @@ class LLMService:
             "Content-Type": "application/json",
         }
 
-        try:
-            async for item in self._stream_completions(client, url, headers, payload):
-                yield item
-        except httpx.HTTPStatusError as e:
-            if (
-                enable_thinking is not None
-                and e.response is not None
-                and e.response.status_code == 400
-            ):
-                # Non-thinking model tier: the provider rejects the
-                # enable_thinking param. Drop it and retry ONCE so the user
-                # gets a normal answer rather than an error bubble. Nothing
-                # was yielded before raise_for_status fired, so the retry is
-                # transparent to the caller.
-                logger.warning(
-                    "enable_thinking=%s rejected by provider (HTTP 400: %.200s); "
-                    "retrying without it",
-                    enable_thinking, e.response.text,
-                )
-                payload.pop("enable_thinking", None)
-                try:
-                    async for item in self._stream_completions(client, url, headers, payload):
-                        yield item
-                except Exception as retry_error:
-                    # Typed error frame - the caller decides how to surface
-                    # it. Never inject the error text into the answer: it
-                    # used to be streamed as content and then PERMANENTLY
-                    # saved to chat history, polluting later prompts.
-                    yield ("error", str(retry_error))
-            else:
+        # Transparent retry ONLY while nothing has reached the caller yet:
+        # once any delta has been yielded, replaying would duplicate text,
+        # so mid-stream failures must surface as the terminal error frame.
+        # Same pre-first-frame retry discipline as codex's stream handling
+        # (codex-rs/core/src/responses_retry.rs).
+        max_extra_attempts = 2      # one transparent retry per failure class
+        transport_retries = 0
+        first_frame_emitted = False
+
+        while True:
+            try:
+                async for item in self._stream_completions(client, url, headers, payload):
+                    first_frame_emitted = True
+                    yield item
+                break  # stream completed normally
+            except httpx.HTTPStatusError as e:
+                if (
+                    enable_thinking is not None
+                    and "enable_thinking" in payload
+                    and e.response is not None
+                    and e.response.status_code == 400
+                ):
+                    # Non-thinking model tier: the provider rejects the
+                    # enable_thinking param. Drop it and retry ONCE so the
+                    # user gets a normal answer rather than an error bubble.
+                    # Nothing was yielded before raise_for_status fired, so
+                    # the retry is transparent to the caller.
+                    logger.warning(
+                        "enable_thinking=%s rejected by provider (HTTP 400: %.200s); "
+                        "retrying without it",
+                        enable_thinking, e.response.text,
+                    )
+                    payload.pop("enable_thinking", None)
+                    continue
                 yield ("error", str(e))
-        except Exception as e:
-            yield ("error", str(e))
+                return
+            except Exception as e:
+                if (
+                    not first_frame_emitted
+                    and isinstance(e, _RETRYABLE_EXCEPTIONS)
+                    and transport_retries < max_extra_attempts - 1
+                ):
+                    transport_retries += 1
+                    delay = backoff_delay(transport_retries - 1, base_delay=1.0)
+                    logger.warning(
+                        "chat_complete_stream failed before first frame "
+                        "(retry %d/%d) in %.1fs: %s",
+                        transport_retries, max_extra_attempts - 1, delay, e,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                # Typed error frame - the caller decides how to surface
+                # it. Never inject the error text into the answer: it
+                # used to be streamed as content and then PERMANENTLY
+                # saved to chat history, polluting later prompts.
+                yield ("error", str(e))
+                return
 
     async def _stream_completions(
         self,

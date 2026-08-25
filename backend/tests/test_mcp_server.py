@@ -79,6 +79,20 @@ def test_tool_schemas_declare_user_id():
         assert "user_id" in props, f"{name} lost its user_id parameter"
 
 
+def test_all_tools_declare_read_only_annotation():
+    """All four tools carry readOnlyHint=True so MCP clients can run them
+    without confirmation (codex gates tool auto-approval on this hint)."""
+    srv = _load_tools()
+    for name in ("search_knowledge", "search_graph",
+                 "get_entity_detail", "list_documents"):
+        tool = srv.mcp._tool_manager._tools[name]
+        annotations = getattr(tool, "annotations", None)
+        assert annotations is not None, f"{name} missing ToolAnnotations"
+        assert annotations.readOnlyHint is True, (
+            f"{name} must declare readOnlyHint=True"
+        )
+
+
 # ---------- read-only verification ------------------------------------------
 
 def test_no_write_paths_in_tool_handlers():

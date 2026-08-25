@@ -10,21 +10,16 @@ import aiosqlite
 import httpx
 
 from app.config import get_settings
+# Retryable classification is shared across llm/embedding/reranker (one
+# definition of "worth retrying"); the schedule below is embedding-specific.
+from app.services.retry import (
+    RETRYABLE_EXCEPTIONS,
+    RETRYABLE_STATUS_CODES,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Retry policy: only transport / 5xx errors are retried; 4xx (auth, bad request)
-# will not fix themselves and should fail fast.
-RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
-RETRYABLE_EXCEPTIONS = (
-    httpx.RemoteProtocolError,
-    httpx.ConnectError,
-    httpx.ReadTimeout,
-    httpx.WriteTimeout,
-    httpx.PoolTimeout,
-    httpx.LocalProtocolError,
-)
 MAX_ATTEMPTS = 5
 RETRY_DELAYS_SECONDS = [1, 2, 4, 8, 16]
 REQUEST_TIMEOUT_SECONDS = 60.0

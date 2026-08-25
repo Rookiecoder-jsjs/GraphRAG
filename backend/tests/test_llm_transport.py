@@ -125,13 +125,26 @@ class TestRetries:
         assert rec.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_double_500_raises_with_cause(self, monkeypatch):
+    async def test_double_500_recovers_on_third_attempt(self, monkeypatch):
+        # chat_complete now uses the shared retry policy (max_attempts=3):
+        # two transient 500s are absorbed and the third try succeeds.
         monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
         llm, rec = make_mock_llm_service(status_sequence=[500, 500])
-        with pytest.raises(Exception) as exc_info:
+        out = await llm.chat_complete([{"role": "user", "content": "q"}])
+        assert out == "测试回答 [1]"
+        assert rec.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_triple_500_raises_with_cause(self, monkeypatch):
+        # Exhausting all three attempts raises the LAST failure (an
+        # HTTPStatusError from run_with_retry, so the provider's status and
+        # body stay visible in logs).
+        monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+        llm, rec = make_mock_llm_service(status_sequence=[500, 500, 500])
+        with pytest.raises(__import__("httpx").HTTPStatusError) as exc_info:
             await llm.chat_complete([{"role": "user", "content": "q"}])
-        assert exc_info.value.__cause__ is not None
-        assert rec.call_count == 2
+        assert exc_info.value.response.status_code == 500
+        assert rec.call_count == 3
 
     @pytest.mark.asyncio
     async def test_400_with_enable_thinking_drops_param_and_retries_once(self):
@@ -191,6 +204,65 @@ class TestRetries:
         # assert on the transport-level counter instead of the recorder.
         assert calls["n"] == 2
         assert rec.call_count == 1
+
+
+    @pytest.mark.asyncio
+    async def test_stream_transport_error_before_first_frame_retries(self, monkeypatch):
+        # A transport error BEFORE any delta reached the caller is retried
+        # transparently (nothing was streamed, so replay cannot duplicate).
+        monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+        llm, rec = make_mock_llm_service()
+
+        import httpx as _httpx
+        original = llm._client._transport.handle_async_request
+
+        calls = {"n": 0}
+
+        async def flaky(request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _httpx.RemoteProtocolError("peer reset", request=request)
+            return await original(request)
+
+        llm._client._transport.handle_async_request = flaky
+        parts = [item async for item in llm.chat_complete_stream(
+            [{"role": "user", "content": "q"}]
+        )]
+        kinds = {kind for kind, _ in parts}
+        assert kinds == {"content"}          # no error frame leaked
+        assert "".join(t for k, t in parts if k == "content") == "测试回答 [1]"
+        # The reset first attempt never reaches the mock handler, so count
+        # at the transport level (same convention as test_timeout_retries_once).
+        assert calls["n"] == 2
+        assert rec.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_mid_stream_error_surfaces_as_error_frame(self):
+        # After the first content delta has been yielded, a failure must NOT
+        # be retried (replay would duplicate text) — it surfaces as the
+        # terminal ("error", ...) frame instead.
+        llm, _ = make_mock_llm_service()
+
+        import httpx as _httpx
+        original = llm._client._transport.handle_async_request
+
+        async def die_midstream(request):
+            # Synthesize an SSE body that yields one good frame then dies.
+            async def gen():
+                yield b'data: {"choices":[{"delta":{"content":"\xe5\x89\x8d"}}]}\n\n'
+                raise _httpx.RemoteProtocolError("connection lost mid-stream")
+            return _httpx.Response(
+                200, content=gen(),
+                headers={"content-type": "text/event-stream"}, request=request,
+            )
+
+        llm._client._transport.handle_async_request = die_midstream
+        parts = [item async for item in llm.chat_complete_stream(
+            [{"role": "user", "content": "q"}]
+        )]
+        assert parts[0] == ("content", "前")
+        assert parts[-1][0] == "error"
+        assert "mid-stream" in parts[-1][1]
 
 
 async def _noop_sleep(_seconds):

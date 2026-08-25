@@ -568,6 +568,51 @@ backend/mcp_server/
 
 ---
 
+### T2-4 传输层可靠性收敛（共享重试 + SSE 心跳 + MCP 只读注解）
+
+> 状态: 已完成（2026-08-25）
+> 触发条件：codex 源码第二轮盘点（用户要求"看看还有什么可以改进"）命中三项低成本高收益点。
+>
+> **实施记录**（2026-08-25）：交付 `app/services/retry.py`（共享重试策略）+ 三服务接线
+> + chat.py 检索期心跳 + mcp_server 只读注解；`tests/test_retry.py`（19 用例）+
+> 存量测试更新，全量 **296 测试绿**。要点与偏差：
+> 1. `run_with_retry(op_name, fn, max_attempts=3, base_delay=1.0, delays=None)`：
+>    指数退避 `base·2^n·U(0.9,1.1)`（对齐 codex-client/src/retry.rs 的 ±10% 抖动）；
+>    可重试分类（408/425/429/5xx + 传输异常）从 llm/embedding 的三份重复定义收敛为一份。
+>    embedding 保留自己的 [1,2,4,8,16] 显式调度经 delays 参数传入。
+> 2. llm.chat_complete 由"固定 sleep(1) 重试一次"升级为 3 次指数退避；
+>    enable_thinking 400 剥参重试语义不变。**行为变更**：原 test_double_500_raises_with_cause
+>    在新语义下第三次尝试会成功——用例改为 triple_500 才断言抛出。
+> 3. llm.chat_complete_stream 新增**首帧前透明重试**（一次）：首帧已 yield 后的失败仍走
+>    terminal error 帧（重放会造成文本重复）。对齐 codex responses_retry.rs 的
+>    pre-first-frame 纪律。
+> 4. reranker 从**零重试且静默降级**改为 3 次重试 + fallback 时 warning 日志
+>    （原实现连日志都不打，违反 CLAUDE.md"不吞掉错误"）。
+> 5. chat 流式路径检索期间每 CHAT_SSE_PING_INTERVAL_SECONDS(默认5s) 发 `: ping`
+>    注释帧（前端 sse.js 对无 data 行的块返回 null 天然丢弃，零前端改动）；
+>    冷启动 48s 的检索不再让连接静默。
+> 6. 四个 MCP 工具声明 `ToolAnnotations(readOnlyHint=True)`（codex-mcp 用同一注解
+>    门控免确认调用）；FastMCP 1.29 原生支持。
+
+#### Codex 参考
+
+- `codex-rs/codex-client/src/retry.rs`：RetryPolicy + backoff(base, attempt)=base·2^(n-1)±10% jitter。
+- `codex-rs/core/src/responses_retry.rs`：流式失败的分型处理（连接失败 vs 中途失败）。
+- `codex-rs/codex-api/src/provider.rs`：Provider 级 retry/stream_idle_timeout 配置化。
+- `codex-rs/codex-mcp`：ToolAnnotations.read_only 门控工具自动批准。
+
+#### 验收清单
+
+- [x] 共享分类单测（状态码集合、异常元组、退避公式、饱和上限）
+- [x] run_with_retry：成功不睡 / 可重试恢复 / 不可重试立即抛 / 耗尽抛最后错 / delays 覆盖
+- [x] reranker：耗尽后回退输入序且日志可见；瞬时失败重试后恢复并带分数返回
+- [x] llm 流式：首帧前传输错误透明重试；中途失败出 error 帧不重放
+- [x] chat 心跳：慢检索期出现 ping 帧、检索失败仍出 terminal error 帧
+- [x] MCP 注解守卫测试（readOnlyHint=True 全量断言）
+- [x] 全量 pytest 绿（296）
+
+---
+
 ## 5. 第三梯队（只借思想；各自带触发条件与草案）
 
 ### T3-1 WorldState 式差量注入
@@ -589,6 +634,11 @@ backend/mcp_server/
 > 触发：长任务需要周期性提醒（时间/预算/进度）进入模型上下文。
 
 草案：Codex `time_reminder.rs` 三条件（新窗口 OR 间隔到期 OR 紧随用户/工具输出边界）+ "边界即使未触发也消费"防积压。
+
+### T3-5 usage token 记账与压缩阈值 token 化
+> 触发：① 需要按用户/会话统计 LLM 成本；② T2-2 的条数阈值（24 条）被证实误判——短消息为主的会话过早压缩，或长消息会话压缩过晚。
+
+草案：codex 由**实际 token 用量**驱动自动压缩（`core/src/session/context_window.rs`：`auto_compact_scope_tokens` 对比 `model_auto_compact_token_limit`）。NC 的 llm.py 已解析 provider 的 usage-only SSE 帧（`_stream_completions` 尾帧）但把数据丢弃了。第一步零风险：把每轮 usage（prompt/completion tokens）随消息持久化；第二步再议把 maybe_compact_history 的触发从条数换成估算 token（可先用 context_budget.estimate_tokens 兜底无 usage 的旧行）。
 
 ---
 
@@ -630,4 +680,5 @@ T1-3 mock 测试 ────┘（为以上提供回归网）                �
 | T2-1 提示词模板化 | ✅ 已完成 | 2026-08-24 | loader+10 模板+启动自检；250 全量绿 |
 | T2-2 历史有界加载 | ✅ 已完成 | 2026-08-24 | services/history.py + history_compact 模板 + 12 测试；271 全量绿；冒烟+军规②回归通过 |
 | T2-3 MCP server | ✅ 已完成 | 2026-08-24 | mcp_server/ 四工具 + FEAT-001 建档；mcp==1.29.0 锁版；Claude Desktop 实配待用户 |
-| T3-1~T3-4 | 📋 仅登记 | — | 各带触发条件，见 §5 |
+| T2-4 传输层可靠性收敛 | ✅ 已完成 | 2026-08-25 | retry.py 共享重试 + llm/embedding/reranker 接线 + SSE 心跳 + MCP 只读注解；296 全量绿 |
+| T3-1~T3-5 | 📋 仅登记 | — | 各带触发条件，见 §5（T3-5 为 usage token 记账） |

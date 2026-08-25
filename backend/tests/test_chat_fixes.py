@@ -384,3 +384,67 @@ def test_rate_limiter_purges_stale_sprayed_keys():
     # Stale sprayed keys were dropped; only the live key remains.
     assert len(limiter._hits) < 100
     assert limiter.is_allowed("fresh:key") is True  # 2/5 - still allowed
+
+
+# ---------- retrieval-phase SSE ping frames ---------------------------------
+
+def test_stream_emits_ping_frames_while_retrieval_runs():
+    """fact_retrieval + slow retrieve(): the generator must emit `: ping`
+    comment frames while waiting, then continue with the normal answer flow.
+    Comment frames carry no data line, so the frontend parser drops them."""
+    llm = _FakeStreamLLM([("content", "answer")])
+    db = _FakeDB(_history_rows())
+
+    retrieve_calls = {"n": 0}
+
+    async def _slow_retrieve(*args, **kwargs):
+        retrieve_calls["n"] += 1
+        await asyncio.sleep(0.05)  # > 2 ping intervals at 0.01s
+        return {"chunks": [], "entities": [], "relations": []}
+
+    gen = chat._chat_stream_body(ChatRequest(message="what about it?"), 1, "c1")
+    with mock.patch.object(chat, "get_db", _fake_get_db(db)), \
+         mock.patch.object(chat, "classify_intent", _intent("fact_retrieval")), \
+         mock.patch("app.services.retriever.retrieve", _slow_retrieve), \
+         mock.patch.object(chat, "get_llm_service", mock.AsyncMock(return_value=llm)), \
+         mock.patch.object(
+             type(chat.get_settings()), "CHAT_SSE_PING_INTERVAL_SECONDS", 0.01,
+             create=True,
+         ):
+        frames = _collect(gen)
+
+    pings = [f for f in frames if f.startswith(": ping")]
+    assert pings, "expected at least one ping frame during retrieval"
+    assert any(f.startswith("event: done") for f in frames)
+    assert retrieve_calls["n"] == 1
+    # The ping loop ends before the sources/body phase; no data frame may be
+    # a bare comment (frontend parser returns null for those and drops them).
+    assert not any(f.startswith(": ping") for f in frames[len(pings):])
+
+
+def test_stream_retrieval_failure_propagates_via_wrapper():
+    """If retrieve() raises inside the ping-wait loop, the wrapper still
+    converts it into a terminal error frame (no silent connection drop)."""
+    llm = _FakeStreamLLM([("content", "unused")])
+    db = _FakeDB(_history_rows())
+
+    async def _boom_retrieve(*args, **kwargs):
+        raise RuntimeError("retrieval exploded")
+
+    out = []
+
+    async def _wrapped():
+        with mock.patch.object(chat, "get_db", _fake_get_db(db)), \
+             mock.patch.object(chat, "classify_intent",
+                               _intent("fact_retrieval")), \
+             mock.patch("app.services.retriever.retrieve", _boom_retrieve), \
+             mock.patch.object(chat, "get_llm_service",
+                               mock.AsyncMock(return_value=llm)):
+            async for frame in chat.chat_stream_generator(
+                ChatRequest(message="q"), 1, "c1"
+            ):
+                out.append(frame)
+
+    asyncio.run(_wrapped())
+    assert out[-1].startswith("event: error")
+    assert "retrieval exploded" in out[-1]
