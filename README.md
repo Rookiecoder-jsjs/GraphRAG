@@ -286,7 +286,42 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 | `get_entity_detail` | `(name, user_id)` | 实体详情（统计 / 文档 / 关联实体 / 样例 chunk） |
 | `list_documents` | `(user_id,)` | 文档清单（状态 + 时间戳） |
 
-全部只读、按 `user_id` 显式隔离；启动需环境变量 `KG_MCP_TOKEN`（缺失或占位符拒绝启动）。运行：`KG_MCP_TOKEN=<token> python mcp_server/server.py`。
+全部只读、按 `user_id` 显式隔离（MCP 层无 JWT 会话，调用时显式声明读谁的库）。
+
+**接入步骤**：
+
+1. **生成 token**（缺失或占位符时进程拒绝启动，exit 2）：
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+2. **在客户端注册**（三选一；命令/路径按需调整）：
+
+   **Claude Code**（推荐，token 存 local 作用域不进 git）：
+   ```bash
+   claude mcp add nc-knowledge-base --env KG_MCP_TOKEN=<your-token> -- D:/NC/.venv/Scripts/python.exe D:/NC/backend/mcp_server/server.py
+   ```
+
+   **Claude Desktop**（`claude_desktop_config.json`）：
+   ```json
+   {
+     "mcpServers": {
+       "nc-knowledge-base": {
+         "command": "D:/NC/.venv/Scripts/python.exe",
+         "args": ["D:/NC/backend/mcp_server/server.py"],
+         "env": { "KG_MCP_TOKEN": "<your-token>" }
+       }
+     }
+   }
+   ```
+
+   **codex**（`~/.codex/config.toml`）：
+   ```toml
+   [mcp_servers.nc-knowledge-base]
+   command = "D:/NC/.venv/Scripts/python.exe"
+   args = ["D:/NC/backend/mcp_server/server.py"]
+   env = { "KG_MCP_TOKEN" = "<your-token>" }
+   ```
+3. **使用前提**：Neo4j + Chroma 容器运行中（检索与图谱工具需要）；SQLite 数据文件已由主服务初始化（`list_documents` 只依赖它）。无需手动启动 server——客户端会以 stdio 子进程方式拉起它，也无需设 `PYTHONPATH`（server.py 自行定位 backend 根）。
 
 ### 💓 健康检查
 - `GET /health` — 存活探针（liveness），返回 `{"status": "healthy"}`
