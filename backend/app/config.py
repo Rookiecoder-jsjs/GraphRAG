@@ -1,5 +1,7 @@
 """Configuration management for the knowledge graph system."""
 from functools import lru_cache
+from typing import Optional
+
 from pydantic_settings import BaseSettings
 
 
@@ -138,6 +140,13 @@ class Settings(BaseSettings):
 
     # CORS - comma-separated list of allowed origins (no wildcards with credentials)
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+
+    # Logging (see app/logger.py)
+    LOG_LEVEL: str = "INFO"
+    LOG_DIR: str = "./data/logs"
+    # None = auto: "text" in development, "json" in production (APP_ENV).
+    # 显式 "text"/"json" 总生效。
+    LOG_FORMAT: Optional[str] = None
 
     # App environment: "development" (default) or "production"
     APP_ENV: str = "development"

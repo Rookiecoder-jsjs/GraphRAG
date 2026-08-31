@@ -683,6 +683,17 @@ async def _chat_stream_body(
         len(context["chunks"]),
         sum(len(c) for c in full_response),
         sum(len(t) for t in thinking_parts),
+        extra={
+            "timing_s": {
+                "citation": round(t_cite_end - t_cite_start, 3),
+                "first_byte": round((t_first_byte or t_stream_end) - t_stream_start, 3),
+                "stream": round(t_stream_end - t_stream_start, 3),
+                "turn": round(t_stream_end - t_cite_start, 3),
+            },
+            "context_chunks": len(context["chunks"]),
+            "answer_chars": sum(len(c) for c in full_response),
+            "thinking_chars": sum(len(t) for t in thinking_parts),
+        },
     )
 
     # Persist the turn. Whatever streamed before a provider failure is real

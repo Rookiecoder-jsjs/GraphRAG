@@ -443,6 +443,20 @@ async def retrieve(
         t_rewrite - t_start, t_embed - t_rewrite, t_retrieve - t_embed,
         t_rerank - t_retrieve, t_expand - t_rerank, t_end - t_expand, t_end - t_start,
         len(valid_queries), len(seeds), len(expanded),
+        extra={
+            "timing_s": {
+                "rewrite": round(t_rewrite - t_start, 3),
+                "embed": round(t_embed - t_rewrite, 3),
+                "retrieve": round(t_retrieve - t_embed, 3),
+                "rerank": round(t_rerank - t_retrieve, 3),
+                "expand": round(t_expand - t_rerank, 3),
+                "enrich": round(t_end - t_expand, 3),
+                "total": round(t_end - t_start, 3),
+            },
+            "queries": len(valid_queries),
+            "seeds": len(seeds),
+            "expanded": len(expanded),
+        },
     )
 
     result = {"chunks": expanded, "entities": entities, "relations": relations}

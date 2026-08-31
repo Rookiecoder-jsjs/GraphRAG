@@ -38,7 +38,7 @@
 | 🎯 重排序 | 硅基流动 Qwen3-Reranker-8B (API) |
 | 🤖 大模型 | Kimi API (Moonshot, kimi-k2) / 百炼 qwen3.7-flash (阿里云 DashScope) / 硅基流动 Qwen3-8B |
 | 🔑 密码哈希 | bcrypt 4.1.3（原生） |
-| 📝 日志 | Python `logging` + RotatingFileHandler（统一在 `app/logger.py`） |
+| 📝 日志 | Python `logging` + RotatingFileHandler（统一在 `app/logger.py`，text/JSON 双格式） |
 
 ## 项目目录结构
 
@@ -86,7 +86,7 @@ D:/NC/
 │   │   ├── utils/md_parser.py   # Markdown 解析（markitdown 防御性封装）
 │   │   ├── config.py            # 配置管理（含 CORS 白名单 + JWT 占位符拦截）
 │   │   ├── database.py          # SQLite 初始化 + 增量迁移（schema_version 追踪）
-│   │   ├── logger.py            # 统一 logging 配置（请求 ID 关联）
+│   │   ├── logger.py            # 统一 logging 配置（请求 ID 关联 + text/JSON 双格式）
 │   │   └── main.py              # FastAPI 入口（lifespan：预热 / 对账 / 就绪探针）
 │   ├── migrations/001_baseline.sql  # 迁移基线（stamp version 1，未来增量迁移按序应用）
 │   ├── mcp_server/              # 知识库 MCP Server（stdio，四个只读工具；见其 README）
@@ -477,6 +477,7 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | `HISTORY_KEEP_RECENT` | 折叠时保留的最近原始消息数 | `6` | 否 |
 | `KG_MCP_TOKEN` | MCP Server 访问令牌（仅 mcp_server 进程） | - | MCP 必填 |
 | `LOG_DIR` / `LOG_LEVEL` | 日志目录与级别 | `./data/logs` / `INFO` | 否 |
+| `LOG_FORMAT` | 日志格式：`text` / `json`；留空按 `APP_ENV` 自动（development=text / production=json） | 空（自动） | 否 |
 
 ## 🧭 前端路由总览
 

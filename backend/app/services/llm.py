@@ -449,6 +449,12 @@ class LLMService:
                         "chat_complete_stream failed before first frame "
                         "(retry %d/%d) in %.1fs: %s",
                         transport_retries, max_extra_attempts - 1, delay, e,
+                        extra={
+                            "attempt": transport_retries,
+                            "max_attempts": max_extra_attempts - 1,
+                            "delay_s": round(delay, 3),
+                            "error": str(e),
+                        },
                     )
                     await asyncio.sleep(delay)
                     continue
