@@ -114,6 +114,65 @@ def _normalize_relation_type(label: Any) -> str:
     return _RELATION_TYPE_SYNONYMS.get(collapsed, "RELATED_TO")
 
 
+# Controlled entity-type vocabulary for graph extraction, mirroring the
+# relation vocabulary above. An open "type" label produced ad-hoc buckets for
+# the cluster map / dashboard to group by; constraining to a fixed list keeps
+# those groupings stable and node types mergeable across documents. Unknown
+# labels collapse to OTHER (the extraction prompts never emit it, so it also
+# flags labels the model invented).
+_ENTITY_TYPES = [
+    "PERSON", "ORGANIZATION", "LOCATION", "CONCEPT",
+    "EVENT", "TIME", "TECHNOLOGY", "OTHER",
+]
+_ENTITY_TYPES_SET = {t for t in _ENTITY_TYPES}
+
+_ENTITY_TYPE_SYNONYMS = {
+    "人": "PERSON", "人名": "PERSON", "人物": "PERSON", "作者": "PERSON",
+    "机构": "ORGANIZATION", "组织": "ORGANIZATION", "公司": "ORGANIZATION",
+    "企业": "ORGANIZATION", "大学": "ORGANIZATION", "学校": "ORGANIZATION",
+    "地点": "LOCATION", "位置": "LOCATION", "城市": "LOCATION",
+    "国家": "LOCATION", "地区": "LOCATION", "区域": "LOCATION",
+    "概念": "CONCEPT", "术语": "CONCEPT", "主题": "CONCEPT", "领域": "CONCEPT",
+    "事件": "EVENT",
+    "时间": "TIME", "日期": "TIME", "年份": "TIME",
+    "技术": "TECHNOLOGY", "科技": "TECHNOLOGY", "工具": "TECHNOLOGY",
+    "tools": "TECHNOLOGY", "technology": "TECHNOLOGY",
+    "framework": "CONCEPT", "product": "CONCEPT", "keyword": "CONCEPT",
+}
+
+
+def _normalize_entity_type(label: Any) -> str:
+    """Map a model-emitted entity type onto the controlled vocabulary.
+
+    Accepts canonical English types verbatim; folds known synonyms (English
+    and Chinese) onto the nearest canonical type; anything unknown becomes
+    OTHER. Applied at parse time so graph node ``type`` stays in a small,
+    grouping-friendly set even when the model ignores the constrained prompt
+    list.
+    """
+    text = str(label or "").strip()
+    if not text:
+        return "OTHER"
+    upper = text.upper()
+    if upper in _ENTITY_TYPES_SET:
+        return upper
+    collapsed = text.lower().replace(" ", "_").replace("-", "_")
+    return _ENTITY_TYPE_SYNONYMS.get(collapsed, "OTHER")
+
+
+def _bounded_extraction_input(text: str, limit: int = 2000) -> str:
+    """Slice a chunk for LLM extraction, truncating visibly when oversized.
+
+    Chunks today are ~500 chars (chunker max), so the cap is a safety bound
+    rather than a working path — but an unbounded or silent slice would
+    quietly drop tail entities if a future caller ever sends longer text.
+    """
+    if len(text) <= limit:
+        return text
+    logger.warning("Extraction input truncated %d -> %d chars", len(text), limit)
+    return text[:limit] + "\n[…truncated…]"
+
+
 # Single RAG system prompt shared by the non-streaming and streaming chat
 # paths (see build_rag_system_prompt below).
 #
@@ -516,65 +575,6 @@ class LLMService:
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
 
-    async def extract_entities_batch(
-        self,
-        texts: List[str],
-        entity_types: List[str] = None
-    ) -> List[List[Dict[str, Any]]]:
-        """
-        Extract entities from multiple texts using LLM.
-
-        Args:
-            texts: List of texts to process
-            entity_types: Types of entities to extract
-
-        Returns:
-            List of entity lists for each text
-        """
-        if entity_types is None:
-            entity_types = ["PERSON", "ORGANIZATION", "LOCATION", "CONCEPT", "EVENT"]
-
-        system_prompt = load_prompt(
-            "entity_extract", entity_types=", ".join(entity_types)
-        )
-
-        # Limit concurrent requests to avoid 429 (config-tuned; the old
-        # hard-coded 50 tripped rate limits whose backoffs slowed the run).
-        semaphore = asyncio.Semaphore(self.settings.LLM_EXTRACTION_CONCURRENCY)
-
-        async def _extract_single(text: str) -> List[Dict[str, Any]]:
-            """Extract entities from a single text."""
-            async with semaphore:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract entities from:\n\n{text[:2000]}"}
-                ]
-                for attempt in range(3):
-                    try:
-                        response = await self.chat_complete(
-                            messages, temperature=0.1,
-                            max_tokens=self.settings.LLM_EXTRACT_MAX_TOKENS,
-                            enable_thinking=False,
-                        )
-                        json_match = self._extract_json(response)
-                        if json_match:
-                            entities = json.loads(json_match)
-                            return entities if isinstance(entities, list) else []
-                        return []
-                    except Exception as e:
-                        if "429" in str(e) and attempt < 2:
-                            wait_time = (attempt + 1) * 2
-                            logger.warning("[LLM Rate Limit] Retrying in %ds...", wait_time)
-                            await asyncio.sleep(wait_time)
-                            continue
-                        logger.warning("[LLM Entity Extract Error] %s", e)
-                        return []
-
-        # Process all texts concurrently (bounded by the semaphore above).
-        tasks = [_extract_single(text) for text in texts]
-        results = await asyncio.gather(*tasks)
-        return list(results)
-
     async def extract_entities_and_relations_batch(
         self,
         texts: List[str],
@@ -623,7 +623,7 @@ Return: {{"entities": [{{"name": "华为", "type": "ORGANIZATION", "description"
             async with semaphore:
                 messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract entities and relations from:\n\n{text[:2000]}"},
+                    {"role": "user", "content": f"Extract entities and relations from:\n\n{_bounded_extraction_input(text)}"},
                 ]
                 for attempt in range(3):
                     try:

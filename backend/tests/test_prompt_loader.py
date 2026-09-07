@@ -24,8 +24,8 @@ class TestLoader:
 
     def test_literal_braces_need_no_escaping(self):
         # JSON examples in prose must survive rendering untouched.
-        text = load_prompt("entity_extract", entity_types="PERSON")
-        assert '{"name": "entity name"' in text
+        text = load_prompt("intent_classify")
+        assert '{"intent":' in text
         assert "{{" not in text
 
     def test_missing_template_raises(self):

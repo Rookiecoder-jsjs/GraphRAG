@@ -13,7 +13,6 @@ TEMPLATE_NAMES = (
     "intent_classify",
     "query_rewrite",
     "query_variants",
-    "entity_extract",
     "history_compact",
     "judge",
 )

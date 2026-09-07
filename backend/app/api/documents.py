@@ -21,7 +21,7 @@ from app.services.embedding import get_embedding_service, EmbeddingServiceError
 from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.services.bm25 import get_bm25_service
-from app.services.entity_extractor import get_entity_extractor
+from app.services.entity_extractor import canonicalize_extraction_results, get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
 from app.services.doc_status import DocStatus, set_document_status
 from app.services.retriever import invalidate_retrieval_cache
@@ -514,19 +514,14 @@ async def process_document_background(doc_id: str, user_id: int, markdown: str, 
             if entity_names:
                 logger.info("Batch %d: Found entities: %s", batch_start // batch_size + 1, entity_names[:3])
 
-        # Deduplicate entities
-        entity_dict = {}
-        for entity in all_entities:
-            key = (entity.name.lower(), entity.type)
-            if key not in entity_dict:
-                entity_dict[key] = entity
-        unique_entities = list(entity_dict.values())
-
-        extraction_result = {
-            "entities": unique_entities,
-            "relations": all_relations,
-            "chunk_entities": all_chunk_entities
-        }
+        # One canonicalization pass over the whole document (not per batch):
+        # collapse case-variant spellings of the same entity onto the
+        # first-seen name and remap every reference (entity payload, MENTIONS,
+        # RELATES_TO endpoints) to it — the graph stores one node per name, so
+        # this keeps node counts honest and prevents phantom nodes / missed edges.
+        extraction_result = canonicalize_extraction_results(
+            all_entities, all_chunk_entities, all_relations
+        )
 
         logger.info("Extracted %d entities and %d relations for doc %s",
                     len(extraction_result["entities"]),

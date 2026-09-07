@@ -8,9 +8,81 @@ import jieba
 import jieba.posseg as pseg
 
 from app.config import get_settings
-from app.services.llm import get_llm_service
+from app.services.llm import _normalize_entity_type, get_llm_service
 
 logger = logging.getLogger(__name__)
+
+
+def _dedupe_key(name: str) -> str:
+    """Canonical identity key for an entity name.
+
+    Neo4j Entity nodes are keyed by exact ``name`` + user_id, so case
+    variants like "Python"/"python" would become separate nodes. Collapsing
+    on the lowercased name keeps the Python-side de-duplication and reference
+    remapping consistent with that single-node-per-name identity.
+    """
+    return name.strip().lower()
+
+
+def canonicalize_extraction_results(
+    entities: List["ExtractedEntity"],
+    chunk_entities: List[Dict[str, Any]],
+    relations: List["ExtractedRelation"],
+) -> Dict[str, Any]:
+    """Collapse case-variant entity names onto one canonical node per name.
+
+    Extraction is per-chunk, so the same entity can appear in several chunks
+    under slightly different spellings ("Python" vs "python"). The graph
+    stores ONE node per name, so everything downstream (the entity payload,
+    the per-chunk MENTIONS links, and the RELATES_TO endpoints) must reference
+    the same canonical spelling — otherwise MENTIONS' MERGE would auto-create
+    phantom nodes for variants the dedupe discarded, and relation edges would
+    silently miss on the exact-name MATCH.
+
+    First-seen (document chunk order) spelling wins as the canonical name;
+    the type/description of that first-seen entry are canonical too.
+
+    Returns {"entities", "relations", "chunk_entities"} with every name
+    remapped, matching the shape ``process_chunks`` returns.
+    """
+    canon: Dict[str, ExtractedEntity] = {}
+    for entity in entities:
+        key = _dedupe_key(entity.name)
+        if key not in canon:
+            canon[key] = entity
+
+    unique_entities = list(canon.values())
+
+    canonical_chunks = []
+    for cd in chunk_entities:
+        seen: set = set()
+        canonical_ents: List[ExtractedEntity] = []
+        for entity in cd.get("entities", []):
+            canonical = canon.get(_dedupe_key(entity.name))
+            if canonical is None or canonical.name in seen:
+                continue
+            seen.add(canonical.name)
+            canonical_ents.append(canonical)
+        canonical_chunks.append({**cd, "entities": canonical_ents})
+
+    canonical_relations: List[ExtractedRelation] = []
+    for relation in relations:
+        src = canon.get(_dedupe_key(relation.source))
+        tgt = canon.get(_dedupe_key(relation.target))
+        if src is None or tgt is None or src.name == tgt.name:
+            continue
+        canonical_relations.append(ExtractedRelation(
+            source=src.name,
+            target=tgt.name,
+            relation_type=relation.relation_type,
+            relation_source=relation.relation_source,
+        ))
+
+    return {
+        "entities": unique_entities,
+        "relations": canonical_relations,
+        "chunk_entities": canonical_chunks,
+    }
 
 
 @dataclass
@@ -55,6 +127,14 @@ class RuleBasedExtractor:
             r'(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}',
         ],
     }
+
+    # Generic words the LLM prompt tells the model to skip. The rule layer
+    # has no notion of "core subject", so it mirrors the same list to keep
+    # rule-based CONCEPT noise aligned with LLM behaviour.
+    SKIP_WORDS = frozenset({
+        "系统", "用户", "信息", "方法",
+        "system", "user", "data", "method",
+    })
 
     def extract(self, text: str) -> List[ExtractedEntity]:
         """Extract entities using rules."""
@@ -101,7 +181,7 @@ class RuleBasedExtractor:
                         source="rule"
                     ))
                     extracted_names.add(word)
-                elif flag.startswith('n') and len(word) >= 3:  # General noun
+                elif flag.startswith('n') and len(word) >= 3 and word.lower() not in self.SKIP_WORDS:  # General noun
                     entities.append(ExtractedEntity(
                         name=word,
                         type="CONCEPT",
@@ -118,41 +198,6 @@ class EntityExtractor:
     def __init__(self):
         self.rule_extractor = RuleBasedExtractor()
         self.settings = get_settings()
-
-    async def extract_entities(self, text: str, use_llm: bool = True) -> List[ExtractedEntity]:
-        """Extract entities from text."""
-        # Stage 1: Rule-based extraction
-        rule_entities = self.rule_extractor.extract(text)
-
-        if not use_llm:
-            return rule_entities
-
-        # Stage 2: LLM refinement
-        try:
-            llm_service = await get_llm_service()
-            llm_results = await llm_service.extract_entities_batch([text])
-
-            # Merge results
-            rule_names = {e.name.lower() for e in rule_entities}
-            for entity_data in llm_results[0] if llm_results else []:
-                name = entity_data.get("name", "").strip()
-                if name and name.lower() not in rule_names:
-                    rule_entities.append(ExtractedEntity(
-                        name=name,
-                        type=entity_data.get("type", "OTHER"),
-                        description=entity_data.get("description"),
-                        source="llm"
-                    ))
-
-        except Exception as e:
-            # Fall back to rule-based only, but log the failure for visibility.
-            logger.warning(
-                "LLM entity extraction failed; falling back to rule-based results: %s",
-                e,
-                exc_info=True,
-            )
-
-        return rule_entities
 
     async def _extract_entities_and_relations_llm(
         self, chunks: List[Any]
@@ -182,14 +227,17 @@ class EntityExtractor:
             return {c.chunk_id: {"entities": [], "relations": []} for c in chunks}
 
         results: Dict[str, Dict[str, List]] = {}
+        raw_relation_total = 0
+        kept_relation_total = 0
         for chunk, raw in zip(chunks, raw_results):
             entity_dicts = raw.get("entities", []) if isinstance(raw, dict) else []
             relation_dicts = raw.get("relations", []) if isinstance(raw, dict) else []
+            raw_relation_total += len(relation_dicts)
 
             entities = [
                 ExtractedEntity(
                     name=str(e.get("name", "")).strip(),
-                    type=e.get("type") or "OTHER",
+                    type=_normalize_entity_type(e.get("type")),
                     description=e.get("description"),
                     source="llm",
                 )
@@ -197,18 +245,22 @@ class EntityExtractor:
                 if str(e.get("name") or "").strip()
             ]
 
-            # Relations may only reference entities extracted from THIS
-            # chunk. Anything else would be silently dropped later by
-            # create_relations_batch's MATCH-by-name — filtering here keeps
-            # the logged counts honest.
-            known_names = {e.name for e in entities}
+            # A relation is only kept when both endpoints name an entity
+            # extracted from THIS chunk. The LLM is told to constrain edges to
+            # its own entity array, so a cross-chunk relation can never be
+            # produced here — this filter just enforces the contract. Matching
+            # is case-insensitive because spelling may vary; the raw names ride
+            # along and get remapped to the canonical spelling later, so no
+            # edge is lost to case drift. Anything dropped is counted so the
+            # graph-sparsity trade-off stays observable.
+            known_names = {_dedupe_key(e.name) for e in entities}
             relations: List[ExtractedRelation] = []
             for r in relation_dicts:
                 source = str(r.get("source") or "").strip()
                 target = str(r.get("target") or "").strip()
                 if not source or not target or source == target:
                     continue
-                if source not in known_names or target not in known_names:
+                if _dedupe_key(source) not in known_names or _dedupe_key(target) not in known_names:
                     continue
                 relations.append(ExtractedRelation(
                     source=source,
@@ -216,23 +268,34 @@ class EntityExtractor:
                     relation_type=r.get("relation_type") or "MENTIONS",
                     relation_source="llm",
                 ))
+            kept_relation_total += len(relations)
 
             results[chunk.chunk_id] = {"entities": entities, "relations": relations}
+
+        if raw_relation_total > kept_relation_total:
+            logger.info(
+                "Dropped %d/%d candidate relations not local to a single chunk "
+                "(self-loops or non-chunk endpoints)",
+                raw_relation_total - kept_relation_total, raw_relation_total,
+            )
         return results
 
     def _merge_entity_results(
         self, rule_entities: List[ExtractedEntity], llm_entities: List[ExtractedEntity]
     ) -> List[ExtractedEntity]:
-        """Merge rule and LLM entities, preferring LLM results."""
+        """Merge rule and LLM entities, preferring LLM results.
+
+        Keyed by the canonical name only (no type): the graph stores one node
+        per name, so two extractions of the same name under different types
+        are the same entity, and the LLM entry is authoritative.
+        """
         entity_dict = {}
 
         for entity in rule_entities:
-            key = (entity.name.lower(), entity.type)
-            entity_dict[key] = entity
+            entity_dict[_dedupe_key(entity.name)] = entity
 
         for entity in llm_entities:
-            key = (entity.name.lower(), entity.type)
-            entity_dict[key] = entity
+            entity_dict[_dedupe_key(entity.name)] = entity
 
         return list(entity_dict.values())
 
@@ -287,10 +350,10 @@ class EntityExtractor:
             all_entities.extend(merged)
             all_relations.extend(chunk_result.get("relations", []))
 
-        # Stage 4: 实体去重
+        # Stage 4: 实体去重（规范化名唯一，与图内 name 身份一致）
         entity_dict = {}
         for entity in all_entities:
-            key = (entity.name.lower(), entity.type)
+            key = _dedupe_key(entity.name)
             if key not in entity_dict:
                 entity_dict[key] = entity
 

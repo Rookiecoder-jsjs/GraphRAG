@@ -364,7 +364,7 @@ def mock_llm_factory():  # 需要自定义行为的测试用工厂
 | 6 | intent 分类提示词 `_SYSTEM_PROMPT` | services/intent.py:24 | `intent_classify.md` |
 | 7 | query rewrite f-string 提示词 | services/query_processor.py:41 | `query_rewrite.md` |
 | 8 | query variants f-string | services/query_processor.py:95 附近 | `query_variants.md` |
-| 9 | entity extraction system_prompt | services/llm.py:535（extract_entities_batch） | `entity_extract.md` |
+| 9 | 实体+关系合并抽取 f-string 提示词 | services/llm.py（`extract_entities_and_relations_batch`） | —（暂未迁模板，单独跟踪） |
 | 10 | `_JUDGE_SYSTEM_PROMPT`（T1-1 产物） | eval/judge.py | `judge.md` |
 
 #### 设计
@@ -382,7 +382,6 @@ backend/app/prompts/
     ├── intent_classify.md
     ├── query_rewrite.md
     ├── query_variants.md
-    ├── entity_extract.md
     ├── judge.md
     └── README.md         # 每个模板一行：用途+占位符+消费方（防孤儿模板）
 ```

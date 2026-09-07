@@ -24,5 +24,4 @@
 | `intent_classify.md` | 意图分类 system prompt | — | `services/intent.py` |
 | `query_rewrite.md` | 检索查询改写（含多轮 standalone 指令插槽） | `standalone_instruction` `query` `history_block` | `services/query_processor.py` |
 | `query_variants.md` | 多查询变体生成 | `num_variants` `query` | 同上 |
-| `entity_extract.md` | 实体抽取 system prompt | `entity_types` | `services/llm.py::extract_entities_batch` |
 | `judge.md` | LLM-as-judge 评估员提示词（v2，含置信度与元规则） | — | `eval/judge.py` |

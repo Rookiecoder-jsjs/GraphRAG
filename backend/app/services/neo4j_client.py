@@ -372,6 +372,11 @@ class Neo4jClient:
         """Bulk upsert entities using UNWIND. Returns the number of rows processed.
 
         Each entity dict must contain: name, type, description (may be None).
+
+        An Entity node's identity is its exact name (per user); a later
+        ingestion of the same name never rewrites an established type, so a
+        node's type stays the FIRST one seen and does not flip with upload
+        order. Description is first-seen preferred, filled in if still null.
         """
         if not entities:
             return 0
@@ -379,9 +384,12 @@ class Neo4jClient:
             result = await session.run("""
                 UNWIND $entities AS ent
                 MERGE (e:Entity {name: ent.name, user_id: $user_id})
-                SET e.type = ent.type,
-                    e.description = COALESCE(ent.description, e.description),
-                    e.updated_at = datetime()
+                ON CREATE SET e.type = ent.type,
+                              e.description = ent.description,
+                              e.created_at = datetime(),
+                              e.updated_at = datetime()
+                ON MATCH SET e.updated_at = datetime(),
+                             e.description = COALESCE(e.description, ent.description)
                 RETURN count(e) AS upserted
             """, entities=entities, user_id=user_id)
             record = await result.single()
