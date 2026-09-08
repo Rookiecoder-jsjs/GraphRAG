@@ -475,6 +475,8 @@ PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
 | `HISTORY_WINDOW_LIMIT` | 发给模型的近期消息窗口条数 | `10` | 否 |
 | `HISTORY_COMPACT_THRESHOLD` | 触发折叠的消息数阈值 | `24` | 否 |
 | `HISTORY_KEEP_RECENT` | 折叠时保留的最近原始消息数 | `6` | 否 |
+| `DOC_INGEST_CONCURRENCY` | 同时运行的文档摄取流水线数（超限上传排队，保持 pending，≥1） | `2` | 否 |
+| `PROGRESS_POLL_SECONDS` | 进度 SSE 轮询 SQLite 间隔（秒；越低越跟手、轮询越多） | `1.0` | 否 |
 | `KG_MCP_TOKEN` | MCP Server 访问令牌（仅 mcp_server 进程） | - | MCP 必填 |
 | `LOG_DIR` / `LOG_LEVEL` | 日志目录与级别 | `./data/logs` / `INFO` | 否 |
 | `LOG_FORMAT` | 日志格式：`text` / `json`；留空按 `APP_ENV` 自动（development=text / production=json） | 空（自动） | 否 |
@@ -570,6 +572,19 @@ docker-compose up -d
 docker build -f backend/Dockerfile -t kg-backend .
 docker run -p 8001:8001 --env-file backend/.env kg-backend
 ```
+
+**多 worker 部署须知**：进度 SSE 已改为从 SQLite `progress_history` 轮询（非进程内存队列），
+因此跨 worker 正确、断线重连可回放。但上 `uvicorn --workers N`（需关闭 `--reload`）前要清楚
+以下状态是**每进程独立**的：
+- **BM25 索引在内存中**——每个 worker 各自 prewarm（内存/启动 CPU ×N），且 `add_to_index`
+  只更新本进程索引：worker B 上可能搜不到刚在 worker A 上传文档的 BM25 命中（向量通道不受
+  影响）。跨 worker 新鲜度需另行解决（如按 corpus 版本校验重建），本系统默认单进程运行。
+- 检索结果缓存 / 聚类缓存每进程各一份（重复占内存，失效不互通）；embedding `Semaphore(5)`
+  每进程一份 → 最多 5N 并发 embed 请求，留意 provider RPM；auth 限流计数每进程。
+- 生产多进程：
+  ```bash
+  uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 2
+  ```
 
 ## 📦 关键依赖版本
 

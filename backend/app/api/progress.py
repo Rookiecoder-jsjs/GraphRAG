@@ -11,12 +11,14 @@ Authentication:
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from app.auth.jwt_handler import verify_token
+from app.config import get_settings
 from app.database import get_db
 from app.services.progress_tracker import get_progress_emitter
 
@@ -102,6 +104,93 @@ async def _verify_doc_owner(doc_id: str, user_id: int) -> bool:
             return await cursor.fetchone() is not None
 
 
+# SSE idle window before a keepalive frame is sent (an otherwise-silent
+# connection can be timed out by proxies / the client EventSource).
+_KEEPALIVE_SECONDS = 30
+
+
+def _event_from_row(row: dict) -> dict:
+    """Reconstruct the original SSE event dict from a progress_history row.
+
+    Rows written since the payload column existed carry the exact ``data``
+    dict ``emit_and_save`` received; legacy rows (NULL payload) degrade to
+    the columns we still have.
+    """
+    data = None
+    payload = row.get("payload_json")
+    if payload:
+        try:
+            data = json.loads(payload)
+        except (ValueError, TypeError):
+            data = None
+    if data is None:
+        stage = row.get("stage")
+        data = {"percent": row.get("percent", 0)}
+        if stage in ("complete", "error"):
+            data["stage"] = stage
+            if row.get("error_message"):
+                data["error"] = row["error_message"]
+    return {"type": row.get("stage"), "message": row.get("message"), "data": data}
+
+
+def _terminal_type(event: dict) -> bool:
+    return event.get("type") in ("complete", "error")
+
+
+def _frame(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+async def _progress_event_stream(
+    emitter,
+    doc_id: str,
+    user_id: int,
+    *,
+    poll_seconds: float,
+    is_disconnected=None,
+):
+    """Yield SSE data frames for a doc's progress, replay then tail.
+
+    Events are read from SQLite by polling — not an in-process bus — so the
+    stream works even when the pipeline runs in a different worker, and a
+    reconnect replays what already happened before tailing new rows.
+
+    ``is_disconnected`` is an optional async callable (``request.is_disconnected``)
+    checked each poll; tests omit it to stream indefinitely.
+    """
+    last_id = 0
+    last_sent = time.monotonic()
+    try:
+        # Replay the whole lifecycle first (reconnect / opened late), so the
+        # client converges with history before we tail new rows.
+        for row in await emitter.get_rows_since(doc_id, user_id, after_id=0):
+            last_id = row["id"]
+            last_sent = time.monotonic()
+            event = _event_from_row(row)
+            yield _frame(event)
+            if _terminal_type(event):
+                return
+        # Tail: poll for rows newer than the last one we delivered.
+        while True:
+            if is_disconnected is not None and await is_disconnected():
+                break
+            rows = await emitter.get_rows_since(doc_id, user_id, after_id=last_id)
+            if rows:
+                for row in rows:
+                    last_id = row["id"]
+                    last_sent = time.monotonic()
+                    event = _event_from_row(row)
+                    yield _frame(event)
+                    if _terminal_type(event):
+                        return
+            elif time.monotonic() - last_sent >= _KEEPALIVE_SECONDS:
+                yield _frame({"type": "keepalive"})
+                last_sent = time.monotonic()
+            await asyncio.sleep(poll_seconds)
+    except asyncio.CancelledError:
+        pass
+
+
 @router.get("/api/progress/{doc_id}")
 async def stream_progress(
     doc_id: str,
@@ -127,29 +216,15 @@ async def stream_progress(
         return _sse_error("Document not found", status.HTTP_404_NOT_FOUND)
 
     emitter = get_progress_emitter()
-    queue = emitter.subscribe(doc_id)
-
-    async def event_generator():
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
-                except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
-                    continue
-                yield f"data: {json.dumps(event)}\n\n"
-                if event.get("type") in ["complete", "error"]:
-                    break
-        except asyncio.CancelledError:
-            pass
-        finally:
-            # Remove ONLY this subscriber's queue so other watchers survive.
-            emitter.unsubscribe(doc_id, queue)
+    user_id = current_user["id"]
+    poll_seconds = max(get_settings().PROGRESS_POLL_SECONDS, 0.1)
 
     return StreamingResponse(
-        event_generator(),
+        _progress_event_stream(
+            emitter, doc_id, user_id,
+            poll_seconds=poll_seconds,
+            is_disconnected=request.is_disconnected,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

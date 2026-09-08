@@ -138,6 +138,20 @@ class Settings(BaseSettings):
     HISTORY_KEEP_RECENT: int = 6
     HISTORY_SUMMARY_MAX_CHARS: int = 400
 
+    # Document ingestion pipeline gate: every upload spawns a background
+    # pipeline (embed + LLM extraction + Neo4j/Chroma/SQLite writes). With no
+    # cap, a burst of uploads fires N pipelines at once and trips provider
+    # rate limits / SQLite write contention; this bounds how many run
+    # concurrently — the rest wait (doc stays 'pending', no progress emitted)
+    # until a slot frees. >= 1.
+    DOC_INGEST_CONCURRENCY: int = 2
+
+    # Progress SSE polling interval (seconds). The SSE endpoint reads new
+    # progress_history rows from SQLite by polling — not an in-process bus —
+    # so progress works across uvicorn workers and survives reconnects.
+    # Lower = snappier progress UI, more SELECTs per open stream.
+    PROGRESS_POLL_SECONDS: float = 1.0
+
     # CORS - comma-separated list of allowed origins (no wildcards with credentials)
     CORS_ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 

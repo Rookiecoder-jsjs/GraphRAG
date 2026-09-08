@@ -21,6 +21,7 @@ from app.services.embedding import get_embedding_service, EmbeddingServiceError
 from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.services.bm25 import get_bm25_service
+from app.services.ingest_gate import get_ingest_gate
 from app.services.entity_extractor import canonicalize_extraction_results, get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
 from app.services.doc_status import DocStatus, set_document_status
@@ -309,6 +310,18 @@ async def _cleanup_partial_document(doc_id: str, user_id: int) -> None:
 
 
 async def process_document_background(doc_id: str, user_id: int, markdown: str, title: str):
+    """Process a document in the background, bounded by the global ingest gate.
+
+    ``DOC_INGEST_CONCURRENCY`` pipelines run at once; uploads beyond that wait
+    here (the doc keeps its ``pending`` status and emits no progress) until a
+    slot frees — a burst of uploads queues instead of firing N embedding + LLM
+    pipelines at the same time.
+    """
+    async with get_ingest_gate():
+        await _run_ingest_pipeline(doc_id, user_id, markdown, title)
+
+
+async def _run_ingest_pipeline(doc_id: str, user_id: int, markdown: str, title: str):
     """Process document in background: chunk, embed, extract entities."""
     import time
     progress = get_progress_emitter()

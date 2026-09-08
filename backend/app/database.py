@@ -38,6 +38,23 @@ async def _ensure_document_status_columns(db) -> None:
         )
 
 
+async def _ensure_progress_payload_column(db) -> None:
+    """Idempotently add the ``payload_json`` column to progress_history.
+
+    The live SSE feed used to carry rich event payloads (stage, percent,
+    entities, relations_sample, ...) only through an in-process queue. Those
+    payloads are now persisted here so the SSE stream can replay/poll them
+    from SQLite (reconnect-safe, worker-agnostic). Databases created before
+    this column get it via guarded ALTER, matching the pattern used for the
+    ``documents.status`` columns.
+    """
+    async with db.execute("PRAGMA table_info(progress_history)") as cursor:
+        existing = {row[1] for row in await cursor.fetchall()}
+
+    if "payload_json" not in existing:
+        await db.execute("ALTER TABLE progress_history ADD COLUMN payload_json TEXT")
+
+
 async def _run_migrations(db) -> None:
     """Apply pending SQL migrations from ``backend/migrations/``, tracked
     by a ``schema_version`` table.
@@ -203,6 +220,15 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # SSE progress polls new rows per (doc, user) ordered by id; the index
+        # keeps the tail query off a full-table scan as history grows.
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_progress_history_doc
+                ON progress_history (doc_id, user_id, id)
+        """)
+        # Rich SSE payloads (entities / relations_sample / stage) are now
+        # persisted; add the column to databases that predate it.
+        await _ensure_progress_payload_column(db)
 
         # Create message feedback table (👍 / 👎 on assistant messages)
         # One row per (message_id, user_id) — replacing/updating the rating
