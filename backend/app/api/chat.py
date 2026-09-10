@@ -431,13 +431,23 @@ async def chat(
             "citation_coverage": 0.0,
         }
     if intent["intent"] == "fact_retrieval" and request.include_context:
+        from app.services.query_gate import QueryGateTimeout
         from app.services.retriever import retrieve
-        context = await retrieve(
-            request.message,
-            user_id,
-            use_graph_rag=request.use_graph_rag,
-            conversation_history=conversation_history[:-1],
-        )
+        try:
+            context = await retrieve(
+                request.message,
+                user_id,
+                use_graph_rag=request.use_graph_rag,
+                conversation_history=conversation_history[:-1],
+            )
+        except QueryGateTimeout as e:
+            # Admission control (ADR-009): a 500 here would misrepresent a
+            # busy system as a broken one — answer 429 like /api/search.
+            raise HTTPException(
+                status_code=429,
+                detail=str(e),
+                headers={"Retry-After": str(int(e.retry_after))},
+            )
     else:
         context = {"chunks": [], "entities": [], "relations": []}
 
@@ -541,6 +551,7 @@ async def _chat_stream_body(
         yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id, 'sources': [], 'citation_coverage': 0.0})}\n\n"
         return
     if intent["intent"] == "fact_retrieval" and request.include_context:
+        from app.services.query_gate import QueryGateTimeout
         from app.services.retriever import retrieve
         # Retrieval (LLM preprocess + vector/BM25 + rerank) can take tens of
         # seconds cold. Emit an SSE comment frame every
@@ -564,6 +575,14 @@ async def _chat_stream_body(
                     yield ": ping\n\n"
                     await asyncio.wait({retrieval_task}, timeout=ping_interval)
                 context = retrieval_task.result()  # re-raises retrieve() failures
+        except QueryGateTimeout as e:
+            # Admission control (ADR-009): the gate never admitted this
+            # retrieval — emit the terminal busy error frame (existing
+            # error-frame contract, frontend renders it) instead of serving
+            # a degraded result. No done frame, matching terminal errors.
+            logger.warning("chat stream rejected by query gate (user_id=%d)", user_id)
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            return
         finally:
             if not retrieval_task.done():
                 retrieval_task.cancel()

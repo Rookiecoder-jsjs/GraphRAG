@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     PARENT_SECTION_SIBLING_LIMIT: int = 4
     CONVERSATIONAL_REWRITE_HISTORY_TURNS: int = 4
 
+    # Query admission gate (ADR-009): at most QUERY_CONCURRENCY full
+    # retrievals run at once; excess requests wait up to
+    # QUERY_MAX_QUEUE_SECONDS, then are rejected — /api/search answers
+    # 429 + Retry-After, the streaming chat emits a terminal `event: error`
+    # with the busy message. Rejection beats degradation: accepted requests
+    # always run the full-quality pipeline, cache hits bypass the gate.
+    QUERY_CONCURRENCY: int = 4
+    QUERY_MAX_QUEUE_SECONDS: float = 5.0
+
     # Intent routing: classify each query (fact_retrieval / chitchat /
     # should_reject) before retrieval. should_reject is answered with a
     # template, chitchat skips retrieval. Disabled or failed classification

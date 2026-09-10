@@ -34,6 +34,7 @@ from app.services.chroma_client import get_chroma_client
 from app.services.embedding import EmbeddingServiceError, get_embedding_service
 from app.services.fusion import reciprocal_rank_fusion_multi
 from app.services.neo4j_client import get_neo4j_client
+from app.services.query_gate import get_query_gate
 from app.services.query_processor import get_query_processor
 from app.services.reranker import get_rerank_service
 
@@ -235,17 +236,26 @@ async def retrieve(
         logger.info("retrieve: cache hit (user_id=%d)", user_id)
         return cached
 
-    return await _retrieve_uncached(
-        query=query,
-        user_id=user_id,
-        top_k=top_k,
-        use_graph_rag=use_graph_rag,
-        _auto_graph=_auto_graph,
-        conversation_history=conversation_history,
-        enable_rewrite=enable_rewrite,
-        cache_key=cache_key,
-        t_start=t_start,
-    )
+    # Admission gate (ADR-009): cache misses queue here — at most
+    # QUERY_CONCURRENCY full pipelines run at once, excess waits up to
+    # QUERY_MAX_QUEUE_SECONDS then QueryGateTimeout escapes to the caller
+    # (search → 429 + Retry-After, chat → terminal busy SSE error). Cache
+    # hits above never consume capacity. Rejection beats degradation: an
+    # admitted retrieval always runs the full-quality path.
+    t_gate = time.perf_counter()
+    async with get_query_gate().slot():
+        return await _retrieve_uncached(
+            query=query,
+            user_id=user_id,
+            top_k=top_k,
+            use_graph_rag=use_graph_rag,
+            _auto_graph=_auto_graph,
+            conversation_history=conversation_history,
+            enable_rewrite=enable_rewrite,
+            cache_key=cache_key,
+            t_start=t_start,
+            t_gate=t_gate,
+        )
 
 
 async def _retrieve_uncached(
@@ -258,8 +268,11 @@ async def _retrieve_uncached(
     enable_rewrite: bool,
     cache_key: Tuple[int, str, int, bool],
     t_start: float,
+    t_gate: float,
 ) -> Dict[str, Any]:
     """Full retrieval pipeline, executed only on a retrieval-cache miss.
+
+    The caller holds a query-gate admission slot for the whole body.
 
     Degradation tracking: every optional channel that fails and falls back
     appends a label to ``degraded``; the final timing log carries the list
@@ -490,6 +503,7 @@ async def _retrieve_uncached(
     t_end = time.perf_counter()
     extra: Dict[str, Any] = {
         "timing_s": {
+            "queue": round(t_gate - t_start, 3),
             "rewrite": round(t_rewrite - t_start, 3),
             "embed": round(t_embed - t_rewrite, 3),
             "retrieve": round(t_retrieve - t_embed, 3),
