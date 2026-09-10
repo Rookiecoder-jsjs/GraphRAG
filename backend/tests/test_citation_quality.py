@@ -52,11 +52,12 @@ def test_rerank_returns_chunks_with_relevance_score():
     """The reranker calls a remote API; we mock the HTTP response. The
     service should return chunks with a `relevance_score` field matching
     the API's `relevance_score` (or `score` for some vendors)."""
+    from app.services.key_pool import KeyPool
     from app.services.reranker import RerankService
 
     svc = RerankService.__new__(RerankService)
     svc.base_url = "https://example.test"
-    svc.api_key = "fake"
+    svc._pool = KeyPool(["fake-key"], per_key_concurrency=2)
     svc.model = "fake-rerank"
     svc._client = None
 
@@ -94,11 +95,12 @@ def test_rerank_handles_vendor_score_field():
     """Some rerank APIs use `score` instead of `relevance_score`. We
     should accept both (defensive — siliconflow uses relevance_score
     today but jina / cohere use different field names)."""
+    from app.services.key_pool import KeyPool
     from app.services.reranker import RerankService
 
     svc = RerankService.__new__(RerankService)
     svc.base_url = "https://example.test"
-    svc.api_key = "fake"
+    svc._pool = KeyPool(["fake-key"], per_key_concurrency=2)
     svc.model = "fake-rerank"
     svc._client = None
 
