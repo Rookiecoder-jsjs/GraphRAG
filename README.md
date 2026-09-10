@@ -83,7 +83,7 @@ D:/NC/
 │   │   ├── auth/                # JWT 鉴权 + bcrypt 密码哈希 + 限流中间件
 │   │   ├── prompts/             # LLM 提示词模板（templates/*.md + loader，启动自检）
 │   │   ├── middleware.py        # 纯 ASGI 中间件（请求体限流 + X-Request-ID）
-│   │   ├── utils/md_parser.py   # Markdown 解析（markitdown 防御性封装）
+│   │   ├── utils/md_parser.py   # Markdown 解析（anydoc 转换 + 失败降级）
 │   │   ├── config.py            # 配置管理（含 CORS 白名单 + JWT 占位符拦截）
 │   │   ├── database.py          # SQLite 初始化 + 增量迁移（schema_version 追踪）
 │   │   ├── logger.py            # 统一 logging 配置（请求 ID 关联 + text/JSON 双格式）
@@ -332,7 +332,7 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 
 ### 📤 文档上传流程
 ```
-PDF/Word/TXT/MD → markitdown → Markdown → 层级解析 → 语义切块
+PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
     → 硅基流动 Embedding (Qwen3-Embedding-8B) → ChromaDB 存储
     → Neo4j 实体关系提取 (BM25 索引同步) → SSE 进度推送
 ```
@@ -603,7 +603,7 @@ starlette==0.38.6
 pydantic==2.13.4
 pydantic-settings==2.11.0
 mcp==1.29.0
-markitdown==0.0.1a3
+firecrawl-anydoc==0.2.4
 jieba==0.42.1
 rank-bm25==0.2.2
 python-dotenv==1.0.0
@@ -637,7 +637,7 @@ vite ^7.2.4
 4. 🧮 **NumPy 版本**：必须使用 NumPy 1.x（<2.0）以保证 ChromaDB 兼容性
 5. 🧬 **ChromaDB 版本**：客户端和服务端必须都使用 0.4.18 版本
 6. 🐳 **Docker 内存**：Neo4j 需要充足内存，建议 4GB+
-7. 🛡️ **markitdown 防御**：`utils/md_parser.py` 兼容新旧 API（`text_content` / `markdown` / `title`），失败时回退到 `txt` 解析
+7. 🛡️ **转换降级**：`utils/md_parser.py` 转换失败（损坏/加密/超限）一律返回空串 → 上传接口回 400 而非 500；扫描版 PDF 无文本层同样返回空串，OCR 需另接服务
 8. 🧩 **Neo4j APOC**：docker-compose 启用了 APOC 插件，UNWIND 批量写入依赖其函数
 9. ⚠️ **实体合并**：`POST /api/graph/entities/merge` 会硬删 source 并将所有引用指向 target，操作不可逆
 10. 🔧 **Chroma entrypoint 绕过**：`docker-compose.yml` 覆盖了 chromadb 0.4.18 镜像 entrypoint——原 entrypoint 每次启动 `pip install --force-reinstall chroma-hnswlib`，新版会拉入 numpy 2.x 导致 `np.float_` 崩溃。改为直接跑 uvicorn，沿用镜像内可用的 hnswlib

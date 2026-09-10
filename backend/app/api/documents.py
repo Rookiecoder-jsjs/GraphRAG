@@ -185,10 +185,10 @@ async def upload_document(
     with open(file_path, 'wb') as f:
         f.write(file_content)
 
-    # Convert to markdown. markitdown parsing is CPU/file bound — a 10MB
-    # PDF can take seconds — and this is an async endpoint, so it must run
-    # off the event loop or it stalls every concurrent request (chat, SSE
-    # progress, search) behind the conversion.
+    # Convert to markdown. anydoc parsing is CPU/file bound (single-digit ms
+    # for typical office docs, but large PDFs still cost) and this is an async
+    # endpoint, so it must run off the event loop or it stalls every
+    # concurrent request (chat, SSE progress, search) behind the conversion.
     try:
         markdown_content, extracted_title = await asyncio.to_thread(
             convert_document_to_markdown, file_path, file_ext[1:]

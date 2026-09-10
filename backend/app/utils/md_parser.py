@@ -1,7 +1,9 @@
 """Markdown parsing utilities."""
 import logging
 import re
-from typing import Tuple, Optional
+from typing import Optional, Tuple
+
+import anydoc
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +14,7 @@ def convert_document_to_markdown(file_path: str, file_type: str) -> Tuple[str, O
 
     Args:
         file_path: Path to the document
-        file_type: Type of document (pdf, docx, txt, md)
+        file_type: Type of document (pdf, docx, doc, txt, md)
 
     Returns:
         Tuple of (markdown content, title)
@@ -25,24 +27,27 @@ def convert_document_to_markdown(file_path: str, file_type: str) -> Tuple[str, O
         title = extract_title_from_markdown(content)
         return content, title
 
+    if file_type == 'txt':
+        return extract_text_fallback(file_path, file_type)
+
     try:
-        from markitdown import MarkItDown
-        md = MarkItDown()
-        result = md.convert(file_path)
-        # markitdown versions differ: older returns a DocumentConverterResult with
-        # .text_content and no .title; newer returns an object with .markdown
-        # and .title. Be defensive about both shapes.
-        text = getattr(result, "text_content", None) or getattr(result, "markdown", None) or ""
-        title = getattr(result, "title", None)
-        if not title and text:
-            title = extract_title_from_markdown(text)
-        return text, title
-    except ImportError:
-        logger.warning("markitdown not installed; using fallback text extractor")
+        markdown = anydoc.to_markdown(file_path)
+    except anydoc.NeedsOcrError:
+        # Image-only pages (scanned PDF): nothing to extract without an OCR
+        # service. Empty content routes the upload to the 400 "Could not
+        # extract text" path instead of a 500.
+        logger.info("Document needs OCR (no text layer): %s", file_path)
+        return "", None
+    except Exception:
+        # Malformed / encrypted / unsupported / resource-limit all degrade to
+        # the text fallback ("" for binary types) so the caller answers 400,
+        # never 500. anydoc errors are plain Exception subclasses, so this
+        # catches everything it raises.
+        logger.error("Document conversion failed for %s", file_path, exc_info=True)
         return extract_text_fallback(file_path, file_type)
-    except Exception as e:
-        logger.error("markitdown conversion failed for %s: %s", file_path, e, exc_info=True)
-        return extract_text_fallback(file_path, file_type)
+
+    title = extract_title_from_markdown(markdown)
+    return markdown, title
 
 
 def extract_text_fallback(file_path: str, file_type: str) -> Tuple[str, Optional[str]]:
