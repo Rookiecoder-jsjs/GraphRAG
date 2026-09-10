@@ -432,6 +432,9 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 | `CHROMA_HOST` / `CHROMA_PORT` | ChromaDB 主机端口 | `localhost` / `8000` | 否 |
 | `SQLITE_PATH` | SQLite 数据库路径 | `./data/sqlite/app.db` | 否 |
 | `SILICON_FLOW_API_KEY` | 硅基流动 API 密钥（Embedding + Rerank + 备用 LLM） | - | **是** |
+| `SILICON_FLOW_API_KEYS` | 多密钥池（ADR-009）：逗号分隔多把 SiliconFlow key，Embedding+Rerank 共用，least-inflight 分摊、429 冷却+秒级 failover；留空回退单 key | 空 | 否 |
+| `SILICON_FLOW_PER_KEY_CONCURRENCY` | 多密钥池每 key 在途请求上限 | `8` | 否 |
+| `SILICON_FLOW_KEY_LEASE_TIMEOUT` | 等待可用 key 的最长秒数（也是 429 冷却上限） | `20` | 否 |
 | `SILICON_FLOW_BASE_URL` | 硅基流动 base URL | `https://api.siliconflow.cn/v1` | 否 |
 | `KIMI_API_KEY` | Moonshot Kimi 密钥（备用 LLM） | - | 否 |
 | `KIMI_BASE_URL` | Moonshot base URL | `https://api.moonshot.cn/v1` | 否 |
@@ -447,6 +450,8 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 | `MAX_FILE_SIZE` | 最大文件大小（字节） | `10485760`（10MB） | 否 |
 | `EMBEDDING_MODEL` | 嵌入模型名 | `Qwen/Qwen3-Embedding-8B` | 否 |
 | `EMBEDDING_DIM` | 嵌入维度 | `1024` | 否 |
+| `EMBED_BATCH_SIZE` | 每次 /embeddings 请求的输入条数（查询路径 ≤4 条单批；摄取按此分批） | `32` | 否 |
+| `EMBED_BATCH_DELAY_SECONDS` | 摄取路径多于一批时的批间间隔（秒） | `0.3` | 否 |
 | `RERANK_MODEL` | Rerank 模型 | `Qwen/Qwen3-Reranker-8B` | 否 |
 | `CORS_ALLOWED_ORIGINS` | 允许的 CORS 来源（逗号分隔） | localhost 开发地址 | 否 |
 | `MAX_REQUEST_BODY` | 全局请求体大小上限（字节） | `15728640`（15MB） | 否 |
@@ -478,6 +483,8 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 | `HISTORY_COMPACT_THRESHOLD` | 触发折叠的消息数阈值 | `24` | 否 |
 | `HISTORY_KEEP_RECENT` | 折叠时保留的最近原始消息数 | `6` | 否 |
 | `DOC_INGEST_CONCURRENCY` | 同时运行的文档摄取流水线数（超限上传排队，保持 pending，≥1） | `2` | 否 |
+| `QUERY_CONCURRENCY` | 查询并发闸（ADR-009）：同时运行的完整检索数，超出排队；缓存命中不占名额 | `4` | 否 |
+| `QUERY_MAX_QUEUE_SECONDS` | 查询排队上限秒数，超时拒绝（/api/search → 429+Retry-After；聊天流 → 终端 error 事件） | `5.0` | 否 |
 | `PROGRESS_POLL_SECONDS` | 进度 SSE 轮询 SQLite 间隔（秒；越低越跟手、轮询越多） | `1.0` | 否 |
 | `KG_MCP_TOKEN` | MCP Server 访问令牌（仅 mcp_server 进程） | - | MCP 必填 |
 | `LOG_DIR` / `LOG_LEVEL` | 日志目录与级别 | `./data/logs` / `INFO` | 否 |
