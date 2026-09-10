@@ -194,7 +194,13 @@ async def retrieve(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     enable_rewrite: bool = True,
 ) -> Dict[str, Any]:
-    """Unified retrieval. Returns ``{"chunks", "entities", "relations"}``."""
+    """Unified retrieval. Returns ``{"chunks", "entities", "relations"}``.
+
+    Thin wrapper: resolves the graph-RAG mode, consults the retrieval cache,
+    then delegates the full pipeline to ``_retrieve_uncached``. The split
+    keeps the cache-hit path free of any per-request setup the pipeline only
+    needs on a miss (and lets the admission gate wrap exactly the miss path).
+    """
     settings = get_settings()
     t_start = time.perf_counter()
 
@@ -229,6 +235,41 @@ async def retrieve(
         logger.info("retrieve: cache hit (user_id=%d)", user_id)
         return cached
 
+    return await _retrieve_uncached(
+        query=query,
+        user_id=user_id,
+        top_k=top_k,
+        use_graph_rag=use_graph_rag,
+        _auto_graph=_auto_graph,
+        conversation_history=conversation_history,
+        enable_rewrite=enable_rewrite,
+        cache_key=cache_key,
+        t_start=t_start,
+    )
+
+
+async def _retrieve_uncached(
+    query: str,
+    user_id: int,
+    top_k: int,
+    use_graph_rag: bool,
+    _auto_graph: bool,
+    conversation_history: Optional[List[Dict[str, str]]],
+    enable_rewrite: bool,
+    cache_key: Tuple[int, str, int, bool],
+    t_start: float,
+) -> Dict[str, Any]:
+    """Full retrieval pipeline, executed only on a retrieval-cache miss.
+
+    Degradation tracking: every optional channel that fails and falls back
+    appends a label to ``degraded``; the final timing log carries the list
+    (the JSON formatter merges ``extra`` top-level) so load-induced quality
+    loss is observable instead of silent. The list is log-only — the cached
+    result object is shared by reference across cache hits and must not
+    carry per-request state.
+    """
+    settings = get_settings()
+    degraded: List[str] = []
     qp = await get_query_processor()
     chroma = get_chroma_client()
     bm25 = get_bm25_service()
@@ -252,12 +293,14 @@ async def retrieve(
             if r and r.strip():
                 rewritten = r.strip()
         except Exception as e:
+            degraded.append("rewrite_failed")
             logger.warning("retrieve: rewrite failed, using raw query: %s", e)
 
     variants: List[str] = []
     try:
         variants = [v for v in (await variants_task) if v and v.strip()]
     except Exception as e:
+        degraded.append("variants_failed")
         logger.warning("retrieve: variants failed: %s", e)
 
     query_entities: List[Dict[str, str]] = []
@@ -265,6 +308,7 @@ async def retrieve(
         try:
             query_entities = await entities_task
         except Exception as e:
+            degraded.append("entities_failed")
             logger.warning("retrieve: entity extraction failed: %s", e)
 
     # De-dup queries (rewritten first, then variants).
@@ -292,6 +336,11 @@ async def retrieve(
         query_embeddings.append(emb)
         valid_queries.append(q)
     if not query_embeddings:
+        degraded.append("embed_failed")
+        logger.warning(
+            "retrieve: all %d query embeddings failed, returning empty "
+            "results (degraded=%s)", len(queries), degraded,
+        )
         return {"chunks": [], "entities": [], "relations": []}
     t_embed = time.perf_counter()
 
@@ -348,6 +397,7 @@ async def retrieve(
                             len(entity_names), len(graph_chunks),
                         )
             except Exception as e:
+                degraded.append("graph_skipped")
                 logger.warning("retrieve: graph-RAG failed, skipping channel: %s", e)
 
     # ---- 6. Multi-list RRF fusion (#3/#5) ----
@@ -374,6 +424,7 @@ async def retrieve(
         # Rerank is an optimisation, not a requirement: on any failure (HTTP
         # error, unexpected payload shape, timeout) fall back to the fused
         # RRF order instead of failing the whole chat/search request.
+        degraded.append("rerank_fallback")
         logger.warning("retrieve: rerank failed, falling back to RRF order: %s", e)
         seeds = fused[:top_k]
     t_rerank = time.perf_counter()
@@ -401,6 +452,7 @@ async def retrieve(
             for nb in neighbours:
                 _add(nb)
         except Exception as e:
+            degraded.append("expand_neighbour_failed")
             logger.warning("retrieve: neighbour expand failed for %s: %s", cid, e)
         try:
             for sb in await _get_section_siblings(
@@ -410,6 +462,7 @@ async def retrieve(
             ):
                 _add(sb)
         except Exception as e:
+            degraded.append("expand_section_failed")
             logger.warning("retrieve: section expand failed for %s: %s", cid, e)
 
     # ---- 9. Re-rerank the expanded set (#1: relevance-ordered, no eviction) ----
@@ -419,6 +472,7 @@ async def retrieve(
                 rewritten, expanded, top_k=len(expanded)
             )
         except Exception as e:
+            degraded.append("rerank_fallback_expansion")
             logger.warning("retrieve: expansion rererank failed, keeping order: %s", e)
     expanded = expanded[: max(_MAX_CITATION_CHUNKS, top_k)]
     t_expand = time.perf_counter()
@@ -437,28 +491,37 @@ async def retrieve(
                     entities.append({"name": rel.get(key), "type": "Related"})
 
     t_end = time.perf_counter()
+    extra: Dict[str, Any] = {
+        "timing_s": {
+            "rewrite": round(t_rewrite - t_start, 3),
+            "embed": round(t_embed - t_rewrite, 3),
+            "retrieve": round(t_retrieve - t_embed, 3),
+            "rerank": round(t_rerank - t_retrieve, 3),
+            "expand": round(t_expand - t_rerank, 3),
+            "enrich": round(t_end - t_expand, 3),
+            "total": round(t_end - t_start, 3),
+        },
+        "queries": len(valid_queries),
+        "seeds": len(seeds),
+        "expanded": len(expanded),
+    }
+    if degraded:
+        # Structured degradation report — the JSON formatter merges extra
+        # keys top-level; text mode ignores them. Log-only by design: the
+        # cached result is shared by reference and must stay per-request clean.
+        extra["degraded"] = degraded
     logger.info(
         "retrieve timing: rewrite=%.3fs embed=%.3fs retrieve=%.3fs rerank=%.3fs "
         "expand=%.3fs enrich=%.3fs total=%.3fs (queries=%d, seeds=%d, expanded=%d)",
         t_rewrite - t_start, t_embed - t_rewrite, t_retrieve - t_embed,
         t_rerank - t_retrieve, t_expand - t_rerank, t_end - t_expand, t_end - t_start,
         len(valid_queries), len(seeds), len(expanded),
-        extra={
-            "timing_s": {
-                "rewrite": round(t_rewrite - t_start, 3),
-                "embed": round(t_embed - t_rewrite, 3),
-                "retrieve": round(t_retrieve - t_embed, 3),
-                "rerank": round(t_rerank - t_retrieve, 3),
-                "expand": round(t_expand - t_rerank, 3),
-                "enrich": round(t_end - t_expand, 3),
-                "total": round(t_end - t_start, 3),
-            },
-            "queries": len(valid_queries),
-            "seeds": len(seeds),
-            "expanded": len(expanded),
-        },
+        extra=extra,
     )
 
+    # Callers must not mutate this dict: it is handed to cache hits by
+    # reference until the TTL expires (chat citation builder and /api/search
+    # are read-only today).
     result = {"chunks": expanded, "entities": entities, "relations": relations}
     _cache.set(cache_key, result)
     return result
