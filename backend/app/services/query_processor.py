@@ -131,9 +131,37 @@ Entities:"""
             )
 
             entities = self._extract_json_array(response)
-            return entities if isinstance(entities, list) else []
+            return self._normalize_entities(entities)
         except Exception:
             return []
+
+    @staticmethod
+    def _normalize_entities(raw: Any) -> List[Dict[str, str]]:
+        """Coerce whatever the LLM returned into ``[{"name", "type"}]`` dicts.
+
+        Models drift between shapes: proper objects, bare strings, junk.
+        Bare strings become name-only entities; anything without a usable
+        name is dropped. Without this, a shape drift surfaced as an
+        AttributeError three layers downstream in the graph channel
+        (retriever's ``e.get("name")`` on a str) and every affected search
+        answered 500 — found by the mock-provider stress run.
+        """
+        if not isinstance(raw, list):
+            return []
+        out: List[Dict[str, str]] = []
+        for item in raw:
+            if isinstance(item, str):
+                name = item.strip()
+                if name:
+                    out.append({"name": name, "type": "CONCEPT"})
+            elif isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                if name:
+                    out.append({
+                        "name": name,
+                        "type": str(item.get("type") or "CONCEPT"),
+                    })
+        return out
 
     def _extract_json_array(self, text: str) -> List:
         """Extract JSON array from LLM response."""
