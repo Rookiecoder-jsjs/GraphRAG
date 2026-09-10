@@ -31,6 +31,7 @@
 |------|------|
 | 🎨 前端 | Vue 3.5 + Vite 7 + Pinia + Vue Router + d3.js · 学术雅致派双主题（Fraunces + Plus Jakarta Sans + JetBrains Mono） |
 | ⚙️ 后端 API | FastAPI 0.115 + Python 3.11 + uvicorn |
+| 📄 文档转换 | firecrawl-anydoc 0.2.4（Rust，零传递依赖；docx/doc/pdf/pptx/xlsx 等 14 种格式 → GFM Markdown，按内容特征探测格式，内置资源上限） |
 | 🕸️ 图数据库 | Neo4j 5.14 (Docker, APOC 插件) |
 | 🧬 向量数据库 | ChromaDB 0.4.18 (Docker) |
 | 💾 用户数据 | SQLite + SQLAlchemy 2.0 + aiosqlite (单文件) |
@@ -336,6 +337,7 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
     → 硅基流动 Embedding (Qwen3-Embedding-8B) → ChromaDB 存储
     → Neo4j 实体关系提取 (BM25 索引同步) → SSE 进度推送
 ```
+> 转换失败（损坏 / 加密 / 超资源上限 / 扫描件无文本层）一律安全降级为空串 → 上传接口返回 400，且不残留上传文件；排队等待摄取闸的文档保持 `pending` 不发进度。
 
 ### 🔍 检索对话流程
 ```
@@ -628,6 +630,8 @@ vite ^7.2.4
 ```
 
 > **注意**：原 `passlib[bcrypt]==1.7.4` 已移除，改为原生 `bcrypt==4.1.3`（passlib 与新版 bcrypt 存在兼容问题；且 chromadb 0.4.18 依赖 `bcrypt>=4.0.1`，钉 3.x 会让全新环境的 pip 解析直接失败——CI 曾因此一直红）。`app/auth/security.py` 在哈希前主动截断 72 字节、验证时捕获 ValueError，兼容 4.x 行为；存量 `$2b$` 哈希可直接验证。
+
+> **注意**：原 `markitdown==0.0.1a3` 已移除，换为 `firecrawl-anydoc==0.2.4`（markitdown 对部分 docx 会静默倾倒 zip 内原始 OOXML 污染下游切块/抽取、异常继承 `BaseException` 导致 `except Exception` 接不住、对恶意构造文件无资源上限会挂死转换线程；anydoc 为 Rust 实现、零传递依赖，错误全部继承 `Exception` 且内置资源限制，典型文档转换耗时从数百 ms 降至个位数 ms）。转换失败契约不变：降级空串 → 上传 400（见注意事项 7）。
 
 ## 📌 注意事项
 
