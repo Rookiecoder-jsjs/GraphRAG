@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     # API Keys
     SILICON_FLOW_API_KEY: str = ""
     SILICON_FLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    # Multi-key pool (ADR-009): embedding + rerank share these SiliconFlow
+    # keys. Comma-separated; when empty the single SILICON_FLOW_API_KEY above
+    # is used so existing .env files keep working. Provider limits are per
+    # key, so N keys multiply the usable concurrency.
+    SILICON_FLOW_API_KEYS: str = ""
+    # Per-key in-flight cap across BOTH embedding and rerank. Sized above
+    # QUERY_CONCURRENCY + DOC_INGEST_CONCURRENCY so the two workloads don't
+    # queue behind each other on a single key.
+    SILICON_FLOW_PER_KEY_CONCURRENCY: int = 8
+    # Max seconds to wait for a leasable key before giving up
+    # (KeyPoolExhausted). Also caps the 429 cooldown (report_rate_limited
+    # clamps to this) so the worst-case provider stall stays bounded.
+    SILICON_FLOW_KEY_LEASE_TIMEOUT: float = 20.0
     KIMI_API_KEY: str = ""
     KIMI_BASE_URL: str = "https://api.moonshot.cn/v1"
 

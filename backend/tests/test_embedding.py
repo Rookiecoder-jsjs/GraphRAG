@@ -27,9 +27,9 @@ from app.services.embedding import (
     EmbeddingService,
     EmbeddingServiceError,
     MAX_ATTEMPTS,
-    RETRY_DELAYS_SECONDS,
     _looks_like_json_embedding,
 )
+from app.services.key_pool import KeyPool
 
 
 PASS = "\033[92mPASS\033[0m"
@@ -88,19 +88,22 @@ class ScriptedRaiseTransport(httpx.AsyncBaseTransport):
 
 
 class RecordingTransport(ScriptedTransport):
-    """ScriptedTransport that also records each request's JSON body."""
+    """ScriptedTransport that also records each request's JSON body and
+    Authorization header (for per-key failover assertions)."""
 
     def __init__(self, responses):
         super().__init__(responses)
         self.requests: list = []
+        self.auth_headers: list = []
 
     async def handle_async_request(self, request):
         self.requests.append(json.loads(request.content.decode("utf-8")))
+        self.auth_headers.append(request.headers.get("authorization", ""))
         return await super().handle_async_request(request)
 
 
 def make_service(batch_size: int = 32, batch_delay: float = 0.0,
-                 db_path: str = ":memory:"):
+                 db_path: str = ":memory:", pool: KeyPool | None = None):
     """Build an EmbeddingService with deterministic test settings (no config read).
 
     ``__new__`` skips ``__init__``, so every attribute the service lazily
@@ -117,9 +120,8 @@ def make_service(batch_size: int = 32, batch_delay: float = 0.0,
         "EMBED_BATCH_DELAY_SECONDS": batch_delay,
     })()
     svc.base_url = svc.settings.SILICON_FLOW_BASE_URL
-    svc.api_key = svc.settings.SILICON_FLOW_API_KEY
     svc.model = svc.settings.EMBEDDING_MODEL
-    svc._semaphore = asyncio.Semaphore(5)
+    svc.pool = pool or KeyPool(["test-key-0000"], per_key_concurrency=5)
     svc._client = None  # lazy shared client, created on first _get_client()
     svc._db = None      # lazy shared cache connection
     svc._db_lock = asyncio.Lock()
@@ -177,30 +179,32 @@ async def _async_5xx_exhausts_retries():
     t = ScriptedTransport([(503, b"busy", {}) for _ in range(MAX_ATTEMPTS)])
     patch_client(httpx, t)
     svc = make_service()
-    try:
-        await svc.embed_single("hello", use_cache=False)
-        check("Persistent 5xx raises EmbeddingServiceError", False, "no exception")
-    except EmbeddingServiceError as e:
-        check(
-            f"Persistent 5xx gives up after {MAX_ATTEMPTS} attempts",
-            t.calls == MAX_ATTEMPTS and "503" in str(e),
-            f"{t.calls} calls, msg={e}",
-        )
+    with mock.patch("asyncio.sleep", new=mock.AsyncMock()):
+        try:
+            await svc.embed_single("hello", use_cache=False)
+            check("Persistent 5xx raises EmbeddingServiceError", False, "no exception")
+        except EmbeddingServiceError as e:
+            check(
+                f"Persistent 5xx gives up after {MAX_ATTEMPTS} attempts",
+                t.calls == MAX_ATTEMPTS and "503" in str(e),
+                f"{t.calls} calls, msg={e}",
+            )
 
 
 async def _async_transport_error_exhausts_retries():
     t = ScriptedRaiseTransport(httpx.RemoteProtocolError("conn reset"))
     patch_client(httpx, t)
     svc = make_service()
-    try:
-        await svc.embed_single("hello", use_cache=False)
-        check("Persistent transport error raises", False, "no exception")
-    except EmbeddingServiceError as e:
-        check(
-            f"Persistent transport error gives up after {MAX_ATTEMPTS} attempts",
-            t.calls == MAX_ATTEMPTS and "unreachable" in str(e).lower(),
-            f"{t.calls} calls, msg={e}",
-        )
+    with mock.patch("asyncio.sleep", new=mock.AsyncMock()):
+        try:
+            await svc.embed_single("hello", use_cache=False)
+            check("Persistent transport error raises", False, "no exception")
+        except EmbeddingServiceError as e:
+            check(
+                f"Persistent transport error gives up after {MAX_ATTEMPTS} attempts",
+                t.calls == MAX_ATTEMPTS and "unreachable" in str(e).lower(),
+                f"{t.calls} calls, msg={e}",
+            )
 
 
 # ---------- batching + shared cache connection (ADR-009 step 2) --------------
@@ -372,10 +376,37 @@ def _run_async(fn) -> None:
 def test_retry_schedule_matches_spec():
     _failures.clear()
     check(
-        "Retry schedule matches spec (1, 2, 4, 8, 16s, 5 attempts)",
-        RETRY_DELAYS_SECONDS == [1, 2, 4, 8, 16] and MAX_ATTEMPTS == 5,
+        "Retry budget: MAX_ATTEMPTS == 5, 429 failover handled by key pool",
+        MAX_ATTEMPTS == 5,
     )
     assert not _failures, "; ".join(_failures)
+
+
+async def _async_429_fails_over_to_second_key_without_sleep():
+    """The pool's core value: a 429 on one key must cool THAT key down and
+    retry immediately on another — no fixed-delay sleep in between."""
+    ok = json.dumps({"data": [{"embedding": [0.1, 0.2, 0.3, 0.4]}]}).encode()
+    t = RecordingTransport([
+        (429, b'{"error":"rate limited"}', {"content-type": "application/json",
+                                            "retry-after": "5"}),
+        (200, ok, {"content-type": "application/json"}),
+    ])
+    patch_client(httpx, t)
+    svc = make_service(pool=KeyPool(["test-key-aaaa", "test-key-bbbb"],
+                                    per_key_concurrency=5))
+    with mock.patch("asyncio.sleep", new=mock.AsyncMock()) as zzz:
+        emb = await svc.embed_single("hello", use_cache=False)
+    check(
+        "429 on key A → immediate failover to key B, vector returned",
+        emb == [0.1, 0.2, 0.3, 0.4] and t.calls == 2
+        and t.auth_headers[0] != t.auth_headers[1]
+        and "aaaa" in t.auth_headers[0] and "bbbb" in t.auth_headers[1],
+        f"{t.calls} calls, auth={t.auth_headers}",
+    )
+    check(
+        "failover did NOT sleep",
+        zzz.await_count == 0, f"{zzz.await_count} sleeps",
+    )
 
 
 def test_retry_then_succeed_on_5xx():
@@ -406,6 +437,10 @@ def test_batch_size_from_config():
     _run_async(_async_batch_size_from_config)
 
 
+def test_429_fails_over_to_second_key_without_sleep():
+    _run_async(_async_429_fails_over_to_second_key_without_sleep)
+
+
 if __name__ == "__main__":
     print("\nRetry / backoff")
     check(
@@ -420,6 +455,7 @@ if __name__ == "__main__":
     asyncio.run(_async_query_path_single_call())
     asyncio.run(_async_cache_roundtrip_shared_conn())
     asyncio.run(_async_batch_size_from_config())
+    asyncio.run(_async_429_fails_over_to_second_key_without_sleep())
 
     print()
     if _failures:

@@ -4,6 +4,7 @@ import asyncio
 import httpx
 import pytest
 
+from app.services.key_pool import KeyPool
 from app.services.retry import (
     RETRYABLE_EXCEPTIONS,
     RETRYABLE_STATUS_CODES,
@@ -203,7 +204,7 @@ class TestRerankerRetry:
 
         svc = RerankService.__new__(RerankService)
         svc.base_url = "https://example.test"
-        svc.api_key = "fake"
+        svc._pool = KeyPool(["fake-key"], per_key_concurrency=2)
         svc.model = "fake-rerank"
 
         client_calls = {"n": 0}
@@ -231,7 +232,7 @@ class TestRerankerRetry:
 
         svc = RerankService.__new__(RerankService)
         svc.base_url = "https://example.test"
-        svc.api_key = "fake"
+        svc._pool = KeyPool(["fake-key"], per_key_concurrency=2)
         svc.model = "fake-rerank"
 
         responses = ["fail", {

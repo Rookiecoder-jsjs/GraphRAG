@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.config import get_settings
-from app.services.retry import run_with_retry
+from app.services.key_pool import get_key_pool, run_with_key_retry
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,9 @@ class RerankService:
     def __init__(self):
         self.settings = get_settings()
         self.base_url = self.settings.SILICON_FLOW_BASE_URL
-        self.api_key = self.settings.SILICON_FLOW_API_KEY
+        # Shares the SiliconFlow multi-key pool with the embedding service
+        # (ADR-009): least-inflight keys, 429 cooldown + immediate failover.
+        self._pool = get_key_pool()
         self.model = self.settings.RERANK_MODEL
         self._client: Optional[httpx.AsyncClient] = None
 
@@ -34,23 +36,24 @@ class RerankService:
     ) -> List[Dict[str, Any]]:
         """Rerank chunks by relevance to query.
 
-        Retries transient provider failures (5xx / 429 / transport) with
-        backoff; on final failure falls back to the input order so the
-        chat/search request still gets results — the fallback is logged as
-        a warning (it silently degraded retrieval quality before).
+        Retries transient provider failures (5xx / 429 / transport) through
+        the shared key pool: a 429 cools the key down and fails over to an
+        idle one without sleeping. On final failure (including pool
+        exhaustion after a bounded wait) falls back to the input order so
+        the chat/search request still gets results — the fallback is logged
+        as a warning (it silently degraded retrieval quality before).
         """
         if not chunks:
             return []
 
         client = await self._get_client()
         url = f"{self.base_url}/rerank"
-        headers = {"Authorization": f"Bearer {self.api_key}"}
         documents = [chunk["content"] for chunk in chunks]
 
-        async def post_once() -> Dict[str, Any]:
+        async def post_once(key: str) -> Dict[str, Any]:
             response = await client.post(
                 url,
-                headers=headers,
+                headers={"Authorization": f"Bearer {key}"},
                 json={
                     "model": self.model,
                     "query": query,
@@ -62,7 +65,9 @@ class RerankService:
             return response.json()
 
         try:
-            data = await run_with_retry("rerank", post_once, max_attempts=3)
+            data = await run_with_key_retry(
+                "rerank", self._pool, post_once, max_attempts=3,
+            )
         except Exception as e:
             # Fallback to original order on error — no scores available
             # since the API never responded. Callers (chat) treat a

@@ -10,18 +10,20 @@ import aiosqlite
 import httpx
 
 from app.config import get_settings
-# Retryable classification is shared across llm/embedding/reranker (one
-# definition of "worth retrying"); the schedule below is embedding-specific.
-from app.services.retry import (
-    RETRYABLE_EXCEPTIONS,
-    RETRYABLE_STATUS_CODES,
+# Retryable status classification is shared across llm/embedding/reranker
+# (one definition of "worth retrying"); failover/backoff sequencing lives in
+# the key pool.
+from app.services.key_pool import (
+    KeyPoolExhausted,
+    get_key_pool,
+    run_with_key_retry,
 )
+from app.services.retry import RETRYABLE_STATUS_CODES
 
 logger = logging.getLogger(__name__)
 
 
 MAX_ATTEMPTS = 5
-RETRY_DELAYS_SECONDS = [1, 2, 4, 8, 16]
 REQUEST_TIMEOUT_SECONDS = 60.0
 # Inputs per /embeddings request moved to settings.EMBED_BATCH_SIZE (config.py).
 
@@ -75,9 +77,11 @@ class EmbeddingService:
     def __init__(self):
         self.settings = get_settings()
         self.base_url = self.settings.SILICON_FLOW_BASE_URL
-        self.api_key = self.settings.SILICON_FLOW_API_KEY
         self.model = self.settings.EMBEDDING_MODEL
-        self._semaphore = asyncio.Semaphore(5)
+        # Multi-key pool (ADR-009): provider limits are per key, so the pool
+        # IS the old per-process semaphore — generalized to N keys shared
+        # with the rerank service.
+        self.pool = get_key_pool()
         self._client: Optional[httpx.AsyncClient] = None
         # Shared cache connection: one aiosqlite connection (one worker
         # thread) reused for every cache read/write instead of a fresh
@@ -122,7 +126,14 @@ class EmbeddingService:
         if self._db is None:
             async with self._db_lock:
                 if self._db is None:
-                    db = await aiosqlite.connect(self.settings.SQLITE_PATH)
+                    # aiosqlite.connect() returns the Connection (a Thread)
+                    # un-started; mark it daemon BEFORE awaiting so a leaked
+                    # connection (CLI/eval exit without the app lifespan)
+                    # can never hang interpreter shutdown. The backend still
+                    # closes it cleanly via close_embedding_service().
+                    conn = aiosqlite.connect(self.settings.SQLITE_PATH)
+                    conn.daemon = True
+                    db = await conn
                     await db.execute("PRAGMA busy_timeout = 5000")
                     await db.execute("PRAGMA journal_mode = WAL")
                     self._db = db
@@ -217,65 +228,60 @@ class EmbeddingService:
     def _get_text_hash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8")).hexdigest()
 
-    async def _call_with_retry(self, payload: dict) -> dict:
-        """POST to SiliconFlow with exponential backoff.
+    async def _request_embeddings(self, inputs: "str | List[str]") -> dict:
+        """POST /embeddings with key-pool retry (429 failover + jittered backoff).
 
-        Raises:
-            EmbeddingServiceError: after MAX_ATTEMPTS exhausted on retryable error
-                or immediately on a 4xx response.
+        Error-message families match the pre-pool implementation so callers
+        and tests see the same failures:
+        - non-retryable 4xx → "SiliconFlow rejected request (HTTP ...)":
+          raised inside the first attempt, no retries, no extra keys burned;
+        - retryable status exhausted → "SiliconFlow returned X after N attempts";
+        - transport/pool exhausted → "SiliconFlow unreachable after N attempts: ...".
         """
-        last_error: Optional[BaseException] = None
-        url = f"{self.base_url}/embeddings"
-        headers = {"Authorization": f"Bearer {self.api_key}"}
         client = await self._get_client()
+        url = f"{self.base_url}/embeddings"
+        payload = {
+            "model": self.model,
+            "input": inputs,
+            "encoding_format": "float",
+            # Qwen3-Embedding-8B defaults to 4096 dims; without an
+            # explicit `dimensions` the vector won't match the
+            # collection dimensionality (EMBEDDING_DIM) and Chroma
+            # rejects the query with InvalidDimensionException.
+            "dimensions": self.settings.EMBEDDING_DIM,
+        }
 
-        for attempt in range(MAX_ATTEMPTS):
-            try:
-                response = await client.post(url, headers=headers, json=payload)
-            except RETRYABLE_EXCEPTIONS as e:
-                last_error = e
-                if attempt < MAX_ATTEMPTS - 1:
-                    delay = RETRY_DELAYS_SECONDS[attempt]
-                    logger.warning(
-                        "Embedding call %d/%d transport error: %s — retrying in %ds",
-                        attempt + 1, MAX_ATTEMPTS, e, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                logger.error("Embedding call failed after %d attempts: %s", MAX_ATTEMPTS, e)
-                raise EmbeddingServiceError(
-                    f"SiliconFlow unreachable after {MAX_ATTEMPTS} attempts: {e}"
-                ) from e
-
+        async def attempt(key: str) -> dict:
+            response = await client.post(
+                url, headers={"Authorization": f"Bearer {key}"}, json=payload
+            )
             if response.status_code in RETRYABLE_STATUS_CODES:
-                last_error = httpx.HTTPStatusError(
+                raise httpx.HTTPStatusError(
                     f"status {response.status_code}",
                     request=response.request,
                     response=response,
                 )
-                if attempt < MAX_ATTEMPTS - 1:
-                    delay = RETRY_DELAYS_SECONDS[attempt]
-                    logger.warning(
-                        "Embedding call %d/%d got HTTP %d — retrying in %ds",
-                        attempt + 1, MAX_ATTEMPTS, response.status_code, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise EmbeddingServiceError(
-                    f"SiliconFlow returned {response.status_code} after {MAX_ATTEMPTS} attempts"
-                ) from last_error
-
             if response.status_code >= 400:
                 body_preview = response.text[:300] if response.text else ""
                 raise EmbeddingServiceError(
                     f"SiliconFlow rejected request (HTTP {response.status_code}): {body_preview}"
                 )
-
             return response.json()
 
-        raise EmbeddingServiceError(
-            f"Embedding call failed after {MAX_ATTEMPTS} attempts: {last_error}"
-        )
+        try:
+            return await run_with_key_retry(
+                "embedding", self.pool, attempt,
+                max_attempts=MAX_ATTEMPTS, base_delay=1.0,
+            )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else "?"
+            raise EmbeddingServiceError(
+                f"SiliconFlow returned {status} after {MAX_ATTEMPTS} attempts"
+            ) from e
+        except (httpx.HTTPError, KeyPoolExhausted) as e:
+            raise EmbeddingServiceError(
+                f"SiliconFlow unreachable after {MAX_ATTEMPTS} attempts: {e}"
+            ) from e
 
     async def embed_single(self, text: str, use_cache: bool = True) -> List[float]:
         """Embed a single text with caching. Raises EmbeddingServiceError on API failure."""
@@ -289,19 +295,8 @@ class EmbeddingService:
             if text_hash in cached_map:
                 return cached_map[text_hash]
 
-        async with self._semaphore:
-            data = await self._call_with_retry(
-                {
-                    "model": self.model,
-                    "input": text,
-                    "encoding_format": "float",
-                    # Qwen3-Embedding-8B defaults to 4096 dims; without an
-                    # explicit `dimensions` the vector won't match the
-                    # collection dimensionality (EMBEDDING_DIM) and Chroma
-                    # rejects the query with InvalidDimensionException.
-                    "dimensions": self.settings.EMBEDDING_DIM,
-                }
-            )
+        # The pool lease lives inside run_with_key_retry — no local semaphore.
+        data = await self._request_embeddings(text)
 
         try:
             embedding = data["data"][0]["embedding"]
@@ -366,17 +361,7 @@ class EmbeddingService:
             batch_indices = indices_to_embed[batch_start : batch_start + batch_size]
             batch_hashes = hashes_to_embed[batch_start : batch_start + batch_size]
 
-            async with self._semaphore:
-                data = await self._call_with_retry(
-                    {
-                        "model": self.model,
-                        "input": batch_texts,
-                        "encoding_format": "float",
-                        # Keep batch and single-embed dimensions in sync with
-                        # the collection (EMBEDDING_DIM); see embed_single.
-                        "dimensions": self.settings.EMBEDDING_DIM,
-                    }
-                )
+            data = await self._request_embeddings(batch_texts)
 
             try:
                 embeddings = [item["embedding"] for item in data["data"]]
