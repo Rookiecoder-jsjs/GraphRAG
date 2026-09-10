@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import aiosqlite
 import httpx
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
 RETRY_DELAYS_SECONDS = [1, 2, 4, 8, 16]
 REQUEST_TIMEOUT_SECONDS = 60.0
-EMBED_BATCH_SIZE = 5
+# Inputs per /embeddings request moved to settings.EMBED_BATCH_SIZE (config.py).
 
 
 class EmbeddingServiceError(Exception):
@@ -79,6 +79,13 @@ class EmbeddingService:
         self.model = self.settings.EMBEDDING_MODEL
         self._semaphore = asyncio.Semaphore(5)
         self._client: Optional[httpx.AsyncClient] = None
+        # Shared cache connection: one aiosqlite connection (one worker
+        # thread) reused for every cache read/write instead of a fresh
+        # connect per call — a 300-chunk ingest used to open and close ~600
+        # connections. aiosqlite serializes operations on the connection,
+        # which is fine for cache-sized queries.
+        self._db: Optional[aiosqlite.Connection] = None
+        self._db_lock = asyncio.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the shared HTTP client.
@@ -97,10 +104,29 @@ class EmbeddingService:
         return self._client
 
     async def close(self) -> None:
-        """Close the shared HTTP client (no-op if never created)."""
+        """Close the shared HTTP client and cache connection (no-op if never created)."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
+
+    async def _get_db(self) -> aiosqlite.Connection:
+        """Lazily open the shared cache connection (same PRAGMAs as get_db).
+
+        The connection lives for the service lifetime; on Windows that means
+        the backend holds a handle on the SQLite file while running, which is
+        the deliberate trade for not reconnecting on every cache access.
+        """
+        if self._db is None:
+            async with self._db_lock:
+                if self._db is None:
+                    db = await aiosqlite.connect(self.settings.SQLITE_PATH)
+                    await db.execute("PRAGMA busy_timeout = 5000")
+                    await db.execute("PRAGMA journal_mode = WAL")
+                    self._db = db
+        return self._db
 
     async def _delete_corrupt_cache_row(self, db, text_hash: str, reason: str) -> None:
         """Remove a single corrupt cache row."""
@@ -114,54 +140,79 @@ class EmbeddingService:
             logger.warning("Failed to delete corrupt cache row %s: %s", text_hash, cleanup_error)
         logger.warning("Corrupt embedding cache row %s deleted (%s)", text_hash, reason)
 
-    async def _get_cached_embedding(self, text_hash: str) -> Optional[List[float]]:
-        """Try to get embedding from cache. Self-heals on corrupted rows."""
-        async with aiosqlite.connect(self.settings.SQLITE_PATH) as db:
-            async with db.execute(
-                "SELECT embedding FROM embedding_cache WHERE text_hash = ? AND model = ?",
-                (text_hash, self.model),
-            ) as cursor:
-                row = await cursor.fetchone()
-                if not row:
-                    return None
-                blob = row[0]
-                if not _looks_like_json_embedding(blob):
-                    await self._delete_corrupt_cache_row(
-                        db, text_hash, f"non-JSON prefix byte=0x{blob[:1].hex()}"
-                    )
-                    return None
-                try:
-                    embedding = _deserialize_embedding(blob)
-                except (ValueError, UnicodeDecodeError) as e:
-                    await self._delete_corrupt_cache_row(db, text_hash, str(e))
-                    return None
-                # Dimension guard: vectors cached by an older model config
-                # (or before the `dimensions` param was added — Qwen3
-                # defaults to 4096) would be rejected by Chroma with
-                # InvalidDimensionException. Treat length mismatch as stale
-                # and re-embed rather than surfacing a 500 later.
-                if len(embedding) != self.settings.EMBEDDING_DIM:
-                    await self._delete_corrupt_cache_row(
-                        db, text_hash,
-                        f"dim {len(embedding)} != {self.settings.EMBEDDING_DIM}",
-                    )
-                    return None
-                return embedding
-        return None
+    async def _cached_lookup(self, text_hashes: List[str]) -> Dict[str, List[float]]:
+        """Batch cache read: hash -> validated embedding.
 
-    async def _cache_embedding(self, text_hash: str, text: str, embedding: List[float]) -> None:
-        """Cache embedding to database. Best-effort; failures are logged, not raised."""
+        One SELECT for the whole batch (callers pass at most one batch's
+        worth of hashes, well under the SQLite variable limit). Rows failing
+        validation (non-JSON blob, wrong dimension) are self-healed exactly
+        as before: the corrupt row is deleted and simply absent from the
+        result (treated as a cache miss). A missing table is tolerated as an
+        all-miss — the cache is best-effort by contract and init_db() may not
+        have run (tests, CLI tools).
+        """
+        if not text_hashes:
+            return {}
+        placeholders = ",".join("?" * len(text_hashes))
         try:
-            async with aiosqlite.connect(self.settings.SQLITE_PATH) as db:
-                await db.execute(
-                    """INSERT OR REPLACE INTO embedding_cache
-                       (text_hash, text, embedding, model, created_at)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (text_hash, text, _serialize_embedding(embedding), self.model, datetime.now()),
+            db = await self._get_db()
+            async with db.execute(
+                f"SELECT text_hash, embedding FROM embedding_cache "
+                f"WHERE text_hash IN ({placeholders}) AND model = ?",
+                (*text_hashes, self.model),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        except aiosqlite.OperationalError as e:
+            logger.warning("Embedding cache read skipped (no table?): %s", e)
+            return {}
+        found: Dict[str, List[float]] = {}
+        for text_hash, blob in rows:
+            if not _looks_like_json_embedding(blob):
+                await self._delete_corrupt_cache_row(
+                    db, text_hash, f"non-JSON prefix byte=0x{blob[:1].hex()}"
                 )
-                await db.commit()
+                continue
+            try:
+                embedding = _deserialize_embedding(blob)
+            except (ValueError, UnicodeDecodeError) as e:
+                await self._delete_corrupt_cache_row(db, text_hash, str(e))
+                continue
+            # Dimension guard: vectors cached by an older model config
+            # (or before the `dimensions` param was added — Qwen3
+            # defaults to 4096) would be rejected by Chroma with
+            # InvalidDimensionException. Treat length mismatch as stale
+            # and re-embed rather than surfacing a 500 later.
+            if len(embedding) != self.settings.EMBEDDING_DIM:
+                await self._delete_corrupt_cache_row(
+                    db, text_hash,
+                    f"dim {len(embedding)} != {self.settings.EMBEDDING_DIM}",
+                )
+                continue
+            found[text_hash] = embedding
+        return found
+
+    async def _cache_rows(self, rows: List[Tuple[str, str, List[float]]]) -> None:
+        """Batch cache write: one executemany + one commit.
+
+        Best-effort; failures are logged, not raised (unchanged contract).
+        """
+        if not rows:
+            return
+        try:
+            db = await self._get_db()
+            await db.executemany(
+                """INSERT OR REPLACE INTO embedding_cache
+                   (text_hash, text, embedding, model, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (text_hash, text, _serialize_embedding(embedding),
+                     self.model, datetime.now())
+                    for text_hash, text, embedding in rows
+                ],
+            )
+            await db.commit()
         except Exception as e:
-            logger.warning("Failed to cache embedding: %s", e, exc_info=True)
+            logger.warning("Failed to cache embeddings: %s", e, exc_info=True)
 
     def _get_text_hash(self, text: str) -> str:
         return hashlib.md5(text.encode("utf-8")).hexdigest()
@@ -234,9 +285,9 @@ class EmbeddingService:
         text_hash = self._get_text_hash(text)
 
         if use_cache:
-            cached = await self._get_cached_embedding(text_hash)
-            if cached is not None:
-                return cached
+            cached_map = await self._cached_lookup([text_hash])
+            if text_hash in cached_map:
+                return cached_map[text_hash]
 
         async with self._semaphore:
             data = await self._call_with_retry(
@@ -258,7 +309,7 @@ class EmbeddingService:
             raise EmbeddingServiceError(f"Malformed SiliconFlow response: {e}") from e
 
         if use_cache:
-            await self._cache_embedding(text_hash, text, embedding)
+            await self._cache_rows([(text_hash, text, embedding)])
         return embedding
 
     async def embed_batch(
@@ -266,9 +317,11 @@ class EmbeddingService:
     ) -> List[List[float]]:
         """Embed multiple texts with caching and batching.
 
-        For each batch: consult cache first, send the remainder to the API
-        (rate-limited via semaphore), cache results. Raises EmbeddingServiceError
-        on unrecoverable API failure.
+        Cache misses are grouped into requests of ``settings.EMBED_BATCH_SIZE``
+        inputs: the query path sends <=4 texts and always fits in one request,
+        the ingest path scales its request count down by the batch size. For
+        each batch: one semaphore-limited API call, one bulk cache write.
+        Raises EmbeddingServiceError on unrecoverable API failure.
         """
         if not texts:
             return []
@@ -282,20 +335,36 @@ class EmbeddingService:
             if not text.strip():
                 results[i] = [0.0] * self.settings.EMBEDDING_DIM
                 continue
-            text_hash = self._get_text_hash(text)
-            if use_cache:
-                cached = await self._get_cached_embedding(text_hash)
-                if cached is not None:
-                    results[i] = cached
-                    continue
             texts_to_embed.append(text)
             indices_to_embed.append(i)
-            hashes_to_embed.append(text_hash)
+            hashes_to_embed.append(self._get_text_hash(text))
 
-        for batch_start in range(0, len(texts_to_embed), EMBED_BATCH_SIZE):
-            batch_texts = texts_to_embed[batch_start : batch_start + EMBED_BATCH_SIZE]
-            batch_indices = indices_to_embed[batch_start : batch_start + EMBED_BATCH_SIZE]
-            batch_hashes = hashes_to_embed[batch_start : batch_start + EMBED_BATCH_SIZE]
+        if use_cache and texts_to_embed:
+            # One round-trip for the whole batch instead of a connection per
+            # text. Duplicate texts share a hash; every index with that hash
+            # gets the same hit.
+            cached_map = await self._cached_lookup(hashes_to_embed)
+            for text, idx, text_hash in zip(
+                texts_to_embed, indices_to_embed, hashes_to_embed
+            ):
+                if text_hash in cached_map:
+                    results[idx] = cached_map[text_hash]
+            remaining = [
+                (text, idx, text_hash)
+                for text, idx, text_hash in zip(
+                    texts_to_embed, indices_to_embed, hashes_to_embed
+                )
+                if text_hash not in cached_map
+            ]
+            texts_to_embed = [t for t, _, _ in remaining]
+            indices_to_embed = [i for _, i, _ in remaining]
+            hashes_to_embed = [h for _, _, h in remaining]
+
+        batch_size = max(1, self.settings.EMBED_BATCH_SIZE)
+        for batch_start in range(0, len(texts_to_embed), batch_size):
+            batch_texts = texts_to_embed[batch_start : batch_start + batch_size]
+            batch_indices = indices_to_embed[batch_start : batch_start + batch_size]
+            batch_hashes = hashes_to_embed[batch_start : batch_start + batch_size]
 
             async with self._semaphore:
                 data = await self._call_with_retry(
@@ -320,15 +389,18 @@ class EmbeddingService:
                     f"{len(batch_texts)} inputs"
                 )
 
+            new_rows: List[Tuple[str, str, List[float]]] = []
             for original_idx, embedding, text, text_hash in zip(
                 batch_indices, embeddings, batch_texts, batch_hashes
             ):
                 results[original_idx] = embedding
                 if use_cache:
-                    await self._cache_embedding(text_hash, text, embedding)
+                    new_rows.append((text_hash, text, embedding))
+            if new_rows:
+                await self._cache_rows(new_rows)
 
-            if batch_start + EMBED_BATCH_SIZE < len(texts_to_embed):
-                await asyncio.sleep(0.3)
+            if batch_start + batch_size < len(texts_to_embed):
+                await asyncio.sleep(self.settings.EMBED_BATCH_DELAY_SECONDS)
 
         if any(r is None for r in results):
             missing = [i for i, r in enumerate(results) if r is None]

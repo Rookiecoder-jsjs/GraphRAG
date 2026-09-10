@@ -4,8 +4,14 @@ Run: cd backend && ../.venv/Scripts/python.exe tests/test_embedding.py
 Exit code 0 = all passed, 1 = any failed. No pytest dependency.
 """
 import asyncio
+import hashlib
 import json
+import os
 import sys
+import tempfile
+from unittest import mock
+
+import aiosqlite
 import httpx
 
 # Allow running this file directly: ../.venv/Scripts/python.exe tests/test_embedding.py
@@ -81,21 +87,42 @@ class ScriptedRaiseTransport(httpx.AsyncBaseTransport):
         raise self._exc
 
 
-def make_service():
-    """Build an EmbeddingService with deterministic test settings (no config read)."""
+class RecordingTransport(ScriptedTransport):
+    """ScriptedTransport that also records each request's JSON body."""
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.requests: list = []
+
+    async def handle_async_request(self, request):
+        self.requests.append(json.loads(request.content.decode("utf-8")))
+        return await super().handle_async_request(request)
+
+
+def make_service(batch_size: int = 32, batch_delay: float = 0.0,
+                 db_path: str = ":memory:"):
+    """Build an EmbeddingService with deterministic test settings (no config read).
+
+    ``__new__`` skips ``__init__``, so every attribute the service lazily
+    touches must be set here explicitly.
+    """
     svc = EmbeddingService.__new__(EmbeddingService)
     svc.settings = type("S", (), {
         "SILICON_FLOW_BASE_URL": "https://example.test/v1",
         "SILICON_FLOW_API_KEY": "test-key",
         "EMBEDDING_MODEL": "test-model",
         "EMBEDDING_DIM": 4,
-        "SQLITE_PATH": ":memory:",
+        "SQLITE_PATH": db_path,
+        "EMBED_BATCH_SIZE": batch_size,
+        "EMBED_BATCH_DELAY_SECONDS": batch_delay,
     })()
     svc.base_url = svc.settings.SILICON_FLOW_BASE_URL
     svc.api_key = svc.settings.SILICON_FLOW_API_KEY
     svc.model = svc.settings.EMBEDDING_MODEL
     svc._semaphore = asyncio.Semaphore(5)
     svc._client = None  # lazy shared client, created on first _get_client()
+    svc._db = None      # lazy shared cache connection
+    svc._db_lock = asyncio.Lock()
     return svc
 
 
@@ -176,6 +203,145 @@ async def _async_transport_error_exhausts_retries():
         )
 
 
+# ---------- batching + shared cache connection (ADR-009 step 2) --------------
+
+async def _mk_cache_db(db_path: str) -> None:
+    """Create the embedding_cache table in a temp-file SQLite database."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS embedding_cache ("
+            " text_hash TEXT PRIMARY KEY, text TEXT NOT NULL,"
+            " embedding BLOB NOT NULL, model TEXT NOT NULL,"
+            " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await db.commit()
+
+
+async def _seed_corrupt_row(db_path: str, text: str, model: str) -> None:
+    """Pre-seed a legacy pickle blob (0x80 prefix) row for ``text``."""
+    text_hash = hashlib.md5(text.encode()).hexdigest()
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO embedding_cache "
+            "(text_hash, text, embedding, model) VALUES (?, ?, ?, ?)",
+            (text_hash, text, b"\x80garbage-not-json", model),
+        )
+        await db.commit()
+
+
+async def _async_query_path_single_call():
+    """retrieve() now embeds the deduped query list (rewrite + variants, <=4
+    texts) via embed_batch — it must cost ONE /embeddings request, not 1+N."""
+    t = RecordingTransport([
+        (200, json.dumps({"data": [
+            {"embedding": [0.1, 0.1, 0.1, 0.1]},
+            {"embedding": [0.2, 0.2, 0.2, 0.2]},
+            {"embedding": [0.3, 0.3, 0.3, 0.3]},
+            {"embedding": [0.4, 0.4, 0.4, 0.4]},
+        ]}).encode(), {"content-type": "application/json"}),
+    ])
+    patch_client(httpx, t)
+    svc = make_service()
+    embs = await svc.embed_batch(["q1", "q2", "q3", "q4"], use_cache=False)
+    check(
+        "query path: 4 texts → ONE /embeddings request, 4 vectors back",
+        t.calls == 1 and len(embs) == 4,
+        f"{t.calls} calls, {len(embs)} vectors",
+    )
+    body = t.requests[0]
+    check(
+        "request body: input is a 4-element list, dimensions + model set",
+        isinstance(body["input"], list) and len(body["input"]) == 4
+        and body["dimensions"] == 4 and body["model"] == "test-model",
+        f"input={type(body['input']).__name__}, keys={sorted(body)}",
+    )
+
+
+async def _async_cache_roundtrip_shared_conn():
+    """The shared aiosqlite connection must make the cache actually work
+    across calls (and self-heal corrupt rows) with zero transport calls."""
+    db_path = os.path.join(
+        tempfile.mkdtemp(prefix="kg-emb-cache-"), "cache.db"
+    )
+    await _mk_cache_db(db_path)
+    t = ScriptedTransport([
+        (200, json.dumps({"data": [
+            {"embedding": [0.1, 0.2, 0.3, 0.4]},
+            {"embedding": [0.5, 0.6, 0.7, 0.8]},
+        ]}).encode(), {"content-type": "application/json"}),
+    ])
+    patch_client(httpx, t)
+    svc = make_service(db_path=db_path)
+    embs1 = await svc.embed_batch(["hello", "world"], use_cache=True)
+    check(
+        "first round: 1 call, 2 vectors",
+        t.calls == 1 and len(embs1) == 2,
+        f"{t.calls} calls",
+    )
+    embs2 = await svc.embed_batch(["hello", "world"], use_cache=True)
+    check(
+        "second round: served from shared-connection cache, 0 new calls",
+        t.calls == 1 and embs2 == embs1,
+        f"{t.calls} calls",
+    )
+    await svc.close()
+
+    # Corrupt-row self-heal on the shared connection.
+    await _seed_corrupt_row(db_path, "corrupt-me", "test-model")
+    t2 = ScriptedTransport([
+        (200, json.dumps({"data": [
+            {"embedding": [0.9, 0.9, 0.9, 0.9]},
+        ]}).encode(), {"content-type": "application/json"}),
+    ])
+    patch_client(httpx, t2)
+    svc2 = make_service(db_path=db_path)
+    healed = await svc2.embed_batch(["corrupt-me"], use_cache=True)
+    check(
+        "corrupt (pickle) row self-heals: deleted, re-embedded",
+        t2.calls == 1 and healed == [[0.9, 0.9, 0.9, 0.9]],
+        f"{t2.calls} calls, {healed!r}",
+    )
+    again = await svc2.embed_batch(["corrupt-me"], use_cache=True)
+    check(
+        "healed row now served from cache",
+        t2.calls == 1 and again == [[0.9, 0.9, 0.9, 0.9]],
+        f"{t2.calls} calls",
+    )
+    await svc2.close()
+
+
+async def _async_batch_size_from_config():
+    """Ingest batching scales with settings.EMBED_BATCH_SIZE: 5 texts at
+    batch size 2 → 3 API calls with 2 inter-batch delays between them."""
+    t = ScriptedTransport([
+        (200, json.dumps({"data": [
+            {"embedding": [0.1, 0, 0, 0]}, {"embedding": [0.2, 0, 0, 0]},
+        ]}).encode(), {"content-type": "application/json"}),
+        (200, json.dumps({"data": [
+            {"embedding": [0.3, 0, 0, 0]}, {"embedding": [0.4, 0, 0, 0]},
+        ]}).encode(), {"content-type": "application/json"}),
+        (200, json.dumps({"data": [
+            {"embedding": [0.5, 0, 0, 0]},
+        ]}).encode(), {"content-type": "application/json"}),
+    ])
+    patch_client(httpx, t)
+    svc = make_service(batch_size=2, batch_delay=0.05)
+    with mock.patch("asyncio.sleep", new=mock.AsyncMock()) as zzz:
+        embs = await svc.embed_batch([f"t{i}" for i in range(5)], use_cache=False)
+    check(
+        "EMBED_BATCH_SIZE=2: 5 texts → 3 API calls",
+        t.calls == 3 and len(embs) == 5,
+        f"{t.calls} calls, {len(embs)} vectors",
+    )
+    check(
+        "2 inter-batch sleeps, each using EMBED_BATCH_DELAY_SECONDS",
+        zzz.await_count == 2 and all(
+            a.args and a.args[0] == 0.05 for a in zzz.await_args_list
+        ),
+        f"{zzz.await_count} sleeps",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dual-mode entry points.
 #
@@ -228,6 +394,18 @@ def test_transport_error_exhausts_retries():
     _run_async(_async_transport_error_exhausts_retries)
 
 
+def test_query_path_single_call():
+    _run_async(_async_query_path_single_call)
+
+
+def test_cache_roundtrip_shared_conn():
+    _run_async(_async_cache_roundtrip_shared_conn)
+
+
+def test_batch_size_from_config():
+    _run_async(_async_batch_size_from_config)
+
+
 if __name__ == "__main__":
     print("\nRetry / backoff")
     check(
@@ -239,6 +417,9 @@ if __name__ == "__main__":
     asyncio.run(_async_4xx_fast_fail())
     asyncio.run(_async_5xx_exhausts_retries())
     asyncio.run(_async_transport_error_exhausts_retries())
+    asyncio.run(_async_query_path_single_call())
+    asyncio.run(_async_cache_roundtrip_shared_conn())
+    asyncio.run(_async_batch_size_from_config())
 
     print()
     if _failures:

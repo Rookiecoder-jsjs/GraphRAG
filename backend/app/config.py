@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     # Embedding
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
     EMBEDDING_DIM: int = 1024
+    # Inputs per /embeddings request. The query path sends <=4 texts (rewrite
+    # + variants deduped), so it always fits in one batch; the ingest path
+    # chunks a document into hundreds of texts and this directly scales its
+    # request count down. Keep in sync with the provider's batch limit.
+    EMBED_BATCH_SIZE: int = 32
+    # Sleep between batches when a single request isn't enough (ingest path
+    # only — the query path never exceeds one batch). Gentle pacing so a
+    # large upload doesn't hammer the provider back-to-back.
+    EMBED_BATCH_DELAY_SECONDS: float = 0.3
 
     # Rerank
     RERANK_MODEL: str = "Qwen/Qwen3-Reranker-8B"

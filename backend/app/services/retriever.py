@@ -31,7 +31,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.services.bm25 import get_bm25_service
 from app.services.chroma_client import get_chroma_client
-from app.services.embedding import get_embedding_service
+from app.services.embedding import EmbeddingServiceError, get_embedding_service
 from app.services.fusion import reciprocal_rank_fusion_multi
 from app.services.neo4j_client import get_neo4j_client
 from app.services.query_processor import get_query_processor
@@ -321,25 +321,22 @@ async def _retrieve_uncached(
             queries.append(qs)
     t_rewrite = time.perf_counter()
 
-    # ---- 2. Embed all queries in parallel (cached per text) ----
+    # ---- 2. Embed all queries in one batched request (cache-aware) ----
+    # The deduped query list (rewrite + variants) is <=1+MULTI_QUERY_NUM_
+    # VARIANTS texts, so embed_batch sends a single /embeddings request —
+    # the per-variant gather used to fire 1+N separate calls and each failed
+    # variant was silently dropped (a load-induced recall loss). All-or-
+    # nothing here is deliberate: total failure yields the same empty-result
+    # outcome as before, success yields every variant's vector.
     embedding_service = await get_embedding_service()
-    embeddings = await asyncio.gather(
-        *[embedding_service.embed_single(q) for q in queries],
-        return_exceptions=True,
-    )
-    query_embeddings: List[List[float]] = []
-    valid_queries: List[str] = []
-    for q, emb in zip(queries, embeddings):
-        if isinstance(emb, Exception) or not emb:
-            logger.warning("retrieve: embedding failed for %r: %s", q, emb)
-            continue
-        query_embeddings.append(emb)
-        valid_queries.append(q)
-    if not query_embeddings:
+    try:
+        query_embeddings = await embedding_service.embed_batch(queries)
+        valid_queries = list(queries)
+    except EmbeddingServiceError as e:
         degraded.append("embed_failed")
         logger.warning(
-            "retrieve: all %d query embeddings failed, returning empty "
-            "results (degraded=%s)", len(queries), degraded,
+            "retrieve: query embedding failed (%d queries), returning empty "
+            "results (degraded=%s): %s", len(queries), degraded, e,
         )
         return {"chunks": [], "entities": [], "relations": []}
     t_embed = time.perf_counter()
