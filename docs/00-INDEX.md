@@ -1,7 +1,7 @@
 # docs/00-INDEX.md — 文档总索引
 
 > 文档体系唯一入口。登记全部编号文档；新文档领取编号在此登记（规则见 `CLAUDE.md` §3.2/3.6）。
-> 版本：1.4 · 更新：2026-09-11
+> 版本：1.5 · 更新：2026-09-11
 
 ## 决策记录（ADR）
 
@@ -16,6 +16,7 @@
 | [ADR-007](adr/ADR-007.md) | 摄取并发闸 + 进度落库轮询（并发能力收敛第一步） | 已接受 | 2026-09-08 |
 | [ADR-008](adr/ADR-008.md) | 文档转换器选型 markitdown → anydoc | 已接受 | 2026-09-10 |
 | [ADR-009](adr/ADR-009.md) | 并发扩容与质量保障：KeyPool + 查询嵌入合批 + 查询闸 | 已接受 | 2026-09-10 |
+| [ADR-010](adr/ADR-010.md) | 全局问答——社区成员 chunk 通道而非摘要上 prompt | 已接受 | 2026-09-11 |
 
 ## 功能条目（FEAT）
 
@@ -31,6 +32,10 @@
 | [FEAT-023](features/FEAT-023.md) | 对话导出 Markdown | 已完成 |
 | [FEAT-024](features/FEAT-024.md) | 检索调试台 | 已完成 |
 | [FEAT-025](features/FEAT-025.md) | 实体别名与查重 | 已完成 |
+| [FEAT-026](features/FEAT-026.md) | 检索过滤（tag/document 限定范围） | 已完成 |
+| [FEAT-027](features/FEAT-027.md) | 证据兜底（CRAG-lite 低证据不硬答） | 已完成 |
+| [FEAT-028](features/FEAT-028.md) | 全局问答（社区摘要 + 全局检索通道） | 已完成 |
+| [FEAT-029](features/FEAT-029.md) | 评测 judge 提示词回归模板单一来源 | 已完成 |
 
 ## 通用指南（GUIDE）
 
