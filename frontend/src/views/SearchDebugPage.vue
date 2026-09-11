@@ -205,6 +205,8 @@ const result = ref(null)
 const debug = computed(() => result.value?.debug || {})
 const degraded = computed(() => debug.value.diagnostics?.degraded || [])
 const hasDegraded = (key) => degraded.value.includes(key)
+// FEAT-026: 来自 /search?tag= 的范围限定（只读透传）。
+const routeTag = computed(() => String(route.query.tag || '').trim() || null)
 
 const run = async () => {
   const q = query.value.trim()
@@ -212,7 +214,8 @@ const run = async () => {
   loading.value = true
   runError.value = false
   try {
-    const { data } = await searchApi.searchDebug(q, topK.value, useGraphRag.value)
+    // FEAT-026: 搜索页带标签跳转时透传，调试的才是"同一条检索"。
+    const { data } = await searchApi.searchDebug(q, topK.value, useGraphRag.value, routeTag.value)
     result.value = data
   } catch (error) {
     console.error('Search debug failed:', error)

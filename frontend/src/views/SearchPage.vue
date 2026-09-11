@@ -38,6 +38,17 @@
           调试模式
         </Button>
       </div>
+
+      <!-- FEAT-026: 标签范围限定——选中后检索只在该标签的文档内进行。 -->
+      <div v-if="userTags.length" class="scope-bar">
+        <label class="scope-label" for="scope-tag">范围</label>
+        <select id="scope-tag" v-model="activeTag" class="scope-select">
+          <option value="">全部文档</option>
+          <option v-for="t in userTags" :key="t.tag" :value="t.tag">
+            {{ t.tag }}（{{ t.count }}）
+          </option>
+        </select>
+      </div>
     </header>
 
     <div class="results-content">
@@ -67,7 +78,7 @@
 
       <div v-else class="results-list">
         <div class="results-header">
-          <span class="results-count">{{ results.length }} 条结果</span>
+          <span class="results-count">{{ results.length }} 条结果<template v-if="activeTag"> · 范围「{{ activeTag }}」</template></span>
         </div>
 
         <div
@@ -103,9 +114,10 @@
 </template>
 
 <script setup>
-import { ref, h } from 'vue'
+import { ref, onMounted, onActivated, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { searchApi } from '../api/search'
+import { tagApi } from '../api/tags'
 import { PageHeader, EmptyState, LoadingState, ErrorState, Button, Tag } from '../components/ui'
 
 const SearchIcon = {
@@ -121,12 +133,33 @@ const searchError = ref(false)
 const results = ref([])
 const hasSearched = ref(false)
 
+// FEAT-026: 标签范围。空串 = 全部文档（不传 tag 字段）。
+const userTags = ref([])
+const activeTag = ref('')
+
 const router = useRouter()
+
+// Layout 用 keep-alive 缓存页面：返回时走 onActivated，标签可能已变，重拉。
+const loadTags = async () => {
+  try {
+    const { data } = await tagApi.listAll()
+    userTags.value = data || []
+    // 当前选中的标签若已不存在（被删光），回落到全部文档。
+    if (activeTag.value && !userTags.value.some(t => t.tag === activeTag.value)) {
+      activeTag.value = ''
+    }
+  } catch (error) {
+    console.error('Failed to load tags:', error)
+    userTags.value = []
+  }
+}
+onMounted(loadTags)
+onActivated(loadTags)
 
 const goDebug = () => {
   const q = query.value.trim()
   if (!q) return
-  router.push({ path: '/search/debug', query: { q } })
+  router.push({ path: '/search/debug', query: { q, tag: activeTag.value || undefined } })
 }
 
 const handleSearch = async () => {
@@ -137,7 +170,7 @@ const handleSearch = async () => {
   searchError.value = false
 
   try {
-    const { data } = await searchApi.search(query.value, 10, true)
+    const { data } = await searchApi.search(query.value, 10, true, false, activeTag.value || null)
     const searchResults = data.chunks || data.results || []
     results.value = searchResults.map(r => ({
       chunk: r.content || r.chunk,
@@ -220,6 +253,36 @@ const handleSearch = async () => {
 }
 
 .search-btn-trigger { min-width: 100px; }
+
+/* FEAT-026: 标签范围条。 */
+.scope-bar {
+  max-width: 800px;
+  margin: 0.75rem auto 0;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.scope-label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.scope-select {
+  font-family: var(--font-display);
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.3125rem 0.5rem;
+  cursor: pointer;
+}
+.scope-select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
 
 .results-content {
   flex: 1;
