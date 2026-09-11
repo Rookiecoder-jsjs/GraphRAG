@@ -83,7 +83,7 @@
         <div v-if="selectedEdge" class="relationship-panel">
           <div class="panel-header">
             <h3 class="panel-title">关系详情</h3>
-            <Button variant="ghost" size="sm" icon-position="only" @click="closeEdgePanel" class="panel-close-btn">&times;</Button>
+            <Button variant="ghost" size="sm" :icon="XIcon" icon-position="only" @click="closeEdgePanel" class="panel-close-btn" title="关闭" aria-label="关闭" />
           </div>
           <div class="panel-content">
             <div class="relation-header">
@@ -109,7 +109,7 @@
         <div v-if="selectedEntity" class="entity-edit-panel">
           <div class="panel-header">
             <h3 class="panel-title">编辑实体</h3>
-            <Button variant="ghost" size="sm" icon-position="only" @click="closeEntityPanel" class="panel-close-btn">&times;</Button>
+            <Button variant="ghost" size="sm" :icon="XIcon" icon-position="only" @click="closeEntityPanel" class="panel-close-btn" title="关闭" aria-label="关闭" />
           </div>
 
           <Button
@@ -215,7 +215,7 @@
             <div v-if="mergePill" class="merge-target-pill">
               <span class="pill-label">将合并到：</span>
               <span class="pill-name">{{ mergePill.name }}</span>
-              <Button variant="ghost" size="sm" icon-position="only" @click="clearMergePill" class="pill-clear-btn">&times;</Button>
+              <Button variant="ghost" size="sm" :icon="XIcon" icon-position="only" @click="clearMergePill" class="pill-clear-btn" title="清除合并目标" aria-label="清除合并目标" />
             </div>
 
             <Button
@@ -298,6 +298,15 @@ const ExternalLinkIcon = {
     h('path', { d: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' }),
     h('polyline', { points: '15 3 21 3 21 9' }),
     h('line', { x1: 10, y1: 14, x2: 21, y2: 3 })
+  ])
+}
+// lucide x：面板关闭按钮。此前把 &times; 写进默认插槽又声明
+// icon-position="only"，Button 的 isIconOnly 会把插槽 v-if 掉——
+// 按钮渲染成空的透明块，看起来"与背景色重合"。
+const XIcon = {
+  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('line', { x1: 18, y1: 6, x2: 6, y2: 18 }),
+    h('line', { x1: 6, y1: 6, x2: 18, y2: 18 })
   ])
 }
 
@@ -684,7 +693,16 @@ onUnmounted(() => {
   color: var(--text-primary);
   margin: 0;
 }
-.panel-close-btn :deep(.btn) { font-size: 1.25rem; line-height: 1; padding: 0 0.5rem; height: 28px; }
+.panel-close-btn :deep(.btn) {
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0 0.5rem;
+  height: 28px;
+  /* ghost 静置色是 --text-tertiary（浅色主题 slate-400），在这块浅底上几乎
+     融进背景——关闭按钮按 UI 控件对比度要求加深一档，hover 由 ghost
+     变体的 text-primary + 底色接管。 */
+  color: var(--text-secondary);
+}
 
 .panel-content {
   padding: 1rem;
