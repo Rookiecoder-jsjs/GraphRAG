@@ -22,6 +22,17 @@
         >
           时间线动画
         </Button>
+        <!-- FEAT-025: 查重建议页入口 -->
+        <Button
+          variant="secondary"
+          size="sm"
+          :icon="Share2Icon"
+          icon-position="left"
+          @click="goToDuplicates"
+          title="扫描疑似重复的实体（大小写/标点变体）"
+        >
+          查重整理
+        </Button>
       </template>
     </PageHeader>
 
@@ -561,6 +572,10 @@ const confirmDeleteEntity = async () => {
 
 const goToTimelineAnimation = () => {
   router.push({ name: 'EntityTimelineAnimation' })
+}
+
+const goToDuplicates = () => {
+  router.push({ name: 'EntityDuplicates' })
 }
 
 watch(mergeTargetName, onMergeTargetInput)

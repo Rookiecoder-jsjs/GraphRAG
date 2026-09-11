@@ -54,5 +54,17 @@ export const graphApi = {
   // or null when the entity doesn't exist (the API responds 404; the
   // caller turns that into a "not found" page).
   getEntityDetail: (name) =>
-    service.get(`/graph/entities/${encodeURIComponent(name)}/detail`)
+    service.get(`/graph/entities/${encodeURIComponent(name)}/detail`),
+
+  // FEAT-025: duplicate-entity suggestions grouped by case/punct variants.
+  // Suggestions only — merging stays a manual, confirmed action.
+  getDuplicates: () => service.get('/graph/entities/duplicates'),
+
+  // Aliases recorded for one canonical entity (names it absorbed on merge).
+  getEntityAliases: (name) =>
+    service.get(`/graph/entities/${encodeURIComponent(name)}/aliases`),
+
+  // Unbind one alias. POST body rather than DELETE + query param: `+` in a
+  // query string decodes to a space and entity names are unconstrained.
+  deleteAlias: (alias) => service.post('/graph/aliases/delete', { alias }),
 }

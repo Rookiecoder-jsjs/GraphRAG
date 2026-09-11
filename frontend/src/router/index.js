@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/auth'
 const Home = () => import('../views/Home.vue')
 const DocumentsPage = () => import('../views/DocumentsPage.vue')
 const GraphPage = () => import('../views/GraphPage.vue')
+const EntityDuplicatesPage = () => import('../views/EntityDuplicatesPage.vue')
 const ChatPage = () => import('../views/ChatPage.vue')
 const ConversationHistoryPage = () => import('../views/ConversationHistoryPage.vue')
 const EvalCasesPage = () => import('../views/EvalCasesPage.vue')
@@ -71,6 +72,12 @@ const routes = [
         path: 'graph',
         name: 'Graph',
         component: GraphPage
+      },
+      {
+        // FEAT-025: 疑似重复实体建议页。字面量路径，永不与 /graph 冲突。
+        path: 'graph/duplicates',
+        name: 'EntityDuplicates',
+        component: EntityDuplicatesPage
       },
       {
         path: 'chat',

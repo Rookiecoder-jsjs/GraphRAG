@@ -51,6 +51,22 @@
           <Stat variant="tile" :value="detail.stats.related_entity_count" label="相关" />
         </section>
 
+        <!-- FEAT-025: 该实体合并吸收的旧名。删除只是解绑映射（不再把
+             该名解析到这里），不会拆开已合并的图。 -->
+        <div v-if="detail.aliases?.length" class="alias-bar">
+          <span class="alias-label">别名</span>
+          <span v-for="a in detail.aliases" :key="a.alias" class="alias-pill">
+            {{ a.alias }}
+            <button
+              class="alias-remove"
+              type="button"
+              :title="`解绑别名 ${a.alias}`"
+              :disabled="aliasDeleting === a.alias"
+              @click="removeAlias(a.alias)"
+            >×</button>
+          </span>
+        </div>
+
         <div class="grid">
           <div class="col-left">
             <Card title="提及于" :meta="`${detail.documents.length} 份文档`">
@@ -173,6 +189,20 @@ const loading = ref(true)
 const notFound = ref(false)
 const loadError = ref(false)
 const entityName = ref('')
+const aliasDeleting = ref('')
+
+// FEAT-025: 解绑一个别名映射（不影响已合并的图数据）。
+const removeAlias = async (alias) => {
+  aliasDeleting.value = alias
+  try {
+    await graphApi.deleteAlias(alias)
+    detail.value = { ...detail.value, aliases: detail.value.aliases.filter(a => a.alias !== alias) }
+  } catch (error) {
+    console.error('Failed to delete alias:', error)
+  } finally {
+    aliasDeleting.value = ''
+  }
+}
 
 let lastName = null
 const loadIfChanged = () => load()
@@ -281,6 +311,41 @@ const formatDate = (s) => {
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
+
+.alias-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+.alias-label {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+.alias-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.35rem 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.alias-remove {
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 0.875rem;
+  line-height: 1;
+  padding: 0.1rem 0.3rem;
+  border-radius: 50%;
+}
+.alias-remove:hover { color: var(--danger, #b91c1c); }
+.alias-remove:disabled { opacity: 0.5; cursor: default; }
 
 .grid {
   display: grid;
