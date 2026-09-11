@@ -20,9 +20,20 @@ async def _retrieve_for_request(
     used by /api/chat, so all entry points have consistent recall. Maps the
     admission gate's timeout to 429 + Retry-After: the client should back off
     rather than silently receive a degraded (no-rerank/no-graph) result.
+
+    FEAT-026: a request tag/document_ids narrows the scope first. A scope
+    that resolves to nothing short-circuits here — no billable pipeline,
+    no admission slot, just an empty result.
     """
     from app.services.query_gate import QueryGateTimeout
     from app.services.retriever import retrieve
+    from app.services.search_scope import resolve_document_ids_for_filter
+
+    scope = await resolve_document_ids_for_filter(
+        user_id, tag=request.tag, document_ids=request.document_ids,
+    )
+    if scope is not None and not scope:
+        return {"chunks": [], "entities": [], "relations": []}
 
     try:
         return await retrieve(
@@ -32,6 +43,7 @@ async def _retrieve_for_request(
             use_graph_rag=request.use_graph_rag,
             conversation_history=None,
             debug=debug,
+            document_ids=scope,
         )
     except QueryGateTimeout as e:
         raise HTTPException(

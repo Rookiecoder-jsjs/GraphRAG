@@ -433,12 +433,20 @@ async def chat(
     if intent["intent"] == "fact_retrieval" and request.include_context:
         from app.services.query_gate import QueryGateTimeout
         from app.services.retriever import retrieve
+        from app.services.search_scope import resolve_document_ids_for_filter
+        # FEAT-026: resolve the optional tag/document scope before retrieval;
+        # an empty scope flows in as an empty context (the generation step
+        # sees no evidence, same as a no-hit retrieval).
+        scope = await resolve_document_ids_for_filter(
+            user_id, tag=request.tag, document_ids=request.document_ids,
+        )
         try:
             context = await retrieve(
                 request.message,
                 user_id,
                 use_graph_rag=request.use_graph_rag,
                 conversation_history=conversation_history[:-1],
+                document_ids=scope,
             )
         except QueryGateTimeout as e:
             # Admission control (ADR-009): a 500 here would misrepresent a
@@ -553,6 +561,12 @@ async def _chat_stream_body(
     if intent["intent"] == "fact_retrieval" and request.include_context:
         from app.services.query_gate import QueryGateTimeout
         from app.services.retriever import retrieve
+        from app.services.search_scope import resolve_document_ids_for_filter
+        # FEAT-026: resolve the scope BEFORE spawning the retrieval task so
+        # a resolved-empty scope skips the pipeline entirely.
+        scope = await resolve_document_ids_for_filter(
+            user_id, tag=request.tag, document_ids=request.document_ids,
+        )
         # Retrieval (LLM preprocess + vector/BM25 + rerank) can take tens of
         # seconds cold. Emit an SSE comment frame every
         # CHAT_SSE_PING_INTERVAL_SECONDS so proxies/clients see liveness and
@@ -564,6 +578,7 @@ async def _chat_stream_body(
             user_id,
             use_graph_rag=request.use_graph_rag,
             conversation_history=conversation_history[:-1],
+            document_ids=scope,
         ))
         ping_interval = get_settings().CHAT_SSE_PING_INTERVAL_SECONDS
         try:

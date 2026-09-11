@@ -1,8 +1,32 @@
 """ChromaDB client for vector operations."""
 import chromadb
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, List, Optional, Sequence
 
 from app.config import get_settings
+
+
+def _where_for(
+    user_id: int, document_ids: Optional[Sequence[str]] = None
+) -> Dict[str, Any]:
+    """Compose the query ``where`` clause (FEAT-026 scope filtering).
+
+    ``document_ids=None`` keeps the historical user-isolation-only filter.
+    A non-empty list narrows to those documents via ``$and`` + ``$in``
+    (same composition delete_document_chunks has always used). An EMPTY
+    list raises: chroma's ``$in: []`` throws anyway, and silently widening
+    an empty scope to "no filter" would leak the whole library into a
+    scoped request — callers must short-circuit empty scopes instead.
+    """
+    base = {"user_id": str(user_id)}
+    if document_ids is None:
+        return base
+    ids = sorted({d for d in document_ids if d})
+    if not ids:
+        raise ValueError(
+            "empty document filter must be short-circuited by the caller, "
+            "never passed to chroma ($in: [] raises)"
+        )
+    return {"$and": [base, {"document_id": {"$in": ids}}]}
 
 
 class ChromaClient:
@@ -77,16 +101,17 @@ class ChromaClient:
         self,
         query_embedding: List[float],
         user_id: int,
-        top_k: int = 5
+        top_k: int = 5,
+        document_ids: Optional[Sequence[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Search for similar chunks."""
+        """Search for similar chunks, optionally scoped to documents (FEAT-026)."""
         if self._collection is None:
             self.connect()
 
         results = self._collection.query(
             query_embeddings=[query_embedding],
             n_results=top_k * 2,  # Get more results for filtering
-            where={"user_id": str(user_id)}  # Chroma stores user_id as string
+            where=_where_for(user_id, document_ids)
         )
 
         # Filter out results with None documents

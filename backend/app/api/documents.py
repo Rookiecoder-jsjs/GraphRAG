@@ -432,8 +432,12 @@ async def _run_ingest_pipeline(doc_id: str, user_id: int, markdown: str, title: 
         await progress.emit_and_save(doc_id, user_id, "stored", "Stored in vector database", {"stage": "stored", "percent": 50})
 
         # Build BM25 index for user (hybrid search). Rebuild is CPU-heavy.
+        # document_ids feeds the FEAT-026 chunk_doc provenance map.
         bm25 = get_bm25_service()
-        await asyncio.to_thread(bm25.add_to_index, user_id, chunk_contents, chunk_ids)
+        await asyncio.to_thread(
+            bm25.add_to_index, user_id, chunk_contents, chunk_ids,
+            [doc_id] * len(chunk_ids),
+        )
 
         # Store chunks in SQLite. INSERT OR IGNORE is defensive only: chunk
         # ids come from uuid.uuid4() in the chunker, so they are NOT

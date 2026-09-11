@@ -18,6 +18,10 @@ class ChatRequest(BaseModel):
     # Noticeably slower first token, occasionally better answers. Only the
     # streaming endpoint honors it; the non-streaming /chat path ignores it.
     enable_thinking: bool = False
+    # FEAT-026 scope filtering (additive): restrict retrieval to a document
+    # subset, by explicit ids and/or a tag. None/absent = whole library.
+    document_ids: Optional[List[str]] = Field(default=None, max_length=50)
+    tag: Optional[str] = Field(default=None, max_length=64)
 
 
 class ChatResponse(BaseModel):
@@ -63,6 +67,10 @@ class SearchRequest(BaseModel):
     # explicit field is purely additive — clients that never send it keep
     # today's False default.
     use_graph_rag: bool = False
+    # FEAT-026 scope filtering (additive): restrict retrieval to a document
+    # subset, by explicit ids and/or a tag. None/absent = whole library.
+    document_ids: Optional[List[str]] = Field(default=None, max_length=50)
+    tag: Optional[str] = Field(default=None, max_length=64)
 
 
 class SearchResponse(BaseModel):

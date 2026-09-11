@@ -25,7 +25,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.config import get_settings
 from app.database import get_db
@@ -120,7 +120,7 @@ async def _ensure_bm25_index(user_id: int) -> None:
         return
     async with get_db() as db:
         async with db.execute(
-            "SELECT chunk_id, content FROM chunks WHERE user_id = ? "
+            "SELECT chunk_id, document_id, content FROM chunks WHERE user_id = ? "
             "ORDER BY created_at, chunk_id",
             (user_id,),
         ) as cur:
@@ -133,6 +133,7 @@ async def _ensure_bm25_index(user_id: int) -> None:
             user_id,
             [r["content"] for r in rows],
             [r["chunk_id"] for r in rows],
+            [r["document_id"] for r in rows],
         )
 
 
@@ -197,6 +198,7 @@ async def retrieve(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     enable_rewrite: bool = True,
     debug: bool = False,
+    document_ids: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Unified retrieval. Returns ``{"chunks", "entities", "relations"}``.
 
@@ -210,6 +212,12 @@ async def retrieve(
     no write (the debug payload must never leak into entries that regular
     requests will share by reference). Timing and stage snapshots are
     therefore always fresh, at full pipeline cost.
+
+    ``document_ids`` (FEAT-026) scopes every channel to that document
+    subset: None = whole library. An empty/blank-only list resolves to an
+    empty result without running the (billable) pipeline — callers that
+    resolve a tag first (api/search.py, api/chat.py) short-circuit even
+    earlier, but direct callers stay safe: chroma's ``$in: []`` throws.
     """
     settings = get_settings()
     t_start = time.perf_counter()
@@ -227,6 +235,12 @@ async def retrieve(
             use_graph_rag = True
             _auto_graph = True
 
+    # Empty scope short-circuit: nothing is in scope, so there is nothing
+    # to retrieve. Runs before the admission gate — a hopeless request must
+    # not consume a concurrency slot.
+    if document_ids is not None and not [d for d in document_ids if d]:
+        return {"chunks": [], "entities": [], "relations": []}
+
     # ---- Cache lookup (key includes history so context-aware rewrites differ) ----
     hist_json = ""
     if conversation_history:
@@ -234,11 +248,19 @@ async def retrieve(
         hist_json = json.dumps(
             conversation_history[-n:], sort_keys=True, ensure_ascii=False
         )
+    # 5th key element: None (unfiltered) vs the sha1 of the sorted id set.
+    # None and [] must NEVER collide — [] means "nothing allowed".
+    filter_key: Optional[str] = None
+    if document_ids is not None:
+        filter_key = hashlib.sha1(
+            ",".join(sorted({d for d in document_ids if d})).encode("utf-8")
+        ).hexdigest()
     cache_key = (
         user_id,
         hashlib.sha1(f"{query}|{hist_json}".encode("utf-8")).hexdigest(),
         top_k,
         use_graph_rag,
+        filter_key,
     )
     cached = None if debug else _cache.get(cache_key, settings.RETRIEVAL_CACHE_TTL)
     if cached is not None:
@@ -269,6 +291,7 @@ async def retrieve(
             t_start=t_start,
             t_gate=t_gate,
             debug_out=DebugCollector() if debug else None,
+            document_ids=list(document_ids) if document_ids is not None else None,
         )
 
 
@@ -280,10 +303,11 @@ async def _retrieve_uncached(
     _auto_graph: bool,
     conversation_history: Optional[List[Dict[str, str]]],
     enable_rewrite: bool,
-    cache_key: Optional[Tuple[int, str, int, bool]],
+    cache_key: Optional[Tuple[int, str, int, bool, Optional[str]]],
     t_start: float,
     t_gate: float,
     debug_out: Optional[DebugCollector] = None,
+    document_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Full retrieval pipeline, executed only on a retrieval-cache miss.
 
@@ -402,10 +426,12 @@ async def _retrieve_uncached(
     recall_tasks = []
     for q, emb in zip(valid_queries, query_embeddings):
         recall_tasks.append(
-            asyncio.to_thread(chroma.search, emb, user_id, recall_k)
+            asyncio.to_thread(chroma.search, emb, user_id, recall_k,
+                              document_ids=document_ids)
         )
         recall_tasks.append(
-            asyncio.to_thread(bm25.search, q, user_id, recall_k)
+            asyncio.to_thread(bm25.search, q, user_id, recall_k,
+                              document_ids=document_ids)
         )
     recall_results = await asyncio.gather(*recall_tasks)
     for i in range(len(valid_queries)):
@@ -439,6 +465,15 @@ async def _retrieve_uncached(
                     graph_chunks = await asyncio.to_thread(
                         chroma.get_chunks_by_ids, graph_chunk_ids, user_id
                     )
+                    if graph_chunks and document_ids is not None:
+                        # FEAT-026: chunk nodes carry no document_id in Neo4j,
+                        # but the Chroma metadata does — filter the fan-out
+                        # result so the graph channel cannot break the scope.
+                        allowed = set(document_ids)
+                        graph_chunks = [
+                            c for c in graph_chunks
+                            if (c.get("metadata") or {}).get("document_id") in allowed
+                        ]
                     if graph_chunks:
                         result_lists.append(graph_chunks)
                         labels.append("graph")
@@ -618,6 +653,9 @@ async def _retrieve_uncached(
             "graph_mode": settings.GRAPH_RAG_MODE.lower(),
             "recall_k": recall_k,
             "queries": len(valid_queries),
+            "document_filter": (
+                sorted(set(document_ids)) if document_ids is not None else None
+            ),
         })
     result = {"chunks": expanded, "entities": entities, "relations": relations}
     if cache_key is not None:

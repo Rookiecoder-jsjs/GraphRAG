@@ -32,7 +32,8 @@ class BM25Service:
         self,
         user_id: int,
         documents: List[str],
-        doc_ids: List[str]
+        doc_ids: List[str],
+        document_ids: Optional[List[str]] = None,
     ):
         """
         Build BM25 index for a specific user.
@@ -40,25 +41,32 @@ class BM25Service:
         Args:
             user_id: User ID for isolation
             documents: List of document texts
-            doc_ids: List of document IDs corresponding to texts
+            doc_ids: List of document (chunk) IDs corresponding to texts
+            document_ids: Optional parallel array — the owning document of
+                each chunk (FEAT-026 scope filtering). Stored as the
+                ``chunk_doc`` map; a filter on an index without provenance
+                can never match (see ``search``).
         """
         if not documents:
             return
 
         tokenized_docs = [self._tokenize(doc) for doc in documents]
+        chunk_doc = dict(zip(doc_ids, document_ids)) if document_ids else {}
 
         with self._lock:
             self._user_indexes[user_id] = {
                 "index": BM25Okapi(tokenized_docs),
                 "doc_ids": doc_ids,
-                "doc_contents": {id_: doc for id_, doc in zip(doc_ids, documents)}
+                "doc_contents": {id_: doc for id_, doc in zip(doc_ids, documents)},
+                "chunk_doc": chunk_doc,
             }
 
     def add_to_index(
         self,
         user_id: int,
         documents: List[str],
-        doc_ids: List[str]
+        doc_ids: List[str],
+        document_ids: Optional[List[str]] = None,
     ):
         """Add documents to existing user index."""
         # Tokenise outside the lock (CPU-bound, no shared state) so the
@@ -66,6 +74,7 @@ class BM25Service:
         # the lock: two cold-start threads racing here would otherwise both
         # build from scratch and the second build would drop the first's docs.
         tokenized_new = [self._tokenize(doc) for doc in documents]
+        new_chunk_doc = dict(zip(doc_ids, document_ids)) if document_ids else {}
 
         with self._lock:
             if user_id not in self._user_indexes:
@@ -75,6 +84,7 @@ class BM25Service:
                     "doc_contents": {
                         id_: doc for id_, doc in zip(doc_ids, documents)
                     },
+                    "chunk_doc": new_chunk_doc,
                 }
                 return
 
@@ -84,6 +94,8 @@ class BM25Service:
             all_doc_ids = user_index["doc_ids"] + doc_ids
             all_contents = {**user_index["doc_contents"]}
             all_contents.update({id_: doc for id_, doc in zip(doc_ids, documents)})
+            all_chunk_doc = {**user_index.get("chunk_doc", {})}
+            all_chunk_doc.update(new_chunk_doc)
 
             # Rebuild BM25 index
             all_tokenized = [
@@ -94,7 +106,8 @@ class BM25Service:
             self._user_indexes[user_id] = {
                 "index": BM25Okapi(all_tokenized),
                 "doc_ids": all_doc_ids,
-                "doc_contents": all_contents
+                "doc_contents": all_contents,
+                "chunk_doc": all_chunk_doc,
             }
 
     def remove_from_index(
@@ -116,6 +129,11 @@ class BM25Service:
                 for id_, content in user_index["doc_contents"].items()
                 if id_ not in doc_ids
             }
+            new_chunk_doc = {
+                id_: doc_id
+                for id_, doc_id in user_index.get("chunk_doc", {}).items()
+                if id_ not in doc_ids
+            }
 
             if not new_doc_ids:
                 # Remove entire user index
@@ -131,25 +149,26 @@ class BM25Service:
             self._user_indexes[user_id] = {
                 "index": BM25Okapi(all_tokenized),
                 "doc_ids": new_doc_ids,
-                "doc_contents": new_contents
+                "doc_contents": new_contents,
+                "chunk_doc": new_chunk_doc,
             }
 
     def search(
         self,
         query: str,
         user_id: int,
-        top_k: int = 50
+        top_k: int = 50,
+        document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Search BM25 index for a specific user.
+        Search BM25 index for a specific user, optionally scoped to a
+        document subset (FEAT-026).
 
-        Args:
-            query: Search query
-            user_id: User ID for isolation
-            top_k: Number of results to return
-
-        Returns:
-            List of search results with id, content, and score
+        The mask runs BEFORE the top-k cut: scores are computed for the
+        whole index anyway, so an out-of-scope hit must never squeeze an
+        in-scope one out of the window. An index without ``chunk_doc``
+        provenance returns nothing under a filter — it cannot prove any
+        hit is in scope, and a filter must never widen.
         """
         if user_id not in self._user_indexes:
             return []
@@ -160,12 +179,24 @@ class BM25Service:
         query_tokens = self._tokenize(query)
         scores = bm25_index.get_scores(query_tokens)
 
-        # Get top-k indices
-        indices = sorted(
-            range(len(scores)),
-            key=lambda i: scores[i],
-            reverse=True
-        )[:top_k]
+        if document_ids is not None:
+            chunk_doc = user_index.get("chunk_doc") or {}
+            if not chunk_doc:
+                return []
+            allowed = set(document_ids)
+            candidates = [
+                i for i, cid in enumerate(user_index["doc_ids"])
+                if chunk_doc.get(cid) in allowed
+            ]
+            candidates.sort(key=lambda i: scores[i], reverse=True)
+            indices = candidates[:top_k]
+        else:
+            # Get top-k indices
+            indices = sorted(
+                range(len(scores)),
+                key=lambda i: scores[i],
+                reverse=True
+            )[:top_k]
 
         results = []
         for idx in indices:
@@ -242,7 +273,8 @@ async def prewarm_all_bm25() -> None:
                 continue
             async with get_db() as db:
                 async with db.execute(
-                    "SELECT chunk_id, content FROM chunks WHERE user_id = ? ORDER BY created_at",
+                    "SELECT chunk_id, document_id, content FROM chunks "
+                    "WHERE user_id = ? ORDER BY created_at",
                     (uid,),
                 ) as cur:
                     rows = await cur.fetchall()
@@ -254,6 +286,7 @@ async def prewarm_all_bm25() -> None:
                     uid,
                     [r["content"] for r in rows],
                     [r["chunk_id"] for r in rows],
+                    [r["document_id"] for r in rows],
                 )
                 logger.info("BM25 prewarmed for user_id=%d (%d chunks)", uid, len(rows))
         _prewarm_state = {"done": True, "users": len(user_rows), "error": None}

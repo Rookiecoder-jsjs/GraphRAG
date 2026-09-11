@@ -70,6 +70,9 @@ async def _bootstrap_tags():
         await db.execute(
             "INSERT OR IGNORE INTO users (id, username, password_hash) VALUES (1, 'u1', 'x')"
         )
+        await db.execute(
+            "INSERT OR IGNORE INTO users (id, username, password_hash) VALUES (2, 'u2', 'x')"
+        )
         for doc_id in ("doc-1", "doc-2", "doc-3"):
             await db.execute(
                 "INSERT OR IGNORE INTO documents (id, user_id, title, original_filename, status) "
@@ -156,6 +159,7 @@ def test_search_handler_threads_document_ids_into_retrieve():
     from app.api import search as search_mod
     from app.models.chat import SearchRequest
 
+    asyncio.run(_bootstrap_tags())
     seen = {}
 
     async def fake_retrieve(*args, **kwargs):
