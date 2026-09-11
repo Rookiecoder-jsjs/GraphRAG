@@ -46,8 +46,10 @@ lerna-debug.log*
 # Project notes (private working docs)
 RAG_检索优化指南.md
 
-# Local IDE / agent config
-.claude/
+# Local IDE / agent config (project skills under .claude/skills/ ARE versioned — AGENTS.md §五)
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 .trae/
 
 # CodeGraph index (regenerable tool artifact)
