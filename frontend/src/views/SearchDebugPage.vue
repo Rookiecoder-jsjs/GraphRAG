@@ -270,7 +270,24 @@ const fmtNum = (v) => {
 </script>
 
 <style scoped>
-.debug-content { display: flex; flex-direction: column; gap: 1.25rem; }
+/* 布局壳的 .main-content 是 overflow:hidden——每个页面自带滚动容器
+   （SearchPage/DocumentsPage 同款）：根 height:100% + 内容区
+   flex:1 + overflow-y:auto，缺一个内容超屏就会被裁掉滚不动。 */
+.search-debug-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+}
+.debug-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 0 2rem 2rem;
+}
 
 .debug-form { display: flex; gap: 0.625rem; align-items: center; flex-wrap: wrap; }
 .debug-input {

@@ -168,7 +168,22 @@ const typeLabel = (t) => TYPE_LABELS[t] || t || '未知'
 </script>
 
 <style scoped>
-.dup-content { display: flex; flex-direction: column; gap: 1.25rem; }
+/* 同 SearchDebugPage：布局壳不滚动，页面自带滚动容器。 */
+.entity-duplicates-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+}
+.dup-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 0 2rem 2rem;
+}
 
 .dup-summary {
   display: flex; align-items: center; gap: 0.625rem; flex-wrap: wrap;

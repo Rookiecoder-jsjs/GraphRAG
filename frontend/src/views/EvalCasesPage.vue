@@ -269,7 +269,22 @@ const formatDate = (dateStr) => {
 </script>
 
 <style scoped>
-.eval-content { display: flex; flex-direction: column; gap: 1.25rem; }
+/* 布局壳的 .main-content 不滚动——页面自带滚动容器（全站统一模式）。 */
+.eval-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+}
+.eval-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 0 2rem 2rem;
+}
 .create-form {
   display: flex; flex-direction: column; gap: 0.5rem;
   padding: 0.875rem; border: 1px dashed var(--border);
