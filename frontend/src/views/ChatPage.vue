@@ -6,6 +6,16 @@
       subtitle="针对你的知识图谱提问"
     >
       <template #actions>
+        <Button
+          variant="secondary"
+          size="sm"
+          :icon="DownloadIcon"
+          :disabled="!canExport"
+          title="导出为 Markdown"
+          @click="onExportMarkdown"
+        >
+          导出
+        </Button>
         <div class="conversation-dropdown">
           <Button
             variant="secondary"
@@ -314,11 +324,12 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted, onActivated, onDeactivated, onUnmounted, h } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onActivated, onDeactivated, onUnmounted, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { chatApi } from '../api/chat'
 import { evalApi } from '../api/eval'
 import { createSseParser } from '../utils/sse'
+import { exportConversationMarkdown } from '../utils/chatExport'
 import { useToast } from '../composables/toast'
 import { PageHeader, Button, Tag, Dot, Switch, EmptyState } from '../components/ui'
 
@@ -378,6 +389,14 @@ const ThumbsDownIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
     h('path', { d: 'M17 14V2' }),
     h('path', { d: 'M9 18.12L10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.34 7.06A1 1 0 0 1 11 20.66L9 18.12z' })
+  ])
+}
+// FEAT-023: 「导出」按钮图标（lucide download）。
+const DownloadIcon = {
+  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }),
+    h('polyline', { points: '7 10 12 15 17 10' }),
+    h('line', { x1: 12, y1: 15, x2: 12, y2: 3 })
   ])
 }
 
@@ -468,6 +487,12 @@ const messagesContainer = ref(null)
 const currentConversationId = ref(null)
 const conversations = ref([])
 const showDropdown = ref(false)
+
+// FEAT-023: 导出当前对话为 Markdown。没有任何可导出内容时按钮禁用。
+const canExport = computed(() => messages.value.some((m) => (m.content || '').trim()))
+const onExportMarkdown = () => {
+  exportConversationMarkdown(messages.value, conversations.value, currentConversationId.value)
+}
 
 const loadConversations = async () => {
   try {
