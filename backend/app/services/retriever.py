@@ -37,6 +37,7 @@ from app.services.neo4j_client import get_neo4j_client
 from app.services.query_gate import get_query_gate
 from app.services.query_processor import get_query_processor
 from app.services.reranker import get_rerank_service
+from app.services.retrieval.debug import DebugCollector
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,7 @@ async def retrieve(
     use_graph_rag: bool = False,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     enable_rewrite: bool = True,
+    debug: bool = False,
 ) -> Dict[str, Any]:
     """Unified retrieval. Returns ``{"chunks", "entities", "relations"}``.
 
@@ -201,6 +203,12 @@ async def retrieve(
     then delegates the full pipeline to ``_retrieve_uncached``. The split
     keeps the cache-hit path free of any per-request setup the pipeline only
     needs on a miss (and lets the admission gate wrap exactly the miss path).
+
+    ``debug=True`` (FEAT-024, /api/search/debug): bypasses the cache in BOTH
+    directions — no read (the caller wants a real run, not yesterday's) and
+    no write (the debug payload must never leak into entries that regular
+    requests will share by reference). Timing and stage snapshots are
+    therefore always fresh, at full pipeline cost.
     """
     settings = get_settings()
     t_start = time.perf_counter()
@@ -231,7 +239,7 @@ async def retrieve(
         top_k,
         use_graph_rag,
     )
-    cached = _cache.get(cache_key, settings.RETRIEVAL_CACHE_TTL)
+    cached = None if debug else _cache.get(cache_key, settings.RETRIEVAL_CACHE_TTL)
     if cached is not None:
         logger.info("retrieve: cache hit (user_id=%d)", user_id)
         return cached
@@ -242,6 +250,10 @@ async def retrieve(
     # (search → 429 + Retry-After, chat → terminal busy SSE error). Cache
     # hits above never consume capacity. Rejection beats degradation: an
     # admitted retrieval always runs the full-quality path.
+    #
+    # Debug runs (FEAT-024) consume a slot like any other miss — their
+    # timings must reflect real admission — but pass cache_key=None so the
+    # pipeline skips both cache writes (see _retrieve_uncached).
     t_gate = time.perf_counter()
     async with get_query_gate().slot():
         return await _retrieve_uncached(
@@ -252,9 +264,10 @@ async def retrieve(
             _auto_graph=_auto_graph,
             conversation_history=conversation_history,
             enable_rewrite=enable_rewrite,
-            cache_key=cache_key,
+            cache_key=None if debug else cache_key,
             t_start=t_start,
             t_gate=t_gate,
+            debug_out=DebugCollector() if debug else None,
         )
 
 
@@ -266,9 +279,10 @@ async def _retrieve_uncached(
     _auto_graph: bool,
     conversation_history: Optional[List[Dict[str, str]]],
     enable_rewrite: bool,
-    cache_key: Tuple[int, str, int, bool],
+    cache_key: Optional[Tuple[int, str, int, bool]],
     t_start: float,
     t_gate: float,
+    debug_out: Optional[DebugCollector] = None,
 ) -> Dict[str, Any]:
     """Full retrieval pipeline, executed only on a retrieval-cache miss.
 
@@ -334,6 +348,16 @@ async def _retrieve_uncached(
             queries.append(qs)
     t_rewrite = time.perf_counter()
 
+    if debug_out is not None:
+        debug_out.stage("rewrite", {
+            "raw_query": query,
+            "rewritten": rewritten,
+            "rewrite_applied": rewritten != query,
+            "variants": variants,
+            "final_queries": queries,
+            "query_entities": query_entities,
+        })
+
     # ---- 2. Embed all queries in one batched request (cache-aware) ----
     # The deduped query list (rewrite + variants) is <=1+MULTI_QUERY_NUM_
     # VARIANTS texts, so embed_batch sends a single /embeddings request —
@@ -351,7 +375,14 @@ async def _retrieve_uncached(
             "retrieve: query embedding failed (%d queries), returning empty "
             "results (degraded=%s): %s", len(queries), degraded, e,
         )
-        return {"chunks": [], "entities": [], "relations": []}
+        result: Dict[str, Any] = {"chunks": [], "entities": [], "relations": []}
+        if debug_out is not None:
+            debug_out.stage("diagnostics", {
+                "degraded": list(degraded),
+                "timing_s": {"total": round(time.perf_counter() - t_start, 3)},
+            })
+            result = {**result, "debug": debug_out.finish()}
+        return result
     t_embed = time.perf_counter()
 
     # ---- 3. BM25 index (lazy fallback if prewarm didn't cover this user) ----
@@ -411,6 +442,15 @@ async def _retrieve_uncached(
                 logger.warning("retrieve: graph-RAG failed, skipping channel: %s", e)
 
     # ---- 6. Multi-list RRF fusion (#3/#5) ----
+    if debug_out is not None:
+        for _lab, _lst in zip(labels, result_lists):
+            _kind = (
+                "graph" if _lab == "graph"
+                else "vector" if _lab.startswith("vector")
+                else "bm25"
+            )
+            debug_out.channel(_lab, _kind, _lst)
+
     weights = [1.0] * len(result_lists)
     if graph_chunks and settings.GRAPH_RRF_WEIGHT != 1.0:
         for idx, lab in enumerate(labels):
@@ -421,9 +461,15 @@ async def _retrieve_uncached(
     )
     t_retrieve = time.perf_counter()
 
+    if debug_out is not None:
+        debug_out.stage("fused", [debug_out.snap(f) for f in fused])
+
     if not fused:
         result = {"chunks": [], "entities": [], "relations": []}
-        _cache.set(cache_key, result)
+        if cache_key is not None:
+            _cache.set(cache_key, result)
+        if debug_out is not None:
+            result = {**result, "debug": debug_out.finish()}
         return result
 
     # ---- 7. Rerank -> seeds ----
@@ -439,19 +485,27 @@ async def _retrieve_uncached(
         seeds = fused[:top_k]
     t_rerank = time.perf_counter()
 
+    if debug_out is not None:
+        debug_out.stage("seeds", [debug_out.snap(s) for s in seeds])
+
     # ---- 8. Expand: neighbours (#1) + section siblings (#4), dedup ----
     expanded: List[Dict[str, Any]] = []
     seen_ids: set = set()
+    # provenance per chunk id (seed / neighbour / sibling) — kept in a side
+    # map rather than annotated onto the chunk dicts, which are shared with
+    # the caller (and would otherwise leak debug state into the result).
+    provenance: Dict[str, str] = {}
 
-    def _add(chunk: Dict[str, Any]) -> None:
+    def _add(chunk: Dict[str, Any], kind: str) -> None:
         cid = chunk.get("chunk_id") or chunk.get("id")
         if cid and cid not in seen_ids:
             seen_ids.add(cid)
+            provenance[cid] = kind
             chunk.setdefault("chunk_id", cid)
             expanded.append(chunk)
 
     for seed in seeds:
-        _add(seed)
+        _add(seed, "seed")
         cid = seed.get("chunk_id") or seed.get("id")
         if not cid:
             continue
@@ -460,7 +514,7 @@ async def _retrieve_uncached(
                 chroma.get_chunk_context, cid, user_id, 1
             )
             for nb in neighbours:
-                _add(nb)
+                _add(nb, "neighbour")
         except Exception as e:
             degraded.append("expand_neighbour_failed")
             logger.warning("retrieve: neighbour expand failed for %s: %s", cid, e)
@@ -470,7 +524,7 @@ async def _retrieve_uncached(
                 limit=settings.PARENT_SECTION_SIBLING_LIMIT,
                 max_chars=settings.PARENT_SECTION_MAX_CHARS,
             ):
-                _add(sb)
+                _add(sb, "sibling")
         except Exception as e:
             degraded.append("expand_section_failed")
             logger.warning("retrieve: section expand failed for %s: %s", cid, e)
@@ -486,6 +540,15 @@ async def _retrieve_uncached(
             logger.warning("retrieve: expansion rererank failed, keeping order: %s", e)
     expanded = expanded[: max(_MAX_CITATION_CHUNKS, top_k)]
     t_expand = time.perf_counter()
+
+    if debug_out is not None:
+        debug_out.stage("expanded", [
+            debug_out.snap(
+                c,
+                provenance=provenance.get(c.get("chunk_id"), "unknown"),
+            )
+            for c in expanded
+        ])
 
     # ---- 10. Entity / relation enrichment ----
     chunk_ids = [c.get("chunk_id") for c in expanded if c.get("chunk_id")]
@@ -532,7 +595,24 @@ async def _retrieve_uncached(
 
     # Callers must not mutate this dict: it is handed to cache hits by
     # reference until the TTL expires (chat citation builder and /api/search
-    # are read-only today).
+    # are read-only today). Debug runs (cache_key=None, FEAT-024) never enter
+    # the cache; their debug payload is merged AFTER the cache guard so it
+    # can only ever reach the one caller that asked for it.
+    if debug_out is not None:
+        debug_out.stage("diagnostics", {
+            "degraded": list(degraded),
+            "timing_s": extra["timing_s"],
+        })
+        debug_out.stage("config", {
+            "top_k": top_k,
+            "use_graph_rag": use_graph_rag,
+            "graph_mode": settings.GRAPH_RAG_MODE.lower(),
+            "recall_k": recall_k,
+            "queries": len(valid_queries),
+        })
     result = {"chunks": expanded, "entities": entities, "relations": relations}
-    _cache.set(cache_key, result)
+    if cache_key is not None:
+        _cache.set(cache_key, result)
+    if debug_out is not None:
+        result = {**result, "debug": debug_out.finish()}
     return result

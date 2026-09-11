@@ -175,12 +175,13 @@ def test_retrieve_debug_returns_all_stages(monkeypatch):
     ))
 
     dbg = result["debug"]
-    assert dbg["raw_query"] == LONG_Q
-    assert dbg["rewritten"] == "改写后的查询"
-    assert dbg["rewrite_applied"] is True
-    assert dbg["variants"] == ["变体一", "变体二"]
-    assert "改写后的查询" in dbg["final_queries"]
-    assert dbg["query_entities"] == [{"name": "实体A", "type": "CONCEPT"}]
+    rewrite = dbg["rewrite"]
+    assert rewrite["raw_query"] == LONG_Q
+    assert rewrite["rewritten"] == "改写后的查询"
+    assert rewrite["rewrite_applied"] is True
+    assert rewrite["variants"] == ["变体一", "变体二"]
+    assert "改写后的查询" in rewrite["final_queries"]
+    assert rewrite["query_entities"] == [{"name": "实体A", "type": "CONCEPT"}]
 
     channels = {c["label"]: c for c in dbg["channels"]}
     assert {"vector", "bm25", "graph"} <= set(channels)
@@ -309,10 +310,13 @@ def test_debug_short_query_skips_rewrite(monkeypatch):
     import app.services.retriever as r
 
     result = asyncio.run(r.retrieve("短查询", 1, top_k=5, debug=True))
-    dbg = result["debug"]
-    assert dbg["rewrite_applied"] is False
-    assert dbg["rewritten"] == "短查询"
-    assert dbg["final_queries"] == ["短查询"]
+    rewrite = result["debug"]["rewrite"]
+    assert rewrite["rewrite_applied"] is False
+    assert rewrite["rewritten"] == "短查询"
+    # Variants are an independent task (multi-query != rewrite): the raw
+    # query leads final_queries, the rewrite step simply didn't prepend a
+    # different rewritten form.
+    assert rewrite["final_queries"][0] == "短查询"
 
 
 # =========================================================================

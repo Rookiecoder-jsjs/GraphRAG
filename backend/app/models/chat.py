@@ -58,6 +58,11 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
     include_context: bool = True
+    # Opt-in graph channel, mirroring ChatRequest. The search handler used to
+    # read this via getattr(request, "use_graph_rag", False); adding the
+    # explicit field is purely additive — clients that never send it keep
+    # today's False default.
+    use_graph_rag: bool = False
 
 
 class SearchResponse(BaseModel):
@@ -66,3 +71,17 @@ class SearchResponse(BaseModel):
     chunks: List[Dict[str, Any]]
     entities: List[Dict[str, Any]]
     relations: List[Dict[str, Any]]
+
+
+class SearchDebugResponse(SearchResponse):
+    """Response for POST /api/search/debug (FEAT-024): the regular search
+    payload plus per-stage pipeline diagnostics.
+
+    ``debug`` is deliberately a loose dict — its shape is owned by
+    app/services/retrieval/debug.py and rendered by the debug page; no other
+    consumer should depend on it. ``titles`` maps document_id → display
+    title for the chunks referenced in the debug payload (partial by design:
+    BM25-only hits carry no document metadata).
+    """
+    debug: Dict[str, Any] = {}
+    titles: Dict[str, str] = {}
