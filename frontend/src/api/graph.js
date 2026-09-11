@@ -67,4 +67,9 @@ export const graphApi = {
   // Unbind one alias. POST body rather than DELETE + query param: `+` in a
   // query string decodes to a space and entity names are unconstrained.
   deleteAlias: (alias) => service.post('/graph/aliases/delete', { alias }),
+
+  // FEAT-028: 全局问答。社区列表（stale=图谱规模相对上次构建有变化）+
+  // 手动重建（每社区一次 LLM 摘要调用，通常几秒）。
+  getCommunities: () => service.get('/graph/communities'),
+  rebuildCommunities: () => service.post('/graph/communities/rebuild'),
 }

@@ -435,6 +435,21 @@ const handleDeepLink = () => {
   }
 }
 
+// FEAT-028: /chat?q=<问题>&graph=1 (来自全局问答页「就此主题提问」) —
+// prefill the composer and flip the graph switch on so the community
+// channel is active. Prefill only, never auto-send: the user should see
+// (and be able to edit) what is about to be asked.
+const handleQuestionPrefill = () => {
+  const q = String(route.query.q || '').trim()
+  const wantGraph = route.query.graph === '1'
+  if (q) {
+    inputMessage.value = q
+    // 摘掉 ?q=，避免刷新/前进后退时重复预填。
+    router.replace({ path: '/chat' })
+  }
+  if (wantGraph) useGraphRag.value = true
+}
+
 const goHistory = () => {
   showDropdown.value = false
   router.push('/chat/history')
@@ -451,12 +466,14 @@ onMounted(() => {
   messagesContainer.value?.addEventListener('click', onCitationClick)
   loadConversations()
   handleDeepLink()
+  handleQuestionPrefill()
   scrollToBottom()
 })
 
 onActivated(() => {
   loadConversations()
   handleDeepLink()
+  handleQuestionPrefill()
 })
 
 onDeactivated(() => {

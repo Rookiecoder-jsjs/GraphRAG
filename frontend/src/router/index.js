@@ -6,6 +6,7 @@ const Home = () => import('../views/Home.vue')
 const DocumentsPage = () => import('../views/DocumentsPage.vue')
 const GraphPage = () => import('../views/GraphPage.vue')
 const EntityDuplicatesPage = () => import('../views/EntityDuplicatesPage.vue')
+const GraphGlobalPage = () => import('../views/GraphGlobalPage.vue')
 const ChatPage = () => import('../views/ChatPage.vue')
 const ConversationHistoryPage = () => import('../views/ConversationHistoryPage.vue')
 const EvalCasesPage = () => import('../views/EvalCasesPage.vue')
@@ -78,6 +79,12 @@ const routes = [
         path: 'graph/duplicates',
         name: 'EntityDuplicates',
         component: EntityDuplicatesPage
+      },
+      {
+        // FEAT-028: 全局问答（社区摘要）。字面量子路径，同上不冲突。
+        path: 'graph/global',
+        name: 'GraphGlobal',
+        component: GraphGlobalPage
       },
       {
         path: 'chat',

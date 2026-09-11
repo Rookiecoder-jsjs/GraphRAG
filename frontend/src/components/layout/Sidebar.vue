@@ -122,6 +122,7 @@ const navGroups = [
     label: '分析',
     items: [
       { path: '/graph', label: '图谱', icon: Share2Icon },
+      { path: '/graph/global', label: '全局问答', icon: Share2Icon },
       { path: '/graph/duplicates', label: '实体查重', icon: Share2Icon },
       { path: '/timeline', label: '时间线', icon: BarChartIcon },
       { path: '/documents/map', label: '聚类图', icon: MapIcon },
