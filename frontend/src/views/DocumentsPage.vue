@@ -80,6 +80,8 @@
             :icon="CloseIcon"
             icon-position="only"
             @click="cancelProcessing"
+            title="关闭"
+            aria-label="关闭"
           />
         </div>
 

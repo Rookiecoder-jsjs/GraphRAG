@@ -307,6 +307,8 @@
             icon-position="only"
             :disabled="!inputMessage.trim() || loading"
             @click="sendMessage"
+            title="发送"
+            aria-label="发送"
             class="send-btn"
           />
         </div>
