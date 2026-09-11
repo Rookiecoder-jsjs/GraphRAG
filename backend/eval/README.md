@@ -116,6 +116,12 @@ Cases: 3  elapsed: 0.42s
 Add `--markdown` for a human-readable table, or `--json` for a structured
 report you can feed into a CI bot.
 
+Add `--save [--label xxx]` to record the aggregate summary into the
+`eval_runs` table (FEAT-021), viewable as a trend on the frontend
+`/eval/runs` page. Saving is best-effort (a DB failure warns on stderr and
+never fails the run) and independent of `--no-db` (which only skips the
+eval_cases merge).
+
 ### 3. Full RAG eval (with LLM, slower, more expensive)
 
 Same as above but also calls the LLM to produce a final answer, then
@@ -156,9 +162,13 @@ plenty for catching retrieval regressions.
 Suggested:
 
 - **Before any RAG-pipeline change**: run `--no-llm` to record baseline
-  numbers. Write them down (or pipe `--json` somewhere).
-- **After the change**: re-run. If `hit@5` drops, you broke retrieval.
-  If `ndcg@5` improves, you made the ranking better. If both drop, revert.
+  numbers. Write them down (or pipe `--json` somewhere), or just add
+  `--save --label baseline` so the numbers land in `eval_runs` and show up
+  on `/eval/runs` (FEAT-021).
+- **After the change**: re-run with `--save --label after-<change>`. If
+  `hit@5` drops, you broke retrieval. If `ndcg@5` improves, you made the
+  ranking better. If both drop, revert. The `/eval/runs` trend chart gives
+  you the before/after comparison for free.
 - **Adding new features that touch retrieval** (e.g. graph-rag, query
   expansion): add 3-5 gold cases per feature that exercise the new
   capability, then verify the new path doesn't regress the existing

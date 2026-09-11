@@ -14,14 +14,14 @@
 
 ## 核心功能
 
-1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块；支持粘贴 URL 抓取网页直接入库（readability 正文提取 + SSRF 防护链，FEAT-019）、失败文档一键重新处理（FEAT-017）
+1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块；支持粘贴 URL 抓取网页直接入库（readability 正文提取 + SSRF 防护链，FEAT-019）、粘贴 Markdown/纯文本直接入库（FEAT-022）、失败文档一键重新处理（FEAT-017）
 2. 🔍 **混合检索**：多查询 + 硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + 图谱通道 + RRF 融合 + Qwen3-Reranker 重排序 + 父文档扩展再重排（统一管线 `services/retriever.py`，TTL+LRU 缓存）
 3. 🕸️ **知识图谱可视化**：d3 + Vue 3 实现的交互式力导向图谱，支持节点拖拽、实体编辑、合并与删除
-4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）；**会话历史有界加载**（超过阈值自动折叠为 LLM 摘要，成本与质量不随对话变长恶化）；引用来源卡片可点击跳转文档详情（FEAT-020）
+4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）；**会话历史有界加载**（超过阈值自动折叠为 LLM 摘要，成本与质量不随对话变长恶化）；引用来源卡片可点击跳转文档详情（FEAT-020）、一键导出会话为 Markdown（FEAT-023）
 5. 📊 **仪表盘与时间线**：文档 / 实体 / 标签统计、月度增长、近期活动、实体首现时间线
 6. 🗺️ **文档聚类地图**：2D PCA 投影可视化所有文档的语义分布
 7. 🔌 **MCP Server**：标准 MCP (stdio) 把检索 / 图谱能力暴露给 Claude Desktop / Claude Code / codex 等客户端，四个只读工具零前端投入直接查询知识库
-8. 📏 **RAG 测评框架**：检索指标（Hit@K / MRR / Precision@K / Recall@K / nDCG@K）+ LLM-as-judge 生成指标（Faithfulness / Hallucination / Relevance / Citation / Correctness + 置信度），13 个 gold 用例，提示词改动的回归门禁（见 `backend/eval/`）；**反馈驱动评测集**（FEAT-018）：对话中 👎 消息一键转 gold 用例落 SQLite `eval_cases` 表，runner 与静态 gold 合并运行（`--no-db` 关闭），管理页 `/eval` 可增删启停
+8. 📏 **RAG 测评框架**：检索指标（Hit@K / MRR / Precision@K / Recall@K / nDCG@K）+ LLM-as-judge 生成指标（Faithfulness / Hallucination / Relevance / Citation / Correctness + 置信度），13 个 gold 用例，提示词改动的回归门禁（见 `backend/eval/`）；**反馈驱动评测集**（FEAT-018）：对话中 👎 消息一键转 gold 用例落 SQLite `eval_cases` 表，runner 与静态 gold 合并运行（`--no-db` 关闭），管理页 `/eval` 可增删启停；**评测报告落库与趋势**（FEAT-021）：`eval.runner --save` 把聚合指标落 `eval_runs` 表，`/eval/runs` 页呈现指标趋势与运行记录，门禁有历史证据链
 9. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
 10. 🛡️ **健壮性**：统一 logging（请求级 `X-Request-ID` 关联）、请求体大小全局兜底（413）、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、BM25 启动预热、卡死文档启动对账（reconcile）、检索结果 TTL+LRU 缓存、向量索引零成本重建脚本、SQLite 增量迁移（`schema_version` 追踪）、全量备份脚本、上下文注入预算熔断（`<context>` 区硬 token 上限，超限按块裁剪不炸窗口）
 
@@ -231,6 +231,7 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 ### 📄 文档 `/api/documents`
 - `POST   /api/documents/upload` — 上传文档（multipart/form-data，支持 .pdf/.docx/.doc/.txt/.md/.markdown，≤ 10MB）
 - `POST   /api/documents/ingest-url` — 抓取网页入库（FEAT-019：SSRF 防护链逐跳复检；html→readability+html2text，pdf/txt 落盘复用 anydoc；html 源 `file_path=NULL` 不可 reprocess；限流 10 次/分）
+- `POST   /api/documents/ingest-text` — 粘贴文本入库（FEAT-022：Markdown/纯文本经 clean_markdown 落盘 `{doc_id}.md`，`file_path` 非空可 reprocess；`TEXT_INGEST_MAX_CHARS` 上限 422；限流独立 10 次/分）
 - `GET    /api/documents` — 列出用户文档（分页：`?skip=0&limit=100`；可选 `?tag=xxx` 过滤）
 - `GET    /api/documents/{id}/detail` — 文档详情（metadata + 标签 + 切块统计 + 关键实体 + 关联文档）
 - `GET    /api/documents/{id}/chunks` — 文档切块列表
@@ -269,12 +270,13 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 ### 🏷️ 标签 `/api/tags`
 - `GET /api/tags?q=xxx` — 用户级标签聚合（按使用频次倒排，可选模糊搜索）
 
-### 📏 评测用例 `/api/eval`（FEAT-018）
+### 📏 评测用例 `/api/eval`（FEAT-018 / FEAT-021）
 - `GET    /api/eval/cases` — 列出当前用户的评测用例（可选 `?enabled=true/false`）
 - `POST   /api/eval/cases` — 手动新建用例（query 必填，纯空白 422）
 - `POST   /api/eval/cases/from-message` — 把 assistant 消息转为用例（query=前置 user 提问、chunk_ids=message_sources 按 rank；部分唯一索引幂等，重复转换返回 200 + `created:false`；409=无前置提问）
 - `PATCH  /api/eval/cases/{id}` — 部分更新（query/expected_*/difficulty/tags/enabled）
 - `DELETE /api/eval/cases/{id}` — 删除用例
+- `GET    /api/eval/runs` — 评测运行历史（FEAT-021：`eval.runner --save [--label xxx]` 写入 `eval_runs`，聚合 summary JSON；只读，`?limit=50`）
 
 > runner 侧：`python -m eval.runner --user-id 1` 默认合并 `eval_cases`（db 用例在同 query 上优先，被弃文件用例计入 `skipped_duplicate_file_cases`）；`--no-db` 关闭合并。
 
@@ -519,9 +521,11 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 | `/entities/:name` | `EntityDetailPage.vue` | 实体详情 |
 | `/dashboard` | `DashboardPage.vue` | 仪表盘 |
 | `/timeline` | `TimelinePage.vue` | 时间线 |
-| `/chat` | `ChatPage.vue` | RAG 对话 |
+| `/chat` | `ChatPage.vue` | RAG 对话（含导出 Markdown，FEAT-023） |
+| `/chat/history` | `ConversationHistoryPage.vue` | 历史会话管理 |
 | `/search` | `SearchPage.vue` | 语义检索 |
 | `/eval` | `EvalCasesPage.vue` | 评测用例管理（FEAT-018） |
+| `/eval/runs` | `EvalRunsPage.vue` | 评测报告趋势（FEAT-021） |
 
 > 除 `/login` 外所有路由均需要登录，由 `router/index.js` 的 `beforeEach` 守卫统一拦截。
 

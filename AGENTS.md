@@ -79,8 +79,11 @@
 | FEAT-018 | 反馈评测用例闭环 | EvalCasesPage.vue + ChatPage.vue（入口） | `/api/eval/cases`（GET/POST/PATCH/DELETE、`/from-message`） | eval_cases | ✅ 合规（页面入口与 FEAT-012 共享 ChatPage） |
 | FEAT-019 | URL 摄取 | DocumentsPage.vue（网页导入区） | `POST /api/documents/ingest-url` | documents | ⚠️ 与 FEAT-002/003 共享页面与表 |
 | FEAT-020 | 引用溯源跳转 | ChatPage.vue（来源卡片标题） | （无新 API） | （无新表） | ⚠️ 纯前端跳转，豁免三件套（见 FEAT-020 文档） |
+| FEAT-021 | 评测报告落库与趋势 | EvalRunsPage.vue | `GET /api/eval/runs`（+ runner `--save` 写入） | eval_runs | ✅ 合规 |
+| FEAT-022 | 粘贴文本入库 | DocumentsPage.vue（粘贴入库区） | `POST /api/documents/ingest-text` | documents | ⚠️ 与 FEAT-002/003 共享页面与表 |
+| FEAT-023 | 对话导出 Markdown | ChatPage.vue（导出按钮） | （无新 API） | （无新表） | ⚠️ 纯前端导出，豁免三件套（见 FEAT-023 文档） |
 
-> 数据表完整清单（12 张）：`users`、`documents`、`chunks`、`document_tags`、`conversations`、`messages`、`message_feedback`、`message_sources`、`progress_history`、`embedding_cache`、`schema_version`（`sqlite_sequence` 为 SQLite 内部表）。
+> 数据表完整清单（13 张）：`users`、`documents`、`chunks`、`document_tags`、`conversations`、`messages`、`message_feedback`、`message_sources`、`progress_history`、`embedding_cache`、`eval_cases`、`eval_runs`、`schema_version`（`sqlite_sequence` 为 SQLite 内部表）。
 
 ### 2.3 以功能条目为核心检索
 
