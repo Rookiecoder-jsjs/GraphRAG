@@ -306,17 +306,27 @@ class Neo4jClient:
 
             # 2. Outgoing RELATES_TO: (source)-[r]->(other) becomes
             #    (target)-[new]->(other) with same relation_type + props.
+            #    `tgt` is bound by an UNCONDITIONAL MATCH, never via the
+            #    OPTIONAL MATCH below: that pattern only matches when the
+            #    same-type edge already exists, so on the common path
+            #    (target has no such edge yet) tgt would be null and
+            #    CREATE (tgt)-[new] fails with "node `tgt` is missing"
+            #    — every real merge died here until this was fixed.
+            #    properties(r)/r.relation_type are captured BEFORE the
+            #    DELETE: reading a relationship's properties after deleting
+            #    it in the same transaction raises "Relationship ... has
+            #    been deleted in this transaction".
             result = await session.run(
                 """
                 MATCH (src:Entity {name: $source, user_id: $user_id})-[r:RELATES_TO]->(other:Entity {user_id: $user_id})
                 WHERE other.name <> $target
-                WITH src, r, other
-                OPTIONAL MATCH (tgt:Entity {name: $target, user_id: $user_id})-[existing:RELATES_TO {relation_type: r.relation_type}]->(other)
-                WITH r, existing, tgt, other
+                MATCH (tgt:Entity {name: $target, user_id: $user_id})
+                OPTIONAL MATCH (tgt)-[existing:RELATES_TO {relation_type: r.relation_type}]->(other)
+                WITH r, existing, tgt, other, properties(r) AS r_props, r.relation_type AS r_type
                 DELETE r
                 FOREACH (_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
-                    CREATE (tgt)-[new:RELATES_TO {relation_type: r.relation_type}]->(other)
-                    SET new = properties(r)
+                    CREATE (tgt)-[new:RELATES_TO {relation_type: r_type}]->(other)
+                    SET new = r_props
                 )
                 RETURN count(r) AS removed
                 """,
@@ -327,17 +337,18 @@ class Neo4jClient:
 
             # 3. Incoming RELATES_TO: (other)-[r]->(source) becomes
             #    (other)-[new]->(target) with same relation_type + props.
+            #    Same tgt-binding + properties-before-DELETE rules as step 2.
             result = await session.run(
                 """
                 MATCH (other:Entity {user_id: $user_id})-[r:RELATES_TO]->(src:Entity {name: $source, user_id: $user_id})
                 WHERE other.name <> $target
-                WITH src, r, other
-                OPTIONAL MATCH (other)-[existing:RELATES_TO {relation_type: r.relation_type}]->(tgt:Entity {name: $target, user_id: $user_id})
-                WITH r, existing, tgt, other
+                MATCH (tgt:Entity {name: $target, user_id: $user_id})
+                OPTIONAL MATCH (other)-[existing:RELATES_TO {relation_type: r.relation_type}]->(tgt)
+                WITH r, existing, tgt, other, properties(r) AS r_props, r.relation_type AS r_type
                 DELETE r
                 FOREACH (_ IN CASE WHEN existing IS NULL THEN [1] ELSE [] END |
-                    CREATE (other)-[new:RELATES_TO {relation_type: r.relation_type}]->(tgt)
-                    SET new = properties(r)
+                    CREATE (other)-[new:RELATES_TO {relation_type: r_type}]->(tgt)
+                    SET new = r_props
                 )
                 RETURN count(r) AS removed
                 """,
@@ -346,12 +357,19 @@ class Neo4jClient:
             record = await result.single()
             incoming_rewritten = int(record["removed"]) if record else 0
 
-            # 4. Delete the now-orphan source entity.
+            # 4. Detach-delete the now-orphan source entity. DETACH, not
+            #    plain DELETE: steps 2/3 deliberately skip edges BETWEEN
+            #    source and target (WHERE other.name <> $target) — they
+            #    would be meaningless self-loops on target, but leaving
+            #    them attached makes DELETE fail with "node still has
+            #    relationships". After steps 1-3 everything worth keeping
+            #    is already re-pointed, so the leftovers here are exactly
+            #    those dead edges.
             result = await session.run(
                 """
                 MATCH (e:Entity {name: $source, user_id: $user_id})
                 WITH e, count(e) AS c
-                DELETE e
+                DETACH DELETE e
                 RETURN c AS deleted
                 """,
                 source=source_name, user_id=user_id,

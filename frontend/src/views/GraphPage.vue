@@ -538,7 +538,12 @@ const confirmMerge = async () => {
     closeEntityPanel()
     loadFullGraph()
   } catch (err) {
-    mergeError.value = err?.response?.data?.detail || '合并失败。'
+    // 同查重页：未被 FastAPI 处理的 500 body 是纯文本，兜底显示原文
+    const data = err?.response?.data
+    mergeError.value =
+      (typeof data?.detail === 'string' && data.detail) ||
+      (typeof data === 'string' && data.trim()) ||
+      '合并失败。'
   } finally {
     mergeSaving.value = false
   }

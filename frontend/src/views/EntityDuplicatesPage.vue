@@ -151,7 +151,13 @@ const mergeGroup = async (g) => {
     }
   } catch (error) {
     console.error('Merge failed:', error)
-    mergeError[g.key] = error?.response?.data?.detail || '合并失败，请重试。'
+    // 500 未被 FastAPI 处理时 body 是纯文本（无 detail 字段），兜底显示原文
+    const data = error?.response?.data
+    mergeError[g.key] =
+      (typeof data?.detail === 'string' && data.detail) ||
+      (typeof data === 'string' && data.trim()) ||
+      error?.message ||
+      '合并失败，请重试。'
   } finally {
     merging[g.key] = false
   }
