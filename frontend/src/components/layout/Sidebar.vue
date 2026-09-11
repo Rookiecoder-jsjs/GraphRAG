@@ -114,7 +114,8 @@ const navGroups = [
     items: [
       { path: '/dashboard', label: '仪表盘', icon: LayoutGridIcon },
       { path: '/documents', label: '文档', icon: FileTextIcon },
-      { path: '/search', label: '搜索', icon: SearchIcon }
+      { path: '/search', label: '搜索', icon: SearchIcon },
+      { path: '/search/debug', label: '搜索调试', icon: SearchIcon }
     ]
   },
   {

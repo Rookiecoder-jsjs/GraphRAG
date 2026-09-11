@@ -33,6 +33,10 @@
         >
           搜索
         </Button>
+        <!-- FEAT-024: 带当前查询跳转调试台，自动透视这条检索。 -->
+        <Button variant="secondary" :disabled="!query.trim()" @click="goDebug">
+          调试模式
+        </Button>
       </div>
     </header>
 
@@ -100,6 +104,7 @@
 
 <script setup>
 import { ref, h } from 'vue'
+import { useRouter } from 'vue-router'
 import { searchApi } from '../api/search'
 import { PageHeader, EmptyState, LoadingState, ErrorState, Button, Tag } from '../components/ui'
 
@@ -115,6 +120,14 @@ const loading = ref(false)
 const searchError = ref(false)
 const results = ref([])
 const hasSearched = ref(false)
+
+const router = useRouter()
+
+const goDebug = () => {
+  const q = query.value.trim()
+  if (!q) return
+  router.push({ path: '/search/debug', query: { q } })
+}
 
 const handleSearch = async () => {
   if (!query.value.trim() || loading.value) return

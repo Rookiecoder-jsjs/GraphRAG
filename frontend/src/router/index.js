@@ -10,6 +10,7 @@ const ConversationHistoryPage = () => import('../views/ConversationHistoryPage.v
 const EvalCasesPage = () => import('../views/EvalCasesPage.vue')
 const EvalRunsPage = () => import('../views/EvalRunsPage.vue')
 const SearchPage = () => import('../views/SearchPage.vue')
+const SearchDebugPage = () => import('../views/SearchDebugPage.vue')
 const TimelinePage = () => import('../views/TimelinePage.vue')
 const DashboardPage = () => import('../views/DashboardPage.vue')
 const EntityDetailPage = () => import('../views/EntityDetailPage.vue')
@@ -100,6 +101,12 @@ const routes = [
         path: 'search',
         name: 'Search',
         component: SearchPage
+      },
+      {
+        // FEAT-024: 检索管线调试台。字面量路径，永不与 /search 冲突。
+        path: 'search/debug',
+        name: 'SearchDebug',
+        component: SearchDebugPage
       },
       {
         path: 'timeline',
