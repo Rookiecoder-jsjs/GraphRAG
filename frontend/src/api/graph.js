@@ -39,8 +39,15 @@ export const graphApi = {
   },
 
   // Merge `source` into `target`. Source is deleted; all references
-  // are re-pointed to target (with dedup).
-  mergeEntities: (source, target) => service.post('/graph/entities/merge', { source, target }),
+  // are re-pointed to target (with dedup). Accepts either two args
+  // (source, target) or a single {source, target} object — GraphPage's
+  // merge panel passes the object form, and passing it through the old
+  // two-arg signature sent `{"source": {...}}` and got a 422 back.
+  mergeEntities: (source, target) =>
+    service.post(
+      '/graph/entities/merge',
+      source && typeof source === 'object' ? source : { source, target }
+    ),
 
   // One-shot detail page payload for an entity. Returns
   //   { entity, stats, documents[], related_entities[], sample_chunks[] }
