@@ -11,6 +11,10 @@ jieba==0.42.1
 python-dotenv==1.0.0
 aiosqlite==0.20.0
 rank-bm25==0.2.2
+# --- URL ingestion (FEAT-019): readability-lxml pulls lxml (already present
+# transitively), chardet, cssselect, lxml_html_clean; html2text is pure-Python.
+readability-lxml==0.9
+html2text==2025.4.15
 # --- version-aligned stack for the app + MCP server (GUIDE-003 T2-3) ---
 # Pinned together: mcp 2.x drags starlette>=1.0 which breaks fastapi 0.115
 # (on_startup removed); pydantic 2.13 required by mcp 1.29.

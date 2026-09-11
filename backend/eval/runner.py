@@ -393,6 +393,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Skip the LLM step; only evaluate retrieval (no keyword coverage).",
     )
     p.add_argument(
+        "--no-db",
+        action="store_true",
+        help="Skip the SQLite eval_cases merge (FEAT-018) and evaluate the "
+             "gold JSON files only.",
+    )
+    p.add_argument(
         "--use-graph-rag",
         action="store_true",
         help="Use the graph-RAG retrieval path: query entities → Neo4j "
@@ -422,6 +428,17 @@ async def main_async(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_argparser().parse_args(argv)
 
     gold_set = load_gold_set(args.gold_dir)
+    # FEAT-018: merge SQLite eval_cases (feedback-derived) into the gold set
+    # unless --no-db. On a duplicate normalized query the DB case wins (it
+    # reflects the user's latest intent); dropped file cases are surfaced in
+    # the summary. An empty/missing table leaves the pure-file behavior
+    # completely unchanged.
+    skipped_duplicate_file_cases: List[str] = []
+    if not args.no_db:
+        from .db_cases import load_db_cases, merge_cases, resolve_db_path
+
+        db_cases = load_db_cases(resolve_db_path(), args.user_id)
+        gold_set, skipped_duplicate_file_cases = merge_cases(gold_set, db_cases)
     if not gold_set:
         print(f"No gold cases found in {args.gold_dir}", file=sys.stderr)
         return 1
@@ -442,6 +459,8 @@ async def main_async(argv: Optional[Sequence[str]] = None) -> int:
         answer_provider=answer_provider,
         judge=judge,
     )
+    if skipped_duplicate_file_cases:
+        report["summary"]["skipped_duplicate_file_cases"] = skipped_duplicate_file_cases
 
     if args.json:
         # Strip the `retrieved` list from the per-case rows to keep the

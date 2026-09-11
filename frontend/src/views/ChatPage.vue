@@ -174,7 +174,12 @@
                       <div class="source-card-header">
                         <div class="source-card-meta">
                           <span class="source-card-index">[{{ src.index }}]</span>
-                          <span class="source-card-title">{{ src.title }}</span>
+                          <span
+                            class="source-card-title"
+                            :class="{ 'source-card-title-link': src.document_id }"
+                            :title="src.document_id ? '查看文档详情' : null"
+                            @click="openSourceDocument(src)"
+                          >{{ src.title }}</span>
                           <Tag
                             v-if="src.quality"
                             shape="badge"
@@ -236,6 +241,21 @@
                       :title="msg.rating === 'down' ? '取消踩' : '回答无帮助'"
                       @click="onFeedback(msg, 'down')"
                     />
+                    <!-- FEAT-018: 👎 之后可以把本轮问答沉淀为评测用例，
+                         喂给 RAG 回归门禁（eval.runner 合并读取）。 -->
+                    <Button
+                      v-if="msg.rating === 'down'"
+                      variant="ghost"
+                      size="sm"
+                      :icon="FlaskIcon"
+                      icon-position="left"
+                      :loading="msg.evalSaving"
+                      :disabled="msg.evalCaseCreated"
+                      @click="onSaveEvalCase(msg)"
+                      :title="msg.evalCaseCreated ? '该回答已是评测用例' : '将本轮问答转为评测用例'"
+                    >
+                      {{ msg.evalCaseCreated ? '已是评测用例' : '存为评测用例' }}
+                    </Button>
                     <span v-if="msg.feedbackSaving" class="feedback-status">保存中…</span>
                     <span v-else-if="msg.rating" class="feedback-status">
                       {{ msg.rating === 'up' ? '感谢反馈' : '已标记为无帮助' }}
@@ -297,7 +317,9 @@
 import { ref, watch, nextTick, onMounted, onActivated, onDeactivated, onUnmounted, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { chatApi } from '../api/chat'
+import { evalApi } from '../api/eval'
 import { createSseParser } from '../utils/sse'
+import { useToast } from '../composables/toast'
 import { PageHeader, Button, Tag, Dot, Switch, EmptyState } from '../components/ui'
 
 const MessageIcon = {
@@ -338,6 +360,14 @@ const SendIcon = {
     h('polygon', { points: '22 2 15 22 11 13 2 9 22 2' })
   ])
 }
+// FEAT-018: 「存为评测用例」入口图标（flask-conical）。
+const FlaskIcon = {
+  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('path', { d: 'M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2' }),
+    h('path', { d: 'M8.5 2h7' }),
+    h('path', { d: 'M7 16h10' })
+  ])
+}
 const ThumbsUpIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
     h('path', { d: 'M7 10v12' }),
@@ -353,6 +383,7 @@ const ThumbsDownIcon = {
 
 const route = useRoute()
 const router = useRouter()
+const { toast } = useToast()
 
 // Deep-link from the history-management page: /chat?conversation=<id> loads
 // that conversation on arrival (and on re-activation, e.g. picking a different
@@ -485,6 +516,22 @@ const loadConversation = async (conversationId) => {
   }
   showDropdown.value = false
   scrollToBottom()
+}
+
+// FEAT-018: 把当前 👎 的回答转为评测用例（服务端按 message 幂等）。
+const onSaveEvalCase = async (msg) => {
+  if (!msg.id || msg.evalSaving || msg.evalCaseCreated) return
+  msg.evalSaving = true
+  try {
+    const { data } = await evalApi.createFromMessage(msg.id)
+    msg.evalCaseCreated = true
+    toast.success(data?.created ? '已存为评测用例' : '该回答此前已存为评测用例')
+  } catch (error) {
+    console.error('Failed to save eval case:', error)
+    toast.error(error?.response?.data?.detail || '存为评测用例失败，请重试。')
+  } finally {
+    msg.evalSaving = false
+  }
 }
 
 const onFeedback = async (msg, rating) => {
@@ -869,6 +916,14 @@ const formatMessage = (content) => {
   })
 
   return html
+}
+
+// FEAT-020: 来源卡片标题 → 跳转文档详情页。document_id 缺失（历史会话未
+// 持久化 sources，或极端情况下后端未回传）时保持不可点；文档已被删除由
+// DocumentDetailPage 的既有 404 错误态兜底，不做预检请求。
+const openSourceDocument = (src) => {
+  if (!src?.document_id) return
+  router.push({ name: 'DocumentDetail', params: { id: src.document_id } })
 }
 
 const toggleSource = (msg, src) => {
@@ -1314,6 +1369,13 @@ const onCitationClick = (event) => {
   font-weight: 500;
   color: var(--text-primary);
   word-break: break-word;
+}
+.source-card-title-link {
+  cursor: pointer;
+}
+.source-card-title-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .source-card-close-btn :deep(.btn) { font-size: 1.25rem; line-height: 1; padding: 0 0.5rem; height: 28px; }
 .quality-badge { gap: 0.375rem !important; }

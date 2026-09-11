@@ -287,6 +287,41 @@ async def init_db():
                 ON document_tags (user_id, tag)
         """)
 
+        # Eval gold cases derived from user feedback (FEAT-018). Each row is
+        # one RAG evaluation case: the query that was asked, the chunk ids the
+        # answer cited (message_sources at conversion time), and optional
+        # keywords/expected answer. ``source_message_id`` is the provenance
+        # link for cases converted from a 👎 message; the PARTIAL unique index
+        # makes the convert endpoint deterministically idempotent under
+        # concurrency (insert ... ON CONFLICT -> read back), not "check then
+        # insert". JSON columns are TEXT parsed at the API layer.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS eval_cases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                source_message_id INTEGER,
+                query TEXT NOT NULL,
+                expected_chunk_ids TEXT NOT NULL DEFAULT '[]',
+                expected_keywords TEXT NOT NULL DEFAULT '[]',
+                expected_answer TEXT NOT NULL DEFAULT '',
+                difficulty TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '[]',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_eval_cases_user
+                ON eval_cases (user_id, id)
+        """)
+        await db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_eval_cases_source
+                ON eval_cases (source_message_id) WHERE source_message_id IS NOT NULL
+        """)
+
         # Apply incremental SQL migrations (tracks version in schema_version).
         await _run_migrations(db)
 

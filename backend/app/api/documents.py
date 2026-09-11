@@ -24,7 +24,13 @@ from app.services.bm25 import get_bm25_service
 from app.services.ingest_gate import get_ingest_gate
 from app.services.entity_extractor import canonicalize_extraction_results, get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
-from app.services.doc_status import DocStatus, set_document_status
+from app.services.doc_status import (
+    DocStatus,
+    DocumentNotFound,
+    InvalidStatusTransition,
+    reset_for_retry,
+    set_document_status,
+)
 from app.services.retriever import invalidate_retrieval_cache
 
 logger = logging.getLogger(__name__)
@@ -1116,9 +1122,10 @@ async def delete_document(
     # Delete the on-disk file LAST — every durable store is already purged by
     # now, so a file-removal failure (e.g. a transient OS lock) leaves only an
     # orphaned blob that a retry can clean up. It must never fail the whole
-    # delete or mask an upstream store error.
+    # delete or mask an upstream store error. URL-ingested documents carry
+    # file_path=NULL (no bytes were ever stored) and skip this step.
     try:
-        if os.path.exists(doc["file_path"]):
+        if doc["file_path"] and os.path.exists(doc["file_path"]):
             os.remove(doc["file_path"])
     except Exception as e:
         logger.warning(
@@ -1126,6 +1133,113 @@ async def delete_document(
         )
 
     return {"message": "Document deleted successfully"}
+
+
+@router.post("/{doc_id}/reprocess", status_code=202, response_model=DocumentResponse)
+async def reprocess_document(
+    doc_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """Re-run the ingestion pipeline for a FAILED document (FEAT-017).
+
+    Wires ``doc_status.reset_for_retry`` (implemented but previously unused)
+    to an API entry. Preconditions are validated strictly in order and NO
+    state changes until all hold: ownership -> status=='failed' -> source
+    file exists -> re-conversion produces text. On success the document
+    returns to 'pending' and the same background pipeline upload uses is
+    dispatched (ingest gate, progress SSE, and failure cleanup all apply).
+    """
+    user_id = current_user["id"]
+
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT id, title, file_path, original_filename, file_type, "
+            "COALESCE(status, 'pending') AS status "
+            "FROM documents WHERE id = ? AND user_id = ?",
+            (doc_id, user_id),
+        ) as cursor:
+            doc = await cursor.fetchone()
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    if doc["status"] != DocStatus.FAILED.value:
+        # reset_for_retry only accepts 'failed' (a 'ready' document is not
+        # reprocessed via this path) — mirror that at the API layer.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed documents can be reprocessed",
+        )
+    if not doc["file_path"] or not os.path.isfile(doc["file_path"]):
+        # URL-ingested documents (file_path NULL) and deleted uploads both
+        # land here: without the original file there is nothing to re-run.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Original file is missing; cannot reprocess",
+        )
+
+    # Re-convert BEFORE resetting anything: a conversion failure must leave
+    # the document 'failed' with its error message intact.
+    try:
+        markdown_content, _ = await asyncio.to_thread(
+            convert_document_to_markdown, doc["file_path"], doc["file_type"]
+        )
+        markdown_content = await asyncio.to_thread(clean_markdown, markdown_content)
+    except Exception as e:
+        logger.error(
+            "Reprocess conversion failed for %s: %s", doc_id, e, exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to re-convert document",
+        )
+    if not markdown_content.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Could not extract text from the original file",
+        )
+
+    try:
+        await reset_for_retry(doc_id)
+    except InvalidStatusTransition:
+        # Lost a race with a concurrent reprocess/delete — the defensive
+        # inner guard behind the pre-check above.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document is no longer reprocessable",
+        )
+    except DocumentNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    # Delete the previous run's progress events. The progress SSE replays
+    # progress_history from id 0 and CLOSES on the first terminal frame, so
+    # a leftover 'error' row would make a just-opened progress dialog replay
+    # the OLD failure and hang up before the new pipeline emits anything
+    # (same rationale as delete_document removing progress rows in-transaction).
+    async with get_db() as db:
+        await db.execute(
+            "DELETE FROM progress_history WHERE doc_id = ? AND user_id = ?",
+            (doc_id, user_id),
+        )
+        await db.commit()
+
+    background_tasks.add_task(
+        process_document_background, doc_id, user_id, markdown_content, doc["title"]
+    )
+
+    async with get_db() as db:
+        async with db.execute(
+            "SELECT id, title, original_filename, file_type, created_at, status, "
+            "error_message FROM documents WHERE id = ?",
+            (doc_id,),
+        ) as cursor:
+            refreshed = await cursor.fetchone()
+    return dict(refreshed)
 
 
 @router.get("/{doc_id}/chunks")

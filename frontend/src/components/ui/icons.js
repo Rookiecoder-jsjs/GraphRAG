@@ -111,6 +111,17 @@ export const PlusIcon = make(
   p('line', { x1: '5', y1: '12', x2: '19', y2: '12' })
 )
 
+// FEAT-018: 评测用例（flask-conical）。
+export const FlaskIcon = make(
+  p('path', { d: 'M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2' }),
+  p('path', { d: 'M8.5 2h7' }),
+  p('path', { d: 'M7 16h10' })
+)
+
+export const CheckIcon = make(
+  p('polyline', { points: '20 6 9 17 4 12' })
+)
+
 export const TrashIcon = make(
   p('polyline', { points: '3 6 5 6 21 6' }),
   p('path', { d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2' }),

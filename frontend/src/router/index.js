@@ -7,6 +7,7 @@ const DocumentsPage = () => import('../views/DocumentsPage.vue')
 const GraphPage = () => import('../views/GraphPage.vue')
 const ChatPage = () => import('../views/ChatPage.vue')
 const ConversationHistoryPage = () => import('../views/ConversationHistoryPage.vue')
+const EvalCasesPage = () => import('../views/EvalCasesPage.vue')
 const SearchPage = () => import('../views/SearchPage.vue')
 const TimelinePage = () => import('../views/TimelinePage.vue')
 const DashboardPage = () => import('../views/DashboardPage.vue')
@@ -80,6 +81,12 @@ const routes = [
         path: 'chat/history',
         name: 'ChatHistory',
         component: ConversationHistoryPage
+      },
+      {
+        // FEAT-018: eval case management (feedback → gold loop).
+        path: 'eval',
+        name: 'EvalCases',
+        component: EvalCasesPage
       },
       {
         path: 'search',

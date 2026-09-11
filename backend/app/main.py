@@ -17,6 +17,8 @@ from app.prompts.templates import TEMPLATE_NAMES as _PROMPT_TEMPLATE_NAMES
 from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.api import auth, documents, search, graph, chat, progress, tags, timeline, dashboard
+from app.api import eval as eval_api
+from app.api import url_ingest
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,10 @@ def create_app() -> FastAPI:
 
     # Include routers
     app.include_router(auth.router)
+    # URL ingestion shares the /api/documents prefix; registered before
+    # documents.router so its static path can never be shadowed (defensive —
+    # there are no overlapping POST routes today).
+    app.include_router(url_ingest.router)
     app.include_router(documents.router)
     app.include_router(search.router)
     app.include_router(graph.router)
@@ -118,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(tags.router)
     app.include_router(timeline.router)
     app.include_router(dashboard.router)
+    app.include_router(eval_api.router)
 
     @app.get("/")
     async def root():

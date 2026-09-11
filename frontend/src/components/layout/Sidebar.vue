@@ -87,7 +87,7 @@ import {
   LayoutGridIcon, FileTextIcon, SearchIcon, Share2Icon,
   MessageSquareIcon, BarChartIcon, MapIcon, PlayIcon, ClockIcon,
   SunIcon, MoonIcon, LogOutIcon, ChevronLeftIcon, ChevronRightIcon,
-  LogoIcon
+  FlaskIcon, LogoIcon
 } from '../ui/icons'
 
 const route = useRoute()
@@ -130,7 +130,8 @@ const navGroups = [
     label: '协作',
     items: [
       { path: '/chat', label: '对话', icon: MessageSquareIcon },
-      { path: '/chat/history', label: '历史会话', icon: ClockIcon }
+      { path: '/chat/history', label: '历史会话', icon: ClockIcon },
+      { path: '/eval', label: '评测用例', icon: FlaskIcon }
     ]
   }
 ]

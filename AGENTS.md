@@ -75,6 +75,10 @@
 | FEAT-014 | 实体时间线 | TimelinePage.vue | `GET /api/timeline` | （Neo4j） | ⚠️ 与 FEAT-009 共用 API |
 | FEAT-015 | 仪表盘 | DashboardPage.vue | `GET /api/dashboard/summary` | （聚合查询，无专属表） | ⚠️ 无数据表 |
 | FEAT-016 | 文档处理进度 | DocumentsPage.vue（进度区） | `GET /api/progress/{doc_id}`、`/history` | progress_history | ⚠️ 与 FEAT-002/003 共享页面 |
+| FEAT-017 | 文档失败重试 | DocumentsPage.vue（状态徽标+重试） | `POST /api/documents/{id}/reprocess` | documents, progress_history | ⚠️ 与 FEAT-002/003 共享页面与表 |
+| FEAT-018 | 反馈评测用例闭环 | EvalCasesPage.vue + ChatPage.vue（入口） | `/api/eval/cases`（GET/POST/PATCH/DELETE、`/from-message`） | eval_cases | ✅ 合规（页面入口与 FEAT-012 共享 ChatPage） |
+| FEAT-019 | URL 摄取 | DocumentsPage.vue（网页导入区） | `POST /api/documents/ingest-url` | documents | ⚠️ 与 FEAT-002/003 共享页面与表 |
+| FEAT-020 | 引用溯源跳转 | ChatPage.vue（来源卡片标题） | （无新 API） | （无新表） | ⚠️ 纯前端跳转，豁免三件套（见 FEAT-020 文档） |
 
 > 数据表完整清单（12 张）：`users`、`documents`、`chunks`、`document_tags`、`conversations`、`messages`、`message_feedback`、`message_sources`、`progress_history`、`embedding_cache`、`schema_version`（`sqlite_sequence` 为 SQLite 内部表）。
 

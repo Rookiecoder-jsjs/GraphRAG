@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     # a malformed JSON body can't be buffered into memory unbounded.
     MAX_REQUEST_BODY: int = 15728640  # 15MB
 
+    # URL ingestion (FEAT-019): fetch a public web page and run it through
+    # the same chunk/embed/extract pipeline as an uploaded file. The fetcher
+    # enforces SSRF guards (scheme whitelist, private-address rejection,
+    # manual per-hop redirect revalidation); these knobs bound its cost.
+    URL_ALLOWED_SCHEMES: str = "http,https"
+    URL_FETCH_TIMEOUT_SECONDS: float = 30.0
+    URL_FETCH_CONNECT_TIMEOUT: float = 10.0
+    URL_FETCH_MAX_BYTES: int = 5242880  # 5MB
+    URL_FETCH_MAX_REDIRECTS: int = 5
+    URL_FETCH_USER_AGENT: str = "NC-KG/1.0 (knowledge-ingest)"
+
     # Embedding
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
     EMBEDDING_DIM: int = 1024

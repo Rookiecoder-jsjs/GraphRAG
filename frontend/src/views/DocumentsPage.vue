@@ -32,8 +32,25 @@
         >
           {{ uploading ? '上传中...' : '上传文档' }}
         </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          :icon="LinkIcon"
+          @click="showUrlForm = !showUrlForm"
+          title="从网页链接摄取文档"
+        >
+          网页导入
+        </Button>
       </template>
     </PageHeader>
+
+    <!-- FEAT-019: URL ingestion — same pipeline as a file upload, so the
+         success path reuses startProgressTracking unchanged. -->
+    <UrlIngestForm
+      v-if="showUrlForm"
+      @ingested="onUrlIngested"
+      @error="(msg) => toast.error(msg)"
+    />
 
     <!-- Processing Progress Modal -->
     <div v-if="processingDoc" class="progress-modal-overlay">
@@ -209,6 +226,11 @@
               <p class="doc-meta">
                 <span>{{ formatDate(doc.created_at) }}</span>
                 <span v-if="doc.file_type"> &bull; {{ doc.file_type.toUpperCase() }}</span>
+                <Tag
+                  shape="badge"
+                  :tone="statusTone(doc.status)"
+                  :title="doc.error_message || statusLabel(doc.status)"
+                >{{ statusLabel(doc.status) }}</Tag>
               </p>
               <div class="doc-tags">
                 <Tag
@@ -245,6 +267,16 @@
               </div>
             </div>
             <Button
+              v-if="doc.status === 'failed'"
+              variant="ghost"
+              size="sm"
+              :icon="RefreshIcon"
+              icon-position="only"
+              :loading="reprocessingId === doc.id"
+              @click="handleReprocess(doc)"
+              title="重新处理"
+            />
+            <Button
               variant="ghost"
               size="sm"
               :icon="ClockIcon"
@@ -272,6 +304,7 @@ import { useRouter } from 'vue-router'
 import { documentApi } from '../api/documents'
 import { tagApi } from '../api/tags'
 import { PageHeader, Button, Tag, LoadingState, ErrorState } from '../components/ui'
+import UrlIngestForm from '../components/documents/UrlIngestForm.vue'
 import { useToast } from '../composables/toast'
 import { useConfirm } from '../composables/confirm'
 
@@ -331,6 +364,21 @@ const XCircleIcon = {
     h('circle', { cx: 12, cy: 12, r: 10 }),
     h('line', { x1: 15, y1: 9, x2: 9, y2: 15 }),
     h('line', { x1: 9, y1: 9, x2: 15, y2: 15 })
+  ])
+}
+// FEAT-017: 重新处理（failed 文档重跑摄取管线）。
+const RefreshIcon = {
+  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('polyline', { points: '23 4 23 10 17 10' }),
+    h('polyline', { points: '1 20 1 14 7 14' }),
+    h('path', { d: 'M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15' })
+  ])
+}
+// FEAT-019: 网页导入入口。
+const LinkIcon = {
+  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('path', { d: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' }),
+    h('path', { d: 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' })
   ])
 }
 
@@ -765,6 +813,51 @@ const formatDate = (dateStr) => {
   } catch {
     return dateStr
   }
+}
+
+// FEAT-017: 处理状态徽标（documents.status 状态机，services/doc_status.py）。
+// failed 红色并可重试；ready 绿色；排队/推进中为中性色。error_message 挂在
+// 徽标 title 上，悬停即可看到失败原因。
+const DOC_STATUS_META = {
+  pending: { label: '排队中', tone: 'muted' },
+  document_created: { label: '创建文档', tone: 'muted' },
+  indexed: { label: '已入库', tone: 'primary' },
+  graphed: { label: '构建图谱', tone: 'primary' },
+  ready: { label: '就绪', tone: 'success' },
+  failed: { label: '处理失败', tone: 'error' }
+}
+const statusLabel = (status) => DOC_STATUS_META[status]?.label || status || '未知'
+const statusTone = (status) => DOC_STATUS_META[status]?.tone || 'muted'
+
+const reprocessingId = ref(null)
+const handleReprocess = async (doc) => {
+  const ok = await confirm({
+    title: '重新处理文档？',
+    message: `“${doc.title || doc.original_filename}” 将从头重新执行处理流程（切块、向量、图谱、实体提取），完成后即可检索。`,
+    confirmLabel: '重新处理'
+  })
+  if (!ok) return
+  reprocessingId.value = doc.id
+  try {
+    const response = await documentApi.reprocess(doc.id)
+    startProgressTracking(response.data)
+    await loadDocuments()
+    toast.success('已重新加入处理队列')
+  } catch (error) {
+    console.error('Reprocess failed:', error)
+    toast.error(error?.response?.data?.detail || '重新处理失败，请重试。')
+  } finally {
+    reprocessingId.value = null
+  }
+}
+
+// FEAT-019: URL 摄取成功 → 复用上传的进度弹窗跟踪处理，并刷新列表。
+const showUrlForm = ref(false)
+const onUrlIngested = async (docData) => {
+  toast.success(`已开始抓取「${docData.title || docData.original_filename}」`)
+  startProgressTracking(docData)
+  showUrlForm.value = false
+  await loadDocuments()
 }
 
 onMounted(() => {

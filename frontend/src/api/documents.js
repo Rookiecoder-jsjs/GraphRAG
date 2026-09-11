@@ -15,6 +15,15 @@ export const documentApi = {
 
   delete: (id) => service.delete(`/documents/${id}`),
 
+  // FEAT-017: re-run the ingestion pipeline for a FAILED document. The
+  // backend returns 202 with the refreshed row (status back to 'pending').
+  reprocess: (id) => service.post(`/documents/${id}/reprocess`),
+
+  // FEAT-019: fetch a public URL and ingest it through the upload pipeline.
+  // Returns 201 with the new document row (status 'pending'); 400 for a
+  // blocked (SSRF) URL, 502 for fetch failures, 415 for unsupported types.
+  ingestUrl: (url) => service.post('/documents/ingest-url', { url }),
+
   // Aggregated "knowledge unit" view: metadata + tags + chunk count +
   // sample chunks + key entities + related documents.
   getDetail: (id) => service.get(`/documents/${id}/detail`),
