@@ -12,6 +12,11 @@ from app.models.graph import (
     RelationResponse, GraphVisualization, GraphNode, GraphEdge,
     UpdateEntityRequest, MergeEntityRequest,
 )
+from app.services.entity_alias import (
+    delete_aliases_for,
+    list_aliases_for,
+    record_alias,
+)
 from app.services.neo4j_client import get_neo4j_client
 from app.services.retriever import invalidate_retrieval_cache
 
@@ -242,6 +247,14 @@ async def delete_entity(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"entity not found: {name!r}",
         )
+    # FEAT-025: drop aliases pointing at (or recorded as) the deleted name —
+    # a dangling canonical would resolve into silent retrieval misses
+    # forever. Best-effort: the graph delete already succeeded.
+    try:
+        await delete_aliases_for(user_id, name)
+        await delete_alias(user_id, name)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("alias cleanup after delete %r failed: %s", name, e)
     # Deleting an entity rewires the graph the retrieval cache's graph
     # channel reads from — drop this user's cached results.
     invalidate_retrieval_cache(user_id)
@@ -287,6 +300,16 @@ async def merge_entities(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    # FEAT-025: remember the merge as an alias so future documents that
+    # mention the source name resolve to the target instead of re-splitting
+    # into a fresh node. Best-effort: the merge itself already succeeded —
+    # an alias-storage failure must not fail the request.
+    try:
+        recorded = await record_alias(user_id, source, target)
+        if not recorded:
+            logger.info("merge %r→%r: alias not recorded (no-op/refused)", source, target)
+    except Exception as e:
+        logger.warning("merge %r→%r: alias recording failed: %s", source, target, e)
     # Merging renames/removes entities and rewires RELATES_TO edges — the
     # retrieval cache's graph channel must not keep serving the old shape.
     invalidate_retrieval_cache(user_id)
@@ -342,5 +365,13 @@ async def get_entity_detail(
         created_at_by_id = {row["id"]: row["created_at"] for row in rows}
         for d in envelope["documents"]:
             d["first_seen"] = created_at_by_id.get(d["doc_id"])
+
+    # FEAT-025: surface the names this entity absorbed (empty for entities
+    # that were never a merge target). Best-effort — display data only.
+    try:
+        envelope["aliases"] = await list_aliases_for(user_id, name)
+    except Exception as e:
+        logger.warning("alias listing for %r failed: %s", name, e)
+        envelope["aliases"] = []
 
     return envelope

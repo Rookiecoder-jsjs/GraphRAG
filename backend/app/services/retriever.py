@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.config import get_settings
 from app.database import get_db
 from app.services.bm25 import get_bm25_service
+from app.services.entity_alias import resolve_names
 from app.services.chroma_client import get_chroma_client
 from app.services.embedding import EmbeddingServiceError, get_embedding_service
 from app.services.fusion import reciprocal_rank_fusion_multi
@@ -417,6 +418,14 @@ async def _retrieve_uncached(
     graph_chunks: List[Dict[str, Any]] = []
     if use_graph_rag:
         entity_names = [e["name"] for e in (query_entities or []) if e.get("name")]
+        # FEAT-025: a query mentioning a merged-away name must still reach
+        # the canonical node — resolve aliases before the exact-name lookup.
+        if entity_names:
+            try:
+                entity_names = await resolve_names(entity_names, user_id)
+            except Exception as e:
+                degraded.append("alias_resolve_failed")
+                logger.warning("retrieve: alias resolution failed: %s", e)
         # auto mode requires >=2 matched entities; explicit toggle / "on"
         # accept any match.
         if entity_names and (not _auto_graph or len(entity_names) >= 2):

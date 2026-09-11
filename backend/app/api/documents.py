@@ -22,6 +22,7 @@ from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.services.bm25 import get_bm25_service
 from app.services.ingest_gate import get_ingest_gate
+from app.services.entity_alias import apply_aliases_to_extraction, load_user_alias_map
 from app.services.entity_extractor import canonicalize_extraction_results, get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
 from app.services.doc_status import (
@@ -541,6 +542,15 @@ async def _run_ingest_pipeline(doc_id: str, user_id: int, markdown: str, title: 
         extraction_result = canonicalize_extraction_results(
             all_entities, all_chunk_entities, all_relations
         )
+
+        # FEAT-025: rewrite names that are recorded aliases of a merged
+        # entity to their canonical form — otherwise a merged-away name
+        # resurrects as a fresh node on the next document that mentions it.
+        # Runs AFTER canonicalize (which owns within-document case folding;
+        # aliases own the cross-document mapping).
+        alias_map = load_user_alias_map(user_id)
+        if alias_map:
+            extraction_result = apply_aliases_to_extraction(extraction_result, alias_map)
 
         logger.info("Extracted %d entities and %d relations for doc %s",
                     len(extraction_result["entities"]),
