@@ -132,6 +132,17 @@
                       <span class="timing-total">总耗时 {{ formatSeconds(msg.timing.totalMs ?? msg.timing.elapsedMs) }}</span>
                     </template>
                   </div>
+                  <!-- FEAT-027: 后端证据兜底（全部检索结果低于相关性下限）时标记，
+                       提示这条回答没有基于资料生成。 -->
+                  <Tag
+                    v-if="msg.role === 'assistant' && msg.evidenceLow"
+                    shape="pill"
+                    tone="warning"
+                    class="evidence-badge"
+                    title="知识库中未找到足够相关的资料，这条回答未基于检索内容生成"
+                  >
+                    证据不足
+                  </Tag>
                   <div
                     v-if="msg.role === 'assistant' && msg.sources && msg.sources.length"
                     class="sources-panel"
@@ -862,6 +873,8 @@ const sendMessage = async () => {
           if (typeof d?.citation_coverage === 'number') {
             assistantMsg.citation_coverage = d.citation_coverage
           }
+          // FEAT-027: 后端证据兜底时打标（加性键，normal 路径不带）。
+          if (d?.evidence_level === 'low') assistantMsg.evidenceLow = true
           // The answer is fully streamed and saved — stop the clock NOW so
           // trailing follow-up generation doesn't pad the number.
           settleTimer(false)
@@ -900,6 +913,7 @@ const sendMessage = async () => {
         assistantMsg.sources = data.sources || []
         assistantMsg.citation_coverage =
           typeof data.citation_coverage === 'number' ? data.citation_coverage : 0
+        if (data.evidence_level === 'low') assistantMsg.evidenceLow = true
       } catch (fallbackError) {
         console.error('Chat error:', fallbackError)
         assistantMsg.content = '抱歉，出了点问题，请重试。'
@@ -1325,6 +1339,10 @@ const onCitationClick = (event) => {
   justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 0.625rem;
+}
+/* FEAT-027: 证据兜底徽标。 */
+.evidence-badge {
+  margin: 0.5rem 0;
 }
 .sources-label {
   font-family: var(--font-mono);
