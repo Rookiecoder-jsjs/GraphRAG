@@ -346,6 +346,29 @@ async def init_db():
                 ON eval_runs (user_id, id)
         """)
 
+        # Entity aliases (FEAT-025): one row per merged-away name, pointing
+        # at the canonical entity it was merged into. Recorded automatically
+        # by POST /api/graph/entities/merge; honoured at ingestion (extracted
+        # names are rewritten to their canonical) and in the retriever's
+        # graph channel (query entities resolved), so a merged name never
+        # re-splits into a fresh node. UNIQUE(user_id, alias): one mapping
+        # per name; INSERT OR REPLACE makes re-recording idempotent.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS entity_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                alias TEXT NOT NULL,
+                canonical_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE (user_id, alias)
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_entity_aliases_user
+                ON entity_aliases (user_id, canonical_name)
+        """)
+
         # Apply incremental SQL migrations (tracks version in schema_version).
         await _run_migrations(db)
 

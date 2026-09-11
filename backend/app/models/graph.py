@@ -143,3 +143,48 @@ class MergeEntityRequest(BaseModel):
     """
     source: str = Field(..., min_length=1, max_length=200)
     target: str = Field(..., min_length=1, max_length=200)
+
+
+# ---------- Aliases + duplicate discovery (FEAT-025) ---------------------
+
+class DuplicateMember(BaseModel):
+    """One entity inside a suggested duplicate group."""
+    name: str
+    type: str
+    mention_count: int
+    doc_count: int
+
+
+class DuplicateGroup(BaseModel):
+    """A suggested duplicate group. `reason` is "case" (spelling differs
+    only by case) or "punct" (differs by spaces/punctuation). Suggestions
+    only — merging stays a manual, confirmed action."""
+    key: str
+    reason: str
+    members: List[DuplicateMember]
+
+
+class EntityDuplicatesResponse(BaseModel):
+    """GET /api/graph/entities/duplicates — `scanned` is how many entities
+    the grouping pass saw (visibility into the scan cap)."""
+    groups: List[DuplicateGroup] = []
+    scanned: int = 0
+
+
+class EntityAliasInfo(BaseModel):
+    """One alias recorded for a canonical entity."""
+    alias: str
+    created_at: Optional[datetime] = None
+
+
+class EntityAliasesResponse(BaseModel):
+    """GET /api/graph/entities/{name}/aliases."""
+    entity: str
+    aliases: List[EntityAliasInfo] = []
+
+
+class AliasDeleteRequest(BaseModel):
+    """POST /api/graph/aliases/delete body. A JSON body rather than a DELETE
+    query param: entity names come from unconstrained LLM extraction and `+`
+    in a query string decodes to a space — no encoding pitfalls this way."""
+    alias: str = Field(..., min_length=1, max_length=200)

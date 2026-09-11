@@ -19,6 +19,7 @@ from app.services.chroma_client import get_chroma_client
 from app.api import auth, documents, search, graph, chat, progress, tags, timeline, dashboard
 from app.api import eval as eval_api
 from app.api import eval_runs
+from app.api import entity_curation
 from app.api import url_ingest
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,11 @@ def create_app() -> FastAPI:
     app.include_router(url_ingest.router)
     app.include_router(documents.router)
     app.include_router(search.router)
+    # Entity curation (FEAT-025) shares the /api/graph prefix; registered
+    # before graph.router so its static paths (entities/duplicates,
+    # aliases/delete) can never be shadowed (defensive — Starlette's PARTIAL
+    # match doesn't short-circuit, same mechanism as url_ingest above).
+    app.include_router(entity_curation.router)
     app.include_router(graph.router)
     app.include_router(chat.router)
     app.include_router(progress.router)

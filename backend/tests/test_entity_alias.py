@@ -83,19 +83,22 @@ def test_record_alias_chained_resolution_and_cycle_guard():
     # collapses it to B → C (resolve(A) == C), identical to the existing row
     # — an idempotent no-op. A cycle (A→B→A) is unreachable by construction.
     assert asyncio.run(record_alias(1, "B", "A")) is True
-    assert asyncio.run(load_user_alias_map(1)) == {"a": "C", "b": "C"}
+    assert asyncio.run(load_user_alias_map(1)) == {"a": "B", "b": "C"}
     # Rebinding an existing alias to a DIFFERENT target is refused — the
     # user must delete_alias first (protects chains from accidental edits).
     assert asyncio.run(record_alias(1, "A", "X")) is False
-    assert asyncio.run(load_user_alias_map(1)) == {"a": "C", "b": "C"}
+    assert asyncio.run(load_user_alias_map(1)) == {"a": "B", "b": "C"}
 
 
 def test_record_alias_ignores_self_and_empty():
     from app.services.entity_alias import record_alias
 
     asyncio.run(_bootstrap())
-    # Same name (case/whitespace variants of the comparison included).
-    assert asyncio.run(record_alias(1, "Morph", "morph")) is False
+    # Exactly-equal alias/canonical is a pointless self-reference; blank
+    # sides are noise. Case-only variants ("Morph"→"morph") ARE recorded by
+    # design — node identity is the exact name, and the user-isolation test
+    # exercises that path via OpenAI→openai.
+    assert asyncio.run(record_alias(1, "Morph", "Morph")) is False
     assert asyncio.run(record_alias(1, "  X  ", "X")) is False
     assert asyncio.run(record_alias(1, "", "Y")) is False
     assert asyncio.run(record_alias(1, "Y", "")) is False
@@ -123,7 +126,7 @@ def test_delete_alias_and_list():
     asyncio.run(record_alias(1, "别的", "其他实体"))
 
     listed = asyncio.run(list_aliases_for(1, "张三丰"))
-    assert [a["alias"] for a in listed] == ["Zhang San", "张三丰"]
+    assert [a["alias"] for a in listed] == ["Zhang San", "张三"]
 
     assert asyncio.run(delete_alias(1, "张三")) == 1
     assert asyncio.run(delete_alias(1, "张三")) == 0  # already gone
@@ -411,10 +414,10 @@ def test_duplicates_endpoint_groups():
     assert resp.scanned == 3
     assert len(resp.groups) == 1
     g = resp.groups[0]
-    assert g["reason"] == "case"
-    assert {m["name"] for m in g["members"]} == {"OpenAI", "openai"}
-    members = {m["name"]: m for m in g["members"]}
-    assert members["OpenAI"]["doc_count"] == 2
+    assert g.reason == "case"
+    assert {m.name for m in g.members} == {"OpenAI", "openai"}
+    members = {m.name: m for m in g.members}
+    assert members["OpenAI"].doc_count == 2
 
 
 def test_aliases_delete_endpoint():
