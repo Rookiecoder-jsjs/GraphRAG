@@ -369,6 +369,28 @@ async def init_db():
                 ON entity_aliases (user_id, canonical_name)
         """)
 
+        # Graph communities (FEAT-028): LLM-summarized entity clusters for
+        # global (corpus-level) search. member_names is a JSON array of
+        # entity names; entity_count_at_build powers the staleness badge.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS graph_communities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                member_names TEXT NOT NULL,
+                member_count INTEGER NOT NULL,
+                mention_total INTEGER NOT NULL,
+                entity_count_at_build INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_graph_communities_user
+                ON graph_communities (user_id)
+        """)
+
         # Apply incremental SQL migrations (tracks version in schema_version).
         await _run_migrations(db)
 

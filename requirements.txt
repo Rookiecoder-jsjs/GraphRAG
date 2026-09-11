@@ -23,6 +23,7 @@ starlette==0.38.6
 pydantic==2.13.4
 pydantic-settings==2.11.0
 mcp==1.29.0
+networkx==3.4.1
 
 # --- dev / test only (install with: pip install -r requirements-dev.txt or pip install pytest pytest-asyncio) ---
 pytest==8.3.3

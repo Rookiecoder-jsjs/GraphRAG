@@ -1,4 +1,6 @@
 """ChromaDB client for vector operations."""
+import json
+
 import chromadb
 from typing import Dict, Any, List, Optional, Sequence
 
@@ -36,6 +38,8 @@ class ChromaClient:
         self.settings = get_settings()
         self._client: Optional[chromadb.HttpClient] = None
         self._collection: Optional[chromadb.Collection] = None
+        # FEAT-028: second collection for community-summary vectors.
+        self._community_collection: Optional[chromadb.Collection] = None
 
     def connect(self):
         """Initialize ChromaDB connection."""
@@ -46,6 +50,10 @@ class ChromaClient:
             )
             self._collection = self._client.get_or_create_collection(
                 name="knowledge_graph_chunks",
+                metadata={"hnsw:space": "cosine"}
+            )
+            self._community_collection = self._client.get_or_create_collection(
+                name="community_summaries",
                 metadata={"hnsw:space": "cosine"}
             )
 
@@ -242,6 +250,61 @@ class ChromaClient:
         self._collection.delete(
             where={"user_id": str(user_id)}
         )
+
+    # ---- FEAT-028: community-summary vectors (global search) ------------
+
+    def add_communities(self, ids, documents, metadatas, embeddings):
+        """Upsert community-summary vectors. Callers MUST run
+        delete_user_communities first — community ids are positional
+        (community_{user_id}_{n}), so a shrink without the delete would
+        leave stale higher-numbered vectors behind."""
+        if self._community_collection is None:
+            self.connect()
+        cleaned = [
+            {k: v for k, v in m.items() if v is not None}
+            for m in metadatas
+        ]
+        self._community_collection.upsert(
+            ids=list(ids),
+            documents=list(documents),
+            embeddings=list(embeddings),
+            metadatas=cleaned,
+        )
+
+    def query_communities(self, query_embedding, user_id: int, n_results: int = 2):
+        """Top-N community summaries for one user.
+
+        Returns [{"id", "score", "members": [names]}] — members parsed
+        from the metadata JSON (chroma metadata is scalar-only).
+        """
+        if self._community_collection is None:
+            self.connect()
+        result = self._community_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results,
+            where={"user_id": str(user_id)},
+        )
+        hits = []
+        for i, cid in enumerate(result["ids"][0]):
+            meta = (result["metadatas"][0][i] or {}) if result["metadatas"] else {}
+            members: list = []
+            try:
+                members = json.loads(meta.get("member_names") or "[]")
+            except (TypeError, ValueError):
+                members = []
+            distance = result["distances"][0][i] if result["distances"] else 1.0
+            hits.append({
+                "id": cid,
+                "score": 1.0 - float(distance or 1.0),
+                "members": members if isinstance(members, list) else [],
+            })
+        return hits
+
+    def delete_user_communities(self, user_id: int):
+        """Delete all community vectors for a user (rebuild pre-step)."""
+        if self._community_collection is None:
+            self.connect()
+        self._community_collection.delete(where={"user_id": str(user_id)})
 
 
 _chroma_client: Optional[ChromaClient] = None

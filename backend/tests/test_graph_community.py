@@ -31,6 +31,17 @@ def tmp_sqlite(monkeypatch, tmp_path):
 
     get_settings.cache_clear()
     asyncio.run(init_db())
+
+    async def _users():
+        async with get_db() as db:
+            for uid in (1, 2):
+                await db.execute(
+                    "INSERT OR IGNORE INTO users (id, username, password_hash) VALUES (?, ?, 'x')",
+                    (uid, f"u{uid}"),
+                )
+            await db.commit()
+
+    asyncio.run(_users())
     yield tmp_path
     get_settings.cache_clear()
 
@@ -58,7 +69,7 @@ def test_group_entities_deterministic_and_ranked():
     second = group_entities(edges, mentions, min_size=3, max_communities=10)
     assert first == second  # deterministic
     assert len(first) == 2
-    names = [{m["name"] for m in g["members"]} for g in first]
+    names = [set(g["members"]) for g in first]
     assert {"太阳", "地球", "月亮"} in names or {"Python", "FastAPI", "Pydantic"} in names
     # Ranked by total mentions desc.
     totals = [g["mention_total"] for g in first]
@@ -75,14 +86,14 @@ def test_group_entities_size_floor_and_cap():
     mentions = {n: 1 for n in ("a1", "a2", "a3", "b1", "b2")}
     groups = group_entities(edges, mentions, min_size=3, max_communities=10)
     assert len(groups) == 1
-    assert {m["name"] for m in groups[0]["members"]} == {"a1", "a2", "a3"}
+    assert set(groups[0]["members"]) == {"a1", "a2", "a3"}
 
     # Cap: keep the highest-mention communities only.
     edges2 = _edges(("x1", "x2", "R"), ("x2", "x3", "R"), ("y1", "y2", "R"), ("y2", "y3", "R"))
     mentions2 = {"x1": 1, "x2": 1, "x3": 1, "y1": 9, "y2": 9, "y3": 9}
     capped = group_entities(edges2, mentions2, min_size=3, max_communities=1)
     assert len(capped) == 1
-    assert {m["name"] for m in capped[0]["members"]} == {"y1", "y2", "y3"}
+    assert set(capped[0]["members"]) == {"y1", "y2", "y3"}
 
 
 # =========================================================================
@@ -187,7 +198,7 @@ _EDGES = _edges(
 # build_communities
 # =========================================================================
 
-def test_build_persists_rows_and_summaries():
+def test_build_persists_rows_and_summaries(monkeypatch):
     gc, chroma, llm, _neo = _install(monkeypatch, edges=_EDGES, entities=_ENTITIES)
 
     stats = asyncio.run(gc.build_communities(1))
@@ -215,7 +226,7 @@ def test_build_persists_rows_and_summaries():
     assert len(chroma._store) == stats["communities"]
 
 
-def test_build_llm_failure_falls_back_to_generic_title():
+def test_build_llm_failure_falls_back_to_generic_title(monkeypatch):
     gc, chroma, llm, _neo = _install(
         monkeypatch, edges=_EDGES, entities=_ENTITIES, llm=_FakeLLM(fail=True),
     )
@@ -237,7 +248,7 @@ def test_build_llm_failure_falls_back_to_generic_title():
         assert json.loads(r["member_names"])  # summary falls back to members
 
 
-def test_build_replaces_previous_rows():
+def test_build_replaces_previous_rows(monkeypatch):
     gc, chroma, _llm, _neo = _install(monkeypatch, edges=_EDGES, entities=_ENTITIES)
     asyncio.run(gc.build_communities(1))
     # A rebuild with a shrunk graph must leave no stale rows/vectors.
@@ -260,14 +271,16 @@ def test_build_replaces_previous_rows():
 # Read path
 # =========================================================================
 
-def test_has_communities_and_fetch_chunks():
+def test_has_communities_and_fetch_chunks(monkeypatch):
     gc, chroma, _llm, _neo = _install(monkeypatch, edges=_EDGES, entities=_ENTITIES)
 
     assert asyncio.run(gc.has_communities(1)) is False
     asyncio.run(gc.build_communities(1))
     assert asyncio.run(gc.has_communities(1)) is True
 
-    class _C:
+    class _C(_FakeCommunityChroma):
+        """Community query/store from the install fake, plus chunk fetch."""
+
         def get_chunks_by_ids(self, ids, user_id):
             return [
                 {"chunk_id": "ch1", "content": "x", "metadata": {"document_id": "d1"}},
@@ -275,28 +288,34 @@ def test_has_communities_and_fetch_chunks():
             ]
 
     import app.services.graph_community as gc2
-    with mock.patch.object(gc2, "get_chroma_client", lambda: _C()):
+    fetched_chroma = _C()
+    fetched_chroma._store = chroma._store  # the build already populated it
+    with mock.patch.object(gc2, "get_chroma_client", lambda: fetched_chroma):
         chunks = asyncio.run(gc2.fetch_community_chunks(1, [0.1, 0.2], limit=20))
-    assert {c["chunk_id"] for c in chunks} == {"ch1", "ch2"}
+        assert {c["chunk_id"] for c in chunks} == {"ch1", "ch2"}
 
-    scoped = asyncio.run(gc2.fetch_community_chunks(1, [0.1, 0.2], limit=20,
-                                                    document_ids=["d1"]))
-    assert {c["chunk_id"] for c in scoped} == {"ch1"}
+        scoped = asyncio.run(gc2.fetch_community_chunks(1, [0.1, 0.2], limit=20,
+                                                        document_ids=["d1"]))
+        assert {c["chunk_id"] for c in scoped} == {"ch1"}
 
 
 # =========================================================================
 # API handlers
 # =========================================================================
 
-def test_communities_endpoints():
+def test_communities_endpoints(monkeypatch):
     from app.api import communities as api
 
     gc, _chroma, _llm, neo4j = _install(monkeypatch, edges=_EDGES, entities=_ENTITIES)
-    with mock.patch.object(api, "build_communities", mock.AsyncMock(return_value={"communities": 1})):
+    import app.services.graph_community as gc2
+    with mock.patch.object(gc2, "build_communities", mock.AsyncMock(return_value={"communities": 1})):
         stats = asyncio.run(api.rebuild_communities(current_user={"id": 1}))
     assert stats == {"communities": 1}
 
-    with mock.patch.object(api, "get_neo4j_client", _ok(neo4j)):
+    # A real build first, so GET has rows to list.
+    asyncio.run(gc2.build_communities(1))
+
+    with mock.patch("app.services.neo4j_client.get_neo4j_client", _ok(neo4j)):
         resp = asyncio.run(api.list_communities(current_user={"id": 1}))
     assert resp["stale"] is False  # built this instant against the same count
     assert resp["communities"]

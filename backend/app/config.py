@@ -146,6 +146,14 @@ class Settings(BaseSettings):
     # trip it; rerank scores for usable context cluster 0.3-0.7.
     ENABLE_EVIDENCE_GUARD: bool = True
     EVIDENCE_FLOOR: float = 0.30
+    # FEAT-028 graph communities (global search): detection thresholds and
+    # how the community channel joins RRF. Rebuild is LLM-heavy (one
+    # summarization call per community) and lives behind POST
+    # /api/graph/communities/rebuild.
+    COMMUNITY_MIN_SIZE: int = 3
+    COMMUNITY_MAX: int = 20
+    COMMUNITY_TOP_K: int = 2
+    COMMUNITY_RRF_WEIGHT: float = 1.0
     # Chunker overlap (chars): each split chunk is prefixed with the tail of
     # the previous one so facts straddling a boundary stay retrievable from
     # both sides. 0 disables. Only affects newly-uploaded documents.

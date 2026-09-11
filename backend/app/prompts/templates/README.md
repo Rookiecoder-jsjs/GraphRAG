@@ -26,3 +26,4 @@
 | `query_variants.md` | 多查询变体生成 | `num_variants` `query` | 同上 |
 | `judge.md` | LLM-as-judge 评估员提示词（v2，含置信度与元规则） | — | `eval/judge.py` |
 | `insufficient_evidence.md` | 证据兜底文案（FEAT-027：全部检索结果低于相关性地板时替代生成，防幻觉） | — | `api/chat.py` 双路径 |
+| `community_summary.md` | 社区主题摘要（FEAT-028：重建时每个社区一次 LLM 调用） | `members` `relations` | `services/graph_community.py` |

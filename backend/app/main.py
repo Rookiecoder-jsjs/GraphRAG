@@ -20,6 +20,7 @@ from app.api import auth, documents, search, graph, chat, progress, tags, timeli
 from app.api import eval as eval_api
 from app.api import eval_runs
 from app.api import entity_curation
+from app.api import communities
 from app.api import url_ingest
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,10 @@ def create_app() -> FastAPI:
     # aliases/delete) can never be shadowed (defensive — Starlette's PARTIAL
     # match doesn't short-circuit, same mechanism as url_ingest above).
     app.include_router(entity_curation.router)
+    # Graph communities (FEAT-028) also shares /api/graph; its static
+    # prefix (communities*) cannot be shadowed by graph.router's param
+    # routes, registration adjacency is for readability.
+    app.include_router(communities.router)
     app.include_router(graph.router)
     app.include_router(chat.router)
     app.include_router(progress.router)

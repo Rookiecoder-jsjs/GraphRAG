@@ -16,4 +16,5 @@ TEMPLATE_NAMES = (
     "history_compact",
     "judge",
     "insufficient_evidence",
+    "community_summary",
 )

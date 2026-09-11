@@ -706,6 +706,39 @@ class Neo4jClient:
             record = await result.single()
             return int(record["n"]) if record else 0
 
+    async def get_user_relation_edges(
+        self, user_id: int, limit: int = 5000
+    ) -> List[Dict[str, Any]]:
+        """Every RELATES_TO edge between the user's entities (FEAT-028).
+
+        The lean bulk read community detection needs — unlike
+        get_full_graph_for_visualization there are no caps sized for a
+        viz page and no frontend id prefixing, just plain
+        {source, target, relation_type} dicts.
+        """
+        async with self.session() as session:
+            result = await session.run(
+                """
+                MATCH (a:Entity {user_id: $user_id})
+                      -[r:RELATES_TO]->
+                      (b:Entity {user_id: $user_id})
+                RETURN a.name AS source, b.name AS target,
+                       r.relation_type AS relation_type
+                LIMIT $limit
+                """,
+                user_id=user_id,
+                limit=limit,
+            )
+            records = await result.data()
+        return [
+            {
+                "source": r.get("source"),
+                "target": r.get("target"),
+                "relation_type": r.get("relation_type"),
+            }
+            for r in records
+        ]
+
     async def get_entity_detail(
         self,
         name: str,

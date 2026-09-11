@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.config import get_settings
 from app.database import get_db
+from app.services import graph_community
 from app.services.bm25 import get_bm25_service
 from app.services.entity_alias import resolve_names
 from app.services.chroma_client import get_chroma_client
@@ -485,11 +486,34 @@ async def _retrieve_uncached(
                 degraded.append("graph_skipped")
                 logger.warning("retrieve: graph-RAG failed, skipping channel: %s", e)
 
+    # ---- 5b. Community channel (FEAT-028 global search, ADR-010) ----
+    # Same use_graph_rag gate as the entity channel; costs one indexed
+    # SQLite existence check when no communities were ever built.
+    community_chunks: List[Dict[str, Any]] = []
+    if use_graph_rag:
+        try:
+            if await graph_community.has_communities(user_id):
+                community_chunks = await graph_community.fetch_community_chunks(
+                    user_id, query_embeddings[0], max(top_k * 4, 20),
+                    document_ids=document_ids,
+                )
+                if community_chunks:
+                    result_lists.append(community_chunks)
+                    labels.append("community")
+                    logger.info(
+                        "retrieve: community channel -> %d chunks",
+                        len(community_chunks),
+                    )
+        except Exception as e:
+            degraded.append("community_skipped")
+            logger.warning("retrieve: community channel failed: %s", e)
+
     # ---- 6. Multi-list RRF fusion (#3/#5) ----
     if debug_out is not None:
         for _lab, _lst in zip(labels, result_lists):
             _kind = (
                 "graph" if _lab == "graph"
+                else "community" if _lab == "community"
                 else "vector" if _lab.startswith("vector")
                 else "bm25"
             )
@@ -500,6 +524,10 @@ async def _retrieve_uncached(
         for idx, lab in enumerate(labels):
             if lab == "graph":
                 weights[idx] = settings.GRAPH_RRF_WEIGHT
+    if community_chunks and settings.COMMUNITY_RRF_WEIGHT != 1.0:
+        for idx, lab in enumerate(labels):
+            if lab == "community":
+                weights[idx] = settings.COMMUNITY_RRF_WEIGHT
     fused = reciprocal_rank_fusion_multi(
         result_lists, k=60, top_k=recall_k, weights=weights, labels=labels,
     )

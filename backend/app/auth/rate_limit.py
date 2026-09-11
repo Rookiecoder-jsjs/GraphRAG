@@ -70,6 +70,10 @@ chat_limiter = SlidingWindowLimiter(max_calls=20, window_seconds=60)
 # Search: cheaper than chat (no generation) but still hits embedding +
 # rerank, so allow a slightly higher rate.
 search_limiter = SlidingWindowLimiter(max_calls=30, window_seconds=60)
+# Community rebuild (FEAT-028): one LLM summarization call per community.
+# A burst of rebuilds would fan that out provider-wide, so a slow
+# per-user window replaces the (retrieval-only) query gate here.
+communities_limiter = SlidingWindowLimiter(max_calls=5, window_seconds=300)
 
 
 def enforce_rate_limit(limiter: SlidingWindowLimiter, key: str) -> None:
