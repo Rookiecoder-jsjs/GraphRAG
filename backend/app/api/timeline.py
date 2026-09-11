@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/timeline", tags=["timeline"])
 
+# Read cap AND response cap, kept equal on purpose: this endpoint feeds a
+# TIMELINE, so trimming newest-first drops the OLDEST entities — the ones
+# anchoring the range's start date. A too-tight cap collapses the range to a
+# single day (slider max=0, dead play button on the animation page). 2000
+# covers every realistic per-user corpus at ~200 bytes/row; beyond it the
+# span-preserving trim below keeps the oldest dated entity alive.
+_MAX_TIMELINE_ITEMS = 2000
+
 
 # =========================================================================
 # Response models
@@ -145,7 +153,9 @@ async def get_timeline(current_user: dict = Depends(get_current_user)):
     # Get all entities with their chunk_ids and document_ids, then join
     # with SQLite to get document created_at and title.
     neo4j = await get_neo4j_client()
-    entities = await neo4j.get_user_entities_with_mentions(user_id=user_id, limit=500)
+    entities = await neo4j.get_user_entities_with_mentions(
+        user_id=user_id, limit=_MAX_TIMELINE_ITEMS,
+    )
 
     if entities:
         # Collect all unique document_ids we need to look up.
@@ -212,8 +222,18 @@ async def get_timeline(current_user: dict = Depends(get_current_user)):
                 x.name,
             )
         )
-        # Trim to top 200 — even power users rarely have meaningful first-seen
-        # data for more than that, and the response stays small.
-        response.entity_timeline = items[:200]
+        # Span-preserving trim (see _MAX_TIMELINE_ITEMS). Normal case: every
+        # entity fits and is returned as-is. Over the cap, newest-first order
+        # is kept but the single OLDEST DATED entity is swapped in — a ghost
+        # (first_seen=None, sorts last) must never be the anchor.
+        if len(items) > _MAX_TIMELINE_ITEMS:
+            head = items[:_MAX_TIMELINE_ITEMS - 1]
+            anchor = next(
+                (x for x in reversed(items) if x.first_seen is not None), None
+            )
+            if anchor is not None and not any(x is anchor for x in head):
+                head[-1] = anchor
+            items = head
+        response.entity_timeline = items
 
     return response

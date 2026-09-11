@@ -49,24 +49,29 @@
             </Button>
           </div>
 
-          <div class="slider-row">
-            <input
-              type="range"
-              class="time-slider"
-              :min="0"
-              :max="totalDays - 1"
-              :value="dayIndex"
-              :disabled="playing"
-              @input="onSliderInput"
-              aria-label="时间进度条"
-            />
-            <div class="slider-bounds">
-              <span>{{ formatDate(range.min) }}</span>
-              <span>{{ formatDate(range.max) }}</span>
+          <template v-if="!isSingleDay">
+            <div class="slider-row">
+              <input
+                type="range"
+                class="time-slider"
+                :min="0"
+                :max="totalDays - 1"
+                :value="dayIndex"
+                :disabled="playing"
+                @input="onSliderInput"
+                aria-label="时间进度条"
+              />
+              <div class="slider-bounds">
+                <span>{{ formatDate(range.min) }}</span>
+                <span>{{ formatDate(range.max) }}</span>
+              </div>
             </div>
-          </div>
+          </template>
+          <p v-else class="single-day-note">
+            所有实体都首次出现于 {{ formatDate(range.min) }}，暂无可播放的时间跨度。
+          </p>
 
-          <div class="playback">
+          <div v-if="!isSingleDay" class="playback">
             <Button
               variant="primary"
               :class="{ playing }"
@@ -266,6 +271,9 @@ const visibleEntities = computed(() => {
 const visibleCount = computed(() => visibleEntities.value.length)
 const atEnd = computed(() => dayIndex.value >= totalDays.value - 1)
 const hasData = computed(() => entities.value.length > 0 && totalDays.value > 0)
+// 所有实体都诞生于同一天时，播放/拖动没有意义——控件会退化成
+// max=0 的死滑杆。给一句解释而不是留一个看起来坏掉的控件。
+const isSingleDay = computed(() => hasData.value && totalDays.value <= 1)
 
 const typeList = computed(() => {
   const set = new Set()
@@ -459,6 +467,11 @@ onUnmounted(stopPlay)
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+.single-day-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
 }
 .time-slider {
   width: 100%;

@@ -435,6 +435,78 @@ def test_user_isolation_in_sqlite_queries():
               len(params) >= 1 and params[0] == 7)
 
 
+def test_entity_timeline_read_limit_covers_response_cap():
+    """The Neo4j read limit must be >= the response cap — a smaller read
+    silently drops entities BEFORE the span-preserving trim ever runs,
+    which is exactly how the timeline once collapsed to a single day."""
+    from app.api import timeline as tl_mod
+    import unittest.mock as _mock
+    get_db, _ = _make_db([[], [], []])
+    get_n, n = _make_neo4j([])
+    with _mock.patch.object(tl_mod, "get_db", get_db), \
+         _mock.patch.object(tl_mod, "get_neo4j_client", get_n), \
+         _mock.patch.object(tl_mod, "get_current_user", _stub_user(1)):
+        asyncio.run(tl_mod.get_timeline(
+            current_user={"id": 1, "username": "alice"},
+        ))
+    check("read-limit: Neo4j called with the response cap as limit",
+          n.calls and n.calls[0][1] == tl_mod._MAX_TIMELINE_ITEMS,
+          f"limit={n.calls[0][1] if n.calls else 'no call'}")
+
+
+def test_entity_timeline_over_cap_keeps_chronological_span():
+    """Regression: the old `items[:200]` newest-first trim dropped the
+    OLDEST entities — the ones anchoring the timeline's start date — so a
+    user with many same-day entities got a degenerate single-day range
+    (slider max=0, dead play button). The trim must be span-preserving:
+    when over the cap, the oldest DATED entity survives the cut."""
+    from app.api import timeline as tl_mod
+    import unittest.mock as _mock
+
+    cap = tl_mod._MAX_TIMELINE_ITEMS
+    # cap+30 same-day entities (high mention first) + 1 old anchor + 3
+    # first_seen-less ghosts → sorted order puts the anchor AFTER the whole
+    # same-day block and the ghosts last, so a plain head-trim would drop
+    # exactly the anchor.
+    entities = []
+    doc_rows = []
+    for i in range(cap + 30):
+        did = f"doc-{i}"
+        entities.append({"name": f"E{i}", "type": "T", "chunk_ids": ["c"],
+                         "document_ids": [did], "mention_count": cap + 30 - i})
+        doc_rows.append({"id": did, "title": f"D{i}",
+                         "created_at": "2026-08-21 10:00:00"})
+    entities.append({"name": "old-anchor", "type": "T", "chunk_ids": ["c"],
+                     "document_ids": ["doc-old"], "mention_count": 1})
+    doc_rows.append({"id": "doc-old", "title": "Old",
+                     "created_at": "2025-01-01 08:00:00"})
+    for g in range(3):
+        entities.append({"name": f"Ghost{g}", "type": "T", "chunk_ids": ["c"],
+                         "document_ids": [f"doc-gone-{g}"], "mention_count": 9})
+    # ghosts' docs are not in doc_rows → first_seen=None path
+
+    get_db, _ = _make_db([[], [], doc_rows])
+    get_n, n = _make_neo4j(entities)
+    with _mock.patch.object(tl_mod, "get_db", get_db), \
+         _mock.patch.object(tl_mod, "get_neo4j_client", get_n), \
+         _mock.patch.object(tl_mod, "get_current_user", _stub_user(1)):
+        kind, _, body = asyncio.run(_call(tl_mod.get_timeline(
+            current_user={"id": 1, "username": "alice"},
+        )))
+    names = [e.name for e in body.entity_timeline]
+    dates = {str(e.first_seen) for e in body.entity_timeline if e.first_seen}
+    check("span: ok", kind == "ok")
+    check("span: trimmed to the cap", len(body.entity_timeline) == cap,
+          f"len={len(body.entity_timeline)}")
+    check("span: oldest dated entity survives the cut", "old-anchor" in names)
+    check("span: response still spans two dates",
+          "2025-01-01" in dates and "2026-08-21" in dates,
+          f"dates={sorted(dates)}")
+    check("span: newest-first order kept at the top",
+          names[0] == "E0" and names[1] == "E1")
+    check("span: ghosts dropped first", not any(n.startswith("Ghost") for n in names))
+
+
 # =========================================================================
 # Driver
 # =========================================================================
@@ -506,6 +578,8 @@ ALL_TESTS = [
     test_entity_with_no_live_documents_still_appears,
     test_user_isolation_in_neo4j_call,
     test_user_isolation_in_sqlite_queries,
+    test_entity_timeline_read_limit_covers_response_cap,
+    test_entity_timeline_over_cap_keeps_chronological_span,
     test_timeline_cypher_uses_contains_edge,
 ]
 
