@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.chat import ChatRequest, Conversation
 from app.prompts import load_prompt
+from app.services.evidence import grade_evidence
 from app.services.history import (
     SUMMARY_ROLE,
     load_chat_history,
@@ -94,6 +95,20 @@ _REJECTION_TEMPLATE = load_prompt("rejection_template")
 # an empty context would instead produce a "context is empty, so I can't
 # answer" refusal-style reply.) Text: templates/chitchat_system.md.
 _CHITCHAT_SYSTEM_PROMPT = load_prompt("chitchat_system")
+# FEAT-027 evidence guard: static answer used instead of LLM generation when
+# every retrieved chunk's rerank relevance_score is below EVIDENCE_FLOOR.
+# Sources are still returned/saved so the user can see what WAS found. Text:
+# templates/insufficient_evidence.md.
+_INSUFFICIENT_EVIDENCE_TEXT = load_prompt("insufficient_evidence")
+
+
+def _evidence_is_low(chunks: list) -> bool:
+    """True when the evidence guard is on and retrieval came back hopeless."""
+    settings = get_settings()
+    if not settings.ENABLE_EVIDENCE_GUARD:
+        return False
+    level, _max_score = grade_evidence(chunks, settings.EVIDENCE_FLOOR)
+    return level == "low"
 
 
 async def _save_assistant_message(
@@ -471,6 +486,29 @@ async def chat(
             "chunk_id_to_index": {},
         }
 
+    # FEAT-027 evidence guard: hopeless retrieval gets the honest static
+    # answer instead of a hallucination-prone generation. Only applies when
+    # retrieval actually ran (include_context=False opts out of retrieval
+    # entirely, and chitchat/should_reject never reach this branch).
+    # Sources still go out (and the turn is saved) so the user can see what
+    # was found.
+    if (
+        request.include_context
+        and intent["intent"] == "fact_retrieval"
+        and _evidence_is_low(context["chunks"])
+    ):
+        response = _INSUFFICIENT_EVIDENCE_TEXT
+        await _save_assistant_message(conversation_id, response, citation["sources"])
+        return {
+            "message": response,
+            "conversation_id": conversation_id,
+            "related_chunks": context["chunks"][:3],
+            "related_entities": context["entities"][:5],
+            "sources": citation["sources"],
+            "citation_coverage": 0.0,
+            "evidence_level": "low",
+        }
+
     # Generate response — feed in the pre-built numbered context rather than
     # letting the LLM service re-format the chunks, so the prompt and the
     # citation sources are guaranteed to use the same numbering.
@@ -624,6 +662,28 @@ async def _chat_stream_body(
     # cancelled, the sources are still meaningful for the next attempt.
     if citation["sources"]:
         yield f"event: sources\ndata: {json.dumps({'sources': citation['sources']})}\n\n"
+
+    # FEAT-027 evidence guard: same verdict as the non-streaming path —
+    # only when retrieval actually ran (include_context opts out; chitchat
+    # has its own branch below). The sources frame already went out (the
+    # weak references are still useful); stream the static answer instead
+    # of calling the LLM, persist it, and finish with evidence_level so the
+    # client can badge the message.
+    if (
+        request.include_context
+        and intent["intent"] == "fact_retrieval"
+        and _evidence_is_low(context["chunks"])
+    ):
+        text = _INSUFFICIENT_EVIDENCE_TEXT
+        yield f"data: {json.dumps({'chunk': text})}\n\n"
+        await _save_assistant_message(
+            conversation_id, text, citation.get("sources") or []
+        )
+        yield (
+            "event: done\ndata: "
+            f"{json.dumps({'conversation_id': conversation_id, 'sources': citation['sources'], 'citation_coverage': 0.0, 'evidence_level': 'low'})}\n\n"
+        )
+        return
 
     # Build messages for LLM. Chitchat gets a dedicated light prompt — no
     # <context> block, no citation instruction — so casual greetings get a

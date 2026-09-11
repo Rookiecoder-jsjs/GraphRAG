@@ -119,8 +119,23 @@ class _FakeDB:
 
 
 class _FakeCursor:
+    """Stands in for an aiosqlite cursor, which supports BOTH
+    ``await db.execute(...)`` and ``async with db.execute(...)``."""
+
     def __init__(self, rows):
         self._rows = rows
+        self.lastrowid = 1
+
+    def __await__(self):
+        async def _self():
+            return self
+        return _self().__await__()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
 
     async def fetchone(self):
         return self._rows[0] if self._rows else None
@@ -211,7 +226,8 @@ def test_nonstreaming_low_evidence_skips_llm():
     assert result["evidence_level"] == "low"
     assert result["message"] == load_prompt("insufficient_evidence")
     assert result["citation_coverage"] == 0.0
-    assert result["conversation_id"] == "c1"
+    # No conversation_id in the request → the handler mints a fresh one.
+    assert result["conversation_id"]
     # Sources still surface the (weak) references so the user can judge.
     assert len(result["sources"]) == 2
     # The assistant turn is persisted with the guard text, not LLM output.

@@ -25,3 +25,4 @@
 | `query_rewrite.md` | 检索查询改写（含多轮 standalone 指令插槽） | `standalone_instruction` `query` `history_block` | `services/query_processor.py` |
 | `query_variants.md` | 多查询变体生成 | `num_variants` `query` | 同上 |
 | `judge.md` | LLM-as-judge 评估员提示词（v2，含置信度与元规则） | — | `eval/judge.py` |
+| `insufficient_evidence.md` | 证据兜底文案（FEAT-027：全部检索结果低于相关性地板时替代生成，防幻觉） | — | `api/chat.py` 双路径 |

@@ -139,6 +139,13 @@ class Settings(BaseSettings):
     # Graph-RAG mode: "auto" (default) enables the graph channel only when
     # the query matches >=2 of the user's entities; "on"/"off" force it.
     GRAPH_RAG_MODE: str = "auto"
+    # FEAT-027 evidence guard (CRAG-lite): when EVERY expanded chunk's
+    # rerank relevance_score is below EVIDENCE_FLOOR, chat answers with the
+    # insufficient-evidence template instead of generating. The floor sits
+    # below the medium band (0.40) on purpose — only hopeless retrievals
+    # trip it; rerank scores for usable context cluster 0.3-0.7.
+    ENABLE_EVIDENCE_GUARD: bool = True
+    EVIDENCE_FLOOR: float = 0.30
     # Chunker overlap (chars): each split chunk is prefixed with the tail of
     # the previous one so facts straddling a boundary stay retrievable from
     # both sides. 0 disables. Only affects newly-uploaded documents.

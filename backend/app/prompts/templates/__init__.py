@@ -15,4 +15,5 @@ TEMPLATE_NAMES = (
     "query_variants",
     "history_compact",
     "judge",
+    "insufficient_evidence",
 )
