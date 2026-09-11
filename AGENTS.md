@@ -82,6 +82,7 @@
 | FEAT-021 | 评测报告落库与趋势 | EvalRunsPage.vue | `GET /api/eval/runs`（+ runner `--save` 写入） | eval_runs | ✅ 合规 |
 | FEAT-022 | 粘贴文本入库 | DocumentsPage.vue（粘贴入库区） | `POST /api/documents/ingest-text` | documents | ⚠️ 与 FEAT-002/003 共享页面与表 |
 | FEAT-023 | 对话导出 Markdown | ChatPage.vue（导出按钮） | （无新 API） | （无新表） | ⚠️ 纯前端导出，豁免三件套（见 FEAT-023 文档） |
+| FEAT-024 | 检索调试台 | SearchDebugPage.vue | `POST /api/search/debug`（+ SearchRequest.use_graph_rag） | （无新表） | ⚠️ 只读诊断豁免数据表；与 FEAT-013/010 共享检索管线（见 FEAT-024 文档） |
 
 > 数据表完整清单（13 张）：`users`、`documents`、`chunks`、`document_tags`、`conversations`、`messages`、`message_feedback`、`message_sources`、`progress_history`、`embedding_cache`、`eval_cases`、`eval_runs`、`schema_version`（`sqlite_sequence` 为 SQLite 内部表）。
 
