@@ -14,14 +14,14 @@
 
 ## 核心功能
 
-1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块
+1. 📚 **文档知识库**：支持上传 PDF/Word/TXT/MD 格式，自动转换为 Markdown 并按层级切块；支持粘贴 URL 抓取网页直接入库（readability 正文提取 + SSRF 防护链，FEAT-019）、失败文档一键重新处理（FEAT-017）
 2. 🔍 **混合检索**：多查询 + 硅基流动 Qwen3-Embedding-8B 向量检索 + BM25 关键词 + 图谱通道 + RRF 融合 + Qwen3-Reranker 重排序 + 父文档扩展再重排（统一管线 `services/retriever.py`，TTL+LRU 缓存）
 3. 🕸️ **知识图谱可视化**：d3 + Vue 3 实现的交互式力导向图谱，支持节点拖拽、实体编辑、合并与删除
-4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）；**会话历史有界加载**（超过阈值自动折叠为 LLM 摘要，成本与质量不随对话变长恶化）
+4. 💬 **大模型对话**：基于 Kimi / 百炼 (qwen3.7-flash) 的 RAG 问答，支持流式 / 非流式、图谱增强 RAG、对比模式、消息反馈、深度思考开关（Qwen 混合思考，推理过程以 `event: thinking` 帧流式展示）、意图路由（闲聊 / 拒答绕过检索，分类失败回退到 RAG）；**会话历史有界加载**（超过阈值自动折叠为 LLM 摘要，成本与质量不随对话变长恶化）；引用来源卡片可点击跳转文档详情（FEAT-020）
 5. 📊 **仪表盘与时间线**：文档 / 实体 / 标签统计、月度增长、近期活动、实体首现时间线
 6. 🗺️ **文档聚类地图**：2D PCA 投影可视化所有文档的语义分布
 7. 🔌 **MCP Server**：标准 MCP (stdio) 把检索 / 图谱能力暴露给 Claude Desktop / Claude Code / codex 等客户端，四个只读工具零前端投入直接查询知识库
-8. 📏 **RAG 测评框架**：检索指标（Hit@K / MRR / Precision@K / Recall@K / nDCG@K）+ LLM-as-judge 生成指标（Faithfulness / Hallucination / Relevance / Citation / Correctness + 置信度），13 个 gold 用例，提示词改动的回归门禁（见 `backend/eval/`）
+8. 📏 **RAG 测评框架**：检索指标（Hit@K / MRR / Precision@K / Recall@K / nDCG@K）+ LLM-as-judge 生成指标（Faithfulness / Hallucination / Relevance / Citation / Correctness + 置信度），13 个 gold 用例，提示词改动的回归门禁（见 `backend/eval/`）；**反馈驱动评测集**（FEAT-018）：对话中 👎 消息一键转 gold 用例落 SQLite `eval_cases` 表，runner 与静态 gold 合并运行（`--no-db` 关闭），管理页 `/eval` 可增删启停
 9. 🔐 **用户隔离**：JWT 账号密码认证，SQLite 存储用户数据，Neo4j/ChromaDB 通过 `user_id` 标签隔离
 10. 🛡️ **健壮性**：统一 logging（请求级 `X-Request-ID` 关联）、请求体大小全局兜底（413）、批量写入（Neo4j UNWIND）、输入校验、4xx 不重试、防 401 重定向循环、API 限流中间件、embedding 缓存自愈（损坏 blob 自动剔除）、BM25 启动预热、卡死文档启动对账（reconcile）、检索结果 TTL+LRU 缓存、向量索引零成本重建脚本、SQLite 增量迁移（`schema_version` 追踪）、全量备份脚本、上下文注入预算熔断（`<context>` 区硬 token 上限，超限按块裁剪不炸窗口）
 
@@ -230,11 +230,13 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 
 ### 📄 文档 `/api/documents`
 - `POST   /api/documents/upload` — 上传文档（multipart/form-data，支持 .pdf/.docx/.doc/.txt/.md/.markdown，≤ 10MB）
+- `POST   /api/documents/ingest-url` — 抓取网页入库（FEAT-019：SSRF 防护链逐跳复检；html→readability+html2text，pdf/txt 落盘复用 anydoc；html 源 `file_path=NULL` 不可 reprocess；限流 10 次/分）
 - `GET    /api/documents` — 列出用户文档（分页：`?skip=0&limit=100`；可选 `?tag=xxx` 过滤）
 - `GET    /api/documents/{id}/detail` — 文档详情（metadata + 标签 + 切块统计 + 关键实体 + 关联文档）
 - `GET    /api/documents/{id}/chunks` — 文档切块列表
 - `GET    /api/documents/cluster-map` — 2D PCA 聚类地图（所有文档的语义投影）
 - `DELETE /api/documents/{id}` — 删除文档（联动清理 SQLite + ChromaDB + Neo4j）
+- `POST   /api/documents/{id}/reprocess` — 重新处理失败文档（FEAT-017：仅 `failed` 状态可重试；复位 `pending`、清旧进度事件防 SSE 重放旧失败、派发与上传一致的摄取管线；202 返回）
 - `GET    /api/documents/{id}/tags` — 文档标签列表
 - `POST   /api/documents/{id}/tags` — 添加文档标签（幂等，返回最新标签列表）
 - `DELETE /api/documents/{id}/tags/{tag:path}` — 移除文档标签（返回最新标签列表）
@@ -266,6 +268,15 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 
 ### 🏷️ 标签 `/api/tags`
 - `GET /api/tags?q=xxx` — 用户级标签聚合（按使用频次倒排，可选模糊搜索）
+
+### 📏 评测用例 `/api/eval`（FEAT-018）
+- `GET    /api/eval/cases` — 列出当前用户的评测用例（可选 `?enabled=true/false`）
+- `POST   /api/eval/cases` — 手动新建用例（query 必填，纯空白 422）
+- `POST   /api/eval/cases/from-message` — 把 assistant 消息转为用例（query=前置 user 提问、chunk_ids=message_sources 按 rank；部分唯一索引幂等，重复转换返回 200 + `created:false`；409=无前置提问）
+- `PATCH  /api/eval/cases/{id}` — 部分更新（query/expected_*/difficulty/tags/enabled）
+- `DELETE /api/eval/cases/{id}` — 删除用例
+
+> runner 侧：`python -m eval.runner --user-id 1` 默认合并 `eval_cases`（db 用例在同 query 上优先，被弃文件用例计入 `skipped_duplicate_file_cases`）；`--no-db` 关闭合并。
 
 ### 🕒 时间线 `/api/timeline`
 - `GET /api/timeline` — 文档月度分布 + 近期文档 + 实体首现时间线
@@ -455,6 +466,11 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 | `RERANK_MODEL` | Rerank 模型 | `Qwen/Qwen3-Reranker-8B` | 否 |
 | `CORS_ALLOWED_ORIGINS` | 允许的 CORS 来源（逗号分隔） | localhost 开发地址 | 否 |
 | `MAX_REQUEST_BODY` | 全局请求体大小上限（字节） | `15728640`（15MB） | 否 |
+| `URL_ALLOWED_SCHEMES` | URL 摄取允许的协议（逗号分隔，FEAT-019） | `http,https` | 否 |
+| `URL_FETCH_TIMEOUT_SECONDS` / `URL_FETCH_CONNECT_TIMEOUT` | URL 抓取总/连接超时（秒） | `30` / `10` | 否 |
+| `URL_FETCH_MAX_BYTES` | URL 抓取响应体上限（字节，超限流式中断） | `5242880`（5MB） | 否 |
+| `URL_FETCH_MAX_REDIRECTS` | URL 手动重定向跳数上限（逐跳复检 SSRF） | `5` | 否 |
+| `URL_FETCH_USER_AGENT` | URL 抓取 User-Agent | `NC-KG/1.0 (knowledge-ingest)` | 否 |
 | `ENABLE_INTENT_ROUTING` | 启用查询意图路由（闲聊/拒答绕过检索） | `True` | 否 |
 | `INTENT_CLASSIFY_TIMEOUT` | 意图分类超时（秒） | `3.0` | 否 |
 | `GRAPH_RAG_MODE` | 图谱 RAG 模式（auto/on/off） | `auto` | 否 |
@@ -505,6 +521,7 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 | `/timeline` | `TimelinePage.vue` | 时间线 |
 | `/chat` | `ChatPage.vue` | RAG 对话 |
 | `/search` | `SearchPage.vue` | 语义检索 |
+| `/eval` | `EvalCasesPage.vue` | 评测用例管理（FEAT-018） |
 
 > 除 `/login` 外所有路由均需要登录，由 `router/index.js` 的 `beforeEach` 守卫统一拦截。
 
@@ -519,7 +536,7 @@ PDF/Word/TXT/MD → anydoc → Markdown → 层级解析 → 语义切块
 ### 🧪 测试
 
 ```bash
-# 全量测试（271 项；无需真实密钥，conftest 注入临时 JWT_SECRET 与隔离 SQLite）
+# 全量测试（无需真实密钥，conftest 注入临时 JWT_SECRET 与隔离 SQLite）
 cd backend
 ../.venv/Scripts/python.exe -m pytest tests/ -q
 
@@ -613,6 +630,8 @@ pydantic==2.13.4
 pydantic-settings==2.11.0
 mcp==1.29.0
 firecrawl-anydoc==0.2.4
+readability-lxml==0.9
+html2text==2025.4.15
 jieba==0.42.1
 rank-bm25==0.2.2
 python-dotenv==1.0.0
