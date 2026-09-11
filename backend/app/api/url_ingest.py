@@ -14,6 +14,10 @@ Stored shape differences vs. a file upload:
     so these documents cannot be reprocessed — reprocess answers 409).
   * PDF / text sources: bytes land in UPLOAD_DIR like an upload, so the
     regular reprocess path works for them.
+
+FEAT-022 also lives here: POST /ingest-text (pasted markdown/text) is the
+third ingest channel and mirrors the same pipeline; it persists the cleaned
+markdown as UPLOAD_DIR/{doc_id}.md, so reprocess works for it too.
 """
 import asyncio
 import logging
@@ -23,7 +27,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.auth import get_current_user
 from app.api.documents import process_document_background
@@ -53,6 +57,10 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # quota far faster than a chat loop does.
 url_ingest_limiter = SlidingWindowLimiter(max_calls=10, window_seconds=60)
 
+# FEAT-022: separate instance on purpose — URL and paste ingests are both
+# billable pipelines, and mixing them shares (not splits) the 10/min budget.
+text_ingest_limiter = SlidingWindowLimiter(max_calls=10, window_seconds=60)
+
 
 class UrlIngestRequest(BaseModel):
     """Body for POST /api/documents/ingest-url."""
@@ -63,6 +71,26 @@ class UrlIngestRequest(BaseModel):
         max_length=2048,
         description="Absolute http(s) URL of the page or document to ingest",
     )
+
+
+class TextIngestRequest(BaseModel):
+    """Body for POST /api/documents/ingest-text (FEAT-022).
+
+    The size cap is enforced in the handler against
+    ``TEXT_INGEST_MAX_CHARS`` (a pydantic Field bound cannot read settings at
+    class-definition time, and an import-time read would defeat the test
+    suite's ``get_settings.cache_clear()``).
+    """
+
+    title: Optional[str] = Field(None, max_length=200)
+    content: str = Field(..., min_length=1, description="Markdown or plain text body")
+
+    @field_validator("content")
+    @classmethod
+    def _content_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("content must contain non-whitespace characters")
+        return value
 
 
 def _remove_quietly(path: Optional[str]) -> None:
@@ -185,6 +213,84 @@ async def ingest_url(
         ) as cursor:
             doc = await cursor.fetchone()
 
+    background_tasks.add_task(
+        process_document_background, doc_id, user_id, markdown_content, title
+    )
+    return dict(doc)
+
+
+@router.post(
+    "/ingest-text",
+    status_code=status.HTTP_201_CREATED,
+    response_model=DocumentResponse,
+)
+async def ingest_text(
+    body: TextIngestRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """Ingest pasted markdown/text through the standard pipeline (FEAT-022).
+
+    422 for blank or oversized content, 500 when the document row cannot be
+    written. The cleaned markdown is persisted as ``UPLOAD_DIR/{doc_id}.md``
+    and dispatched to the same background pipeline as an upload — so, unlike
+    URL-HTML documents, the FEAT-017 reprocess flow works here.
+    """
+    settings = get_settings()
+    user_id = current_user["id"]
+    enforce_rate_limit(text_ingest_limiter, f"text-ingest:{user_id}")
+
+    if len(body.content) > settings.TEXT_INGEST_MAX_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"文本过长，最多 {settings.TEXT_INGEST_MAX_CHARS} 个字符",
+        )
+
+    doc_id = str(uuid.uuid4())
+    markdown_content = clean_markdown(body.content)
+
+    # The [:200] matters: the H1 fallback (extract_title_from_markdown) is
+    # unbounded, while the pydantic cap only bounds an explicit title.
+    title = (body.title or extract_title_from_markdown(markdown_content) or "粘贴文档")
+    title = title.strip()[:200]
+
+    file_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}.md")
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(markdown_content)
+    original_filename = f"{title}.md"
+
+    async with get_db() as db:
+        try:
+            await db.execute(
+                """INSERT INTO documents
+                   (id, user_id, title, file_path, original_filename, file_type, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (doc_id, user_id, title, file_path, original_filename, "md",
+                 DocStatus.PENDING.value),
+            )
+            await db.commit()
+        except Exception as e:
+            # Mirror the upload/ingest-url contract: a failed row write must
+            # not leave an orphan blob on disk.
+            logger.error(
+                "Failed to insert text-ingested document row %s: %s", doc_id, e,
+                exc_info=True,
+            )
+            _remove_quietly(file_path)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save document",
+            )
+        async with db.execute(
+            "SELECT id, title, original_filename, file_type, created_at, status, "
+            "error_message FROM documents WHERE id = ?",
+            (doc_id,),
+        ) as cursor:
+            doc = await cursor.fetchone()
+
+    # The exact string on disk is the exact string the pipeline receives;
+    # reprocess re-runs the idempotent clean_markdown on it, byte-identical.
     background_tasks.add_task(
         process_document_background, doc_id, user_id, markdown_content, title
     )

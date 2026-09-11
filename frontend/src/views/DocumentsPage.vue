@@ -41,6 +41,15 @@
         >
           网页导入
         </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          :icon="ClipboardIcon"
+          @click="showPasteForm = !showPasteForm"
+          title="粘贴文本直接入库"
+        >
+          粘贴入库
+        </Button>
       </template>
     </PageHeader>
 
@@ -49,6 +58,14 @@
     <UrlIngestForm
       v-if="showUrlForm"
       @ingested="onUrlIngested"
+      @error="(msg) => toast.error(msg)"
+    />
+
+    <!-- FEAT-022: paste-text ingestion — content lands as a .md file, so the
+         FEAT-017 reprocess flow works on it. Same progress tracking reuse. -->
+    <PasteTextForm
+      v-if="showPasteForm"
+      @ingested="onPasteTextIngested"
       @error="(msg) => toast.error(msg)"
     />
 
@@ -305,6 +322,7 @@ import { documentApi } from '../api/documents'
 import { tagApi } from '../api/tags'
 import { PageHeader, Button, Tag, LoadingState, ErrorState } from '../components/ui'
 import UrlIngestForm from '../components/documents/UrlIngestForm.vue'
+import PasteTextForm from '../components/documents/PasteTextForm.vue'
 import { useToast } from '../composables/toast'
 import { useConfirm } from '../composables/confirm'
 
@@ -379,6 +397,13 @@ const LinkIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
     h('path', { d: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71' }),
     h('path', { d: 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71' })
+  ])
+}
+// FEAT-022: 粘贴入库入口（lucide clipboard）。
+const ClipboardIcon = {
+  render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+    h('rect', { x: 8, y: 2, width: 8, height: 4, rx: 1 }),
+    h('path', { d: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2' })
   ])
 }
 
@@ -857,6 +882,16 @@ const onUrlIngested = async (docData) => {
   toast.success(`已开始抓取「${docData.title || docData.original_filename}」`)
   startProgressTracking(docData)
   showUrlForm.value = false
+  await loadDocuments()
+}
+
+// FEAT-022: 粘贴文本入库成功 → 同样复用进度弹窗（命名避开全局 onPaste
+// 文件监听，grep 不串）。
+const showPasteForm = ref(false)
+const onPasteTextIngested = async (docData) => {
+  toast.success(`已开始处理「${docData.title || docData.original_filename}」`)
+  startProgressTracking(docData)
+  showPasteForm.value = false
   await loadDocuments()
 }
 

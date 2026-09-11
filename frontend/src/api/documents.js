@@ -24,6 +24,12 @@ export const documentApi = {
   // blocked (SSRF) URL, 502 for fetch failures, 415 for unsupported types.
   ingestUrl: (url) => service.post('/documents/ingest-url', { url }),
 
+  // FEAT-022: paste markdown/text directly; the backend stores it as a .md
+  // file so FEAT-017 reprocess works. 201 + the new pending document row;
+  // 422 for blank/oversized content.
+  ingestText: (title, content) =>
+    service.post('/documents/ingest-text', { title: title || undefined, content }),
+
   // Aggregated "knowledge unit" view: metadata + tags + chunk count +
   // sample chunks + key entities + related documents.
   getDetail: (id) => service.get(`/documents/${id}/detail`),

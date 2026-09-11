@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     URL_FETCH_MAX_REDIRECTS: int = 5
     URL_FETCH_USER_AGENT: str = "NC-KG/1.0 (knowledge-ingest)"
 
+    # Text paste ingestion (FEAT-022): upper bound on a single pasted
+    # markdown/text body (chars). Bounds the row size and the background
+    # pipeline's chunking work. Enforced in the endpoint handler (a pydantic
+    # Field(max_length=) is evaluated at class-definition time and cannot
+    # read settings); MAX_REQUEST_BODY is the byte-level backstop.
+    TEXT_INGEST_MAX_CHARS: int = 200000
+
     # Embedding
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
     EMBEDDING_DIM: int = 1024
