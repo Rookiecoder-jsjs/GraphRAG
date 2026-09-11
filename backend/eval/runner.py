@@ -421,6 +421,18 @@ def _build_argparser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the full JSON report to stdout.",
     )
+    p.add_argument(
+        "--save",
+        action="store_true",
+        help="Record the run summary into the eval_runs table (FEAT-021), "
+             "viewable on /eval/runs. Independent of --no-db: --no-db only "
+             "skips the eval_cases merge.",
+    )
+    p.add_argument(
+        "--label",
+        default="",
+        help="Optional label for the saved run (e.g. 'after-rewrite-v2').",
+    )
     return p
 
 
@@ -461,6 +473,31 @@ async def main_async(argv: Optional[Sequence[str]] = None) -> int:
     )
     if skipped_duplicate_file_cases:
         report["summary"]["skipped_duplicate_file_cases"] = skipped_duplicate_file_cases
+
+    # FEAT-021: persist the aggregate summary before --json mutates the case
+    # rows, so what lands in eval_runs is the canonical report. Best-effort:
+    # a save failure warns on stderr and never fails the run.
+    if args.save:
+        from .db_cases import resolve_db_path
+        from .db_runs import save_run
+
+        saved = save_run(
+            resolve_db_path(),
+            args.user_id,
+            label=args.label,
+            mode="no-llm" if args.no_llm else "llm",
+            config={
+                "use_graph_rag": args.use_graph_rag,
+                "k_values": list(args.k_values),
+                "gold_dir": args.gold_dir.name,
+            },
+            summary=report["summary"],
+            total_cases=len(report["cases"]),
+        )
+        if saved is None:
+            print("[warn] failed to save run to eval_runs", file=sys.stderr)
+        else:
+            print(f"[saved] eval run #{saved}", file=sys.stderr)
 
     if args.json:
         # Strip the `retrieved` list from the per-case rows to keep the

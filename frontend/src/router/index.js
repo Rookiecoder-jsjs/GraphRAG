@@ -8,6 +8,7 @@ const GraphPage = () => import('../views/GraphPage.vue')
 const ChatPage = () => import('../views/ChatPage.vue')
 const ConversationHistoryPage = () => import('../views/ConversationHistoryPage.vue')
 const EvalCasesPage = () => import('../views/EvalCasesPage.vue')
+const EvalRunsPage = () => import('../views/EvalRunsPage.vue')
 const SearchPage = () => import('../views/SearchPage.vue')
 const TimelinePage = () => import('../views/TimelinePage.vue')
 const DashboardPage = () => import('../views/DashboardPage.vue')
@@ -87,6 +88,13 @@ const routes = [
         path: 'eval',
         name: 'EvalCases',
         component: EvalCasesPage
+      },
+      {
+        // FEAT-021: eval run history/trend page (literal path so it never
+        // collides under /eval).
+        path: 'eval/runs',
+        name: 'EvalRuns',
+        component: EvalRunsPage
       },
       {
         path: 'search',

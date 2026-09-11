@@ -322,6 +322,30 @@ async def init_db():
                 ON eval_cases (source_message_id) WHERE source_message_id IS NOT NULL
         """)
 
+        # Evaluation run history (FEAT-021): one row per `eval.runner --save`
+        # run. The aggregate summary dict is stored as JSON TEXT (same pattern
+        # as eval_cases' JSON columns, parsed at the API layer); per-case rows
+        # are deliberately NOT persisted — drill-down stays via `--json`
+        # stdout. This is the evidence chain behind 军规② (prompt changes
+        # need eval numbers).
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS eval_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                mode TEXT NOT NULL DEFAULT '',
+                config TEXT NOT NULL DEFAULT '{}',
+                summary TEXT NOT NULL DEFAULT '{}',
+                total_cases INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_eval_runs_user
+                ON eval_runs (user_id, id)
+        """)
+
         # Apply incremental SQL migrations (tracks version in schema_version).
         await _run_migrations(db)
 

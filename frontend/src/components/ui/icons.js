@@ -129,6 +129,12 @@ export const TrashIcon = make(
   p('line', { x1: '14', y1: '11', x2: '14', y2: '17' })
 )
 
+// FEAT-021: 评测报告趋势（trending-up）。
+export const TrendingUpIcon = make(
+  p('polyline', { points: '22 7 13.5 15.5 8.5 10.5 2 17' }),
+  p('polyline', { points: '16 7 22 7 22 13' })
+)
+
 // 品牌 Logo（知识图谱六边形）
 export const LogoIcon = make(
   p('polygon', { points: '12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2' }),

@@ -22,5 +22,11 @@ export const evalApi = {
   // 部分更新（只传要改的字段）。
   updateCase: (id, patch) => service.patch(`/eval/cases/${id}`, patch),
 
-  deleteCase: (id) => service.delete(`/eval/cases/${id}`)
+  deleteCase: (id) => service.delete(`/eval/cases/${id}`),
+
+  // FEAT-021: 评测运行历史（eval.runner --save 写入）。每项：
+  // { id, label, mode, config{}, summary{}, total_cases, created_at }，
+  // 按 id 倒序（最新在前）。
+  listRuns: (limit) =>
+    service.get('/eval/runs', { params: limit ? { limit } : {} })
 }

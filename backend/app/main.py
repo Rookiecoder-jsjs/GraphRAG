@@ -18,6 +18,7 @@ from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.api import auth, documents, search, graph, chat, progress, tags, timeline, dashboard
 from app.api import eval as eval_api
+from app.api import eval_runs
 from app.api import url_ingest
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,9 @@ def create_app() -> FastAPI:
     app.include_router(timeline.router)
     app.include_router(dashboard.router)
     app.include_router(eval_api.router)
+    # FEAT-021: run history shares the /api/eval prefix (no path overlap
+    # with /cases*); registered adjacent for readability.
+    app.include_router(eval_runs.router)
 
     @app.get("/")
     async def root():
