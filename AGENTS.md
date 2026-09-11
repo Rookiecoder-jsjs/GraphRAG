@@ -83,8 +83,9 @@
 | FEAT-022 | 粘贴文本入库 | DocumentsPage.vue（粘贴入库区） | `POST /api/documents/ingest-text` | documents | ⚠️ 与 FEAT-002/003 共享页面与表 |
 | FEAT-023 | 对话导出 Markdown | ChatPage.vue（导出按钮） | （无新 API） | （无新表） | ⚠️ 纯前端导出，豁免三件套（见 FEAT-023 文档） |
 | FEAT-024 | 检索调试台 | SearchDebugPage.vue | `POST /api/search/debug`（+ SearchRequest.use_graph_rag） | （无新表） | ⚠️ 只读诊断豁免数据表；与 FEAT-013/010 共享检索管线（见 FEAT-024 文档） |
+| FEAT-025 | 实体别名与查重 | EntityDuplicatesPage.vue + EntityDetailPage.vue（别名声） | `/api/graph` 前缀 entities/duplicates、aliases/delete 等（merge 自动记别名） | entity_aliases | ⚠️ 涉及多个存量修改点：api/graph.py（merge/delete/detail）、documents.py（摄取 hook）、retriever.py（检索解析）——见 FEAT-025 文档 |
 
-> 数据表完整清单（13 张）：`users`、`documents`、`chunks`、`document_tags`、`conversations`、`messages`、`message_feedback`、`message_sources`、`progress_history`、`embedding_cache`、`eval_cases`、`eval_runs`、`schema_version`（`sqlite_sequence` 为 SQLite 内部表）。
+> 数据表完整清单（14 张）：`users`、`documents`、`chunks`、`document_tags`、`conversations`、`messages`、`message_feedback`、`message_sources`、`progress_history`、`embedding_cache`、`eval_cases`、`eval_runs`、`entity_aliases`、`schema_version`（`sqlite_sequence` 为 SQLite 内部表）。
 
 ### 2.3 以功能条目为核心检索
 

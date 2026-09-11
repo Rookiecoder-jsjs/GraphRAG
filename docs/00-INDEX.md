@@ -30,6 +30,7 @@
 | [FEAT-022](features/FEAT-022.md) | 粘贴文本入库 | 已完成 |
 | [FEAT-023](features/FEAT-023.md) | 对话导出 Markdown | 已完成 |
 | [FEAT-024](features/FEAT-024.md) | 检索调试台 | 已完成 |
+| [FEAT-025](features/FEAT-025.md) | 实体别名与查重 | 已完成 |
 
 ## 通用指南（GUIDE）
 

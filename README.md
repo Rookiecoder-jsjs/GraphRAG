@@ -243,7 +243,8 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `DELETE /api/documents/{id}/tags/{tag:path}` — 移除文档标签（返回最新标签列表）
 
 ### 🔍 检索 `/api/search`
-- `POST /api/search` — 语义检索（向量 + BM25 + Rerank + 图谱关联）
+- `POST /api/search` — 语义检索（向量 + BM25 + Rerank + 图谱关联；可选 `use_graph_rag` 显式开图谱通道）
+- `POST /api/search/debug` — 检索管线调试（FEAT-024：绕过缓存跑全价管线，返回改写/通道召回/RRF/重排/扩展各阶段快照 + 耗时；页面 `/search/debug`）
 
 ### 🕸️ 图谱 `/api/graph`
 - `GET    /api/graph/entities?query=xxx` — 实体名称模糊搜索
@@ -252,7 +253,10 @@ Vite 已配置 `/api` 代理到 `http://localhost:8001`。
 - `GET    /api/graph/entities/{name:path}/detail` — 实体详情（实体 + 统计 + 文档 + 关联实体 + 示例 chunk）
 - `PATCH  /api/graph/entities/{name:path}` — 更新实体的类型 / 描述
 - `DELETE /api/graph/entities/{name:path}` — 删除实体（清理 MENTIONS / RELATES_TO）
-- `POST   /api/graph/entities/merge` — 合并实体（`{source, target}`，source 被删除并重新指向 target）
+- `POST   /api/graph/entities/merge` — 合并实体（`{source, target}`，source 被删除并重新指向 target；自动把 source 记为 target 的别名，防旧名复活分裂）
+- `GET    /api/graph/entities/duplicates` — 疑似重复实体建议（FEAT-025：case/punct 变体分组，仅建议；页面 `/graph/duplicates`）
+- `GET    /api/graph/entities/{name:path}/aliases` — 列出实体吸收的别名
+- `POST   /api/graph/aliases/delete` — 解绑别名（`{alias}`；不影响已合并的图）
 
 ### 💬 对话 `/api/chat`
 - `POST   /api/chat` — 发送消息（非流式 RAG 问答，支持 `use_graph_rag` / `compare_mode` / `enable_thinking`；意图路由自动判定是否检索）
