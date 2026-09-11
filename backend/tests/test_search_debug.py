@@ -73,8 +73,10 @@ class _FakeChroma:
         self._vector = vector_hits or []
         self._graph = graph_hits or []
         self._neighbours = neighbours or []
+        self.search_filters = []
 
-    def search(self, embedding, user_id, top_k):
+    def search(self, embedding, user_id, top_k, document_ids=None):
+        self.search_filters.append(document_ids)
         return list(self._vector)
 
     def get_chunks_by_ids(self, ids, user_id):
@@ -87,11 +89,13 @@ class _FakeChroma:
 class _FakeBM25:
     def __init__(self, hits=None):
         self._hits = hits or []
+        self.search_filters = []
 
     def has_index(self, user_id):
         return True
 
-    def search(self, query, user_id, top_k):
+    def search(self, query, user_id, top_k, document_ids=None):
+        self.search_filters.append(document_ids)
         return list(self._hits)
 
 
@@ -145,11 +149,13 @@ def _install(monkeypatch, *, vector_hits=None, bm25_hits=None, graph_hits=None,
 
     monkeypatch.setattr(r, "get_query_processor", _qp)
     monkeypatch.setattr(r, "get_embedding_service", _emb)
-    monkeypatch.setattr(r, "get_chroma_client",
-                        lambda: _FakeChroma(vector_hits, graph_hits, neighbours))
-    monkeypatch.setattr(r, "get_bm25_service", lambda: _FakeBM25(bm25_hits))
+    chroma = _FakeChroma(vector_hits, graph_hits, neighbours)
+    bm25 = _FakeBM25(bm25_hits)
+    monkeypatch.setattr(r, "get_chroma_client", lambda: chroma)
+    monkeypatch.setattr(r, "get_bm25_service", lambda: bm25)
     monkeypatch.setattr(r, "get_neo4j_client", _n4j)
     monkeypatch.setattr(r, "get_rerank_service", _rr)
+    return chroma, bm25
 
 
 # =========================================================================
@@ -206,9 +212,45 @@ def test_retrieve_debug_returns_all_stages(monkeypatch):
     assert dbg["diagnostics"]["degraded"] == []
     assert dbg["config"]["use_graph_rag"] is True
     assert dbg["config"]["recall_k"] > 0
+    assert dbg["config"]["document_filter"] is None
 
     # The debug data rides ON TOP of the regular result, which stays intact.
     assert result["chunks"] and all(c.get("chunk_id") for c in result["chunks"])
+
+
+def test_retrieve_threads_document_filter(monkeypatch):
+    """FEAT-026: a document-scoped retrieve reaches BOTH recall channels as
+    a filter, the graph channel drops out-of-scope chunks by metadata, and
+    the debug config records the effective scope."""
+    graph_hits = [
+        {"chunk_id": "c3", "content": "图谱命中内容",
+         "metadata": {"document_id": "doc-1"}},
+        {"chunk_id": "c4", "content": "范围外图谱命中",
+         "metadata": {"document_id": "doc-9"}},
+    ]
+    chroma, bm25 = _install(
+        monkeypatch,
+        vector_hits=[{"chunk_id": "c1", "content": "向量命中内容",
+                      "metadata": {"document_id": "doc-1"}, "distance": 0.1}],
+        graph_hits=graph_hits,
+    )
+    import app.services.retriever as r
+
+    result = asyncio.run(r.retrieve(
+        LONG_Q, 1, top_k=5, use_graph_rag=True, debug=True,
+        document_ids=["doc-1"],
+    ))
+
+    assert chroma.search_filters == [["doc-1"], ["doc-1"], ["doc-1"]]  # rewritten + 2 variants
+    assert bm25.search_filters == [["doc-1"], ["doc-1"], ["doc-1"]]
+
+    dbg = result["debug"]
+    assert dbg["config"]["document_filter"] == ["doc-1"]
+    # Out-of-scope graph hit (doc-9) never reaches fusion.
+    graph_hits_dbg = next(c for c in dbg["channels"] if c["label"] == "graph")
+    assert {h["chunk_id"] for h in graph_hits_dbg["hits"]} == {"c3"}
+    expanded_ids = {e["chunk_id"] for e in dbg["expanded"]}
+    assert "c4" not in expanded_ids
 
 
 def test_retrieve_no_debug_omits_key(monkeypatch):
@@ -241,7 +283,7 @@ def test_debug_bypasses_cache_read(monkeypatch):
         return {"chunks": [{"chunk_id": "fresh"}], "entities": [], "relations": []}
 
     monkeypatch.setattr(r, "_retrieve_uncached", fake_uncached)
-    key = (1, hashlib.sha1(b"q|").hexdigest(), 5, False)
+    key = (1, hashlib.sha1(b"q|").hexdigest(), 5, False, None)
     r._cache.set(key, {"chunks": ["cached"], "entities": [], "relations": []})
 
     res = asyncio.run(r.retrieve("q", 1, top_k=5, debug=True))

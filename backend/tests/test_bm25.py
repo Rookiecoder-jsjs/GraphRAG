@@ -138,3 +138,58 @@ class TestIndexLifecycle:
 
         indexed = set(svc._user_indexes[1]["doc_ids"])
         assert indexed == {"new_1"}
+
+
+class TestDocumentFilter:
+    """FEAT-026: the index tracks each chunk's document_id so a search can
+    be scoped to a document subset (mask BEFORE the top-k cut, never after).
+    All three build entry points must populate the map consistently."""
+
+    def test_build_user_index_records_chunk_doc(self):
+        svc = BM25Service()
+        svc.build_user_index(
+            1,
+            ["知识图谱 系统", "另一个 文档", "机器学习 研究"],
+            ["c1", "c2", "c3"],
+            document_ids=["d1", "d1", "d2"],
+        )
+        assert svc._user_indexes[1]["chunk_doc"] == {
+            "c1": "d1", "c2": "d1", "c3": "d2",
+        }
+
+    def test_add_to_index_extends_chunk_doc(self):
+        svc = BM25Service()
+        svc.build_user_index(1, ["知识图谱 系统", "机器学习 研究"], ["c1", "c3"],
+                             document_ids=["d1", "d2"])
+        svc.add_to_index(1, ["另一个 文档"], ["c2"], document_ids=["d1"])
+        assert svc._user_indexes[1]["chunk_doc"]["c2"] == "d1"
+
+    def test_remove_from_index_drops_chunk_doc_entries(self):
+        svc = BM25Service()
+        svc.build_user_index(1, ["知识图谱 系统", "机器学习 研究"], ["c1", "c3"],
+                             document_ids=["d1", "d2"])
+        svc.remove_from_index(1, {"c1"})
+        assert svc._user_indexes[1]["chunk_doc"] == {"c3": "d2"}
+
+    def test_search_masks_by_document_before_top_k(self):
+        """d1 owns the only "知识" hit; scoping to d2 must return NOTHING —
+        not d1's chunk squeezed in because the unfiltered top-k cut first."""
+        svc = BM25Service()
+        svc.build_user_index(
+            1,
+            ["知识图谱 系统", "另一个 文档", "机器学习 研究"],
+            ["c1", "c2", "c3"],
+            document_ids=["d1", "d2", "d2"],
+        )
+        assert svc.search("知识", 1, top_k=5, document_ids=["d1"]) != []
+        assert svc.search("知识", 1, top_k=5, document_ids=["d2"]) == []
+        assert {h["id"] for h in svc.search("文档", 1, top_k=5, document_ids=["d2"])} == {"c2"}
+        # No filter → unchanged behaviour.
+        assert svc.search("知识", 1, top_k=5) != []
+
+    def test_search_with_filter_on_mapless_index_returns_empty(self):
+        """A filter must never widen: an index built without document
+        provenance cannot prove any hit is in scope → nothing."""
+        svc = BM25Service()
+        svc.build_user_index(1, ["知识图谱 系统", "另一个 文档"], ["c1", "c2"])
+        assert svc.search("知识", 1, top_k=5, document_ids=["d1"]) == []

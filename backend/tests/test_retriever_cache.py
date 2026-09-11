@@ -71,14 +71,22 @@ class TestRetrieveWrapperSplit:
         assert calls[0]["query"] == "q" and calls[0]["user_id"] == 1
 
     @staticmethod
-    def _expected_key(user_id: int, query: str, top_k: int) -> tuple:
+    def _expected_key(user_id: int, query: str, top_k: int,
+                      document_ids=None) -> tuple:
         # Mirror retrieve()'s key derivation: sha1("query|history") with no
-        # history, and use_graph_rag forced True unless GRAPH_RAG_MODE=off
-        # (the default "auto" mode resolves to True).
+        # history, use_graph_rag forced True unless GRAPH_RAG_MODE=off (the
+        # default "auto" mode resolves to True), and the FEAT-026 5th
+        # element — None when unfiltered, else sha1 of the sorted id set.
         digest = hashlib.sha1(f"{query}|".encode()).hexdigest()
         from app.config import get_settings
         graph = get_settings().GRAPH_RAG_MODE.lower() != "off"
-        return (user_id, digest, top_k, graph)
+        if document_ids is None:
+            filt = None
+        else:
+            filt = hashlib.sha1(
+                ",".join(sorted(set(document_ids))).encode("utf-8")
+            ).hexdigest()
+        return (user_id, digest, top_k, graph, filt)
 
     def test_hit_never_reaches_uncached(self, monkeypatch):
         retriever._cache.set(self._expected_key(1, "q", 5), {"chunks": ["hit"]})
@@ -99,3 +107,32 @@ class TestRetrieveWrapperSplit:
 
         monkeypatch.setattr(retriever, "_retrieve_uncached", boom)
         assert asyncio.run(retriever.retrieve("q", 1, top_k=10))["chunks"] == ["b"]
+
+    def test_hit_key_includes_document_filter(self, monkeypatch):
+        """FEAT-026: a scoped query must hit the scoped entry, and the
+        unfiltered entry must not leak into it (and vice versa)."""
+        retriever._cache.set(self._expected_key(1, "q", 5), {"chunks": ["all"]})
+        retriever._cache.set(
+            self._expected_key(1, "q", 5, document_ids=["d1"]), {"chunks": ["scoped"]}
+        )
+
+        def boom(**kwargs):
+            raise AssertionError("cache hit must not run the pipeline")
+
+        monkeypatch.setattr(retriever, "_retrieve_uncached", boom)
+        got = asyncio.run(retriever.retrieve("q", 1, document_ids=["d1"]))
+        assert got["chunks"] == ["scoped"]
+        got2 = asyncio.run(retriever.retrieve("q", 1))
+        assert got2["chunks"] == ["all"]
+
+    def test_filter_key_none_vs_empty_never_collide(self):
+        """None (= no filter) and [] (= nothing allowed) are different
+        scopes and must hash to different cache entries — the original
+        design's `""` sentinel made both sha1("") and leaked cross-scope
+        cache hits."""
+        assert self._expected_key(1, "q", 5)[4] is None
+        assert self._expected_key(1, "q", 5, document_ids=[])[4] is not None
+        assert (
+            self._expected_key(1, "q", 5, document_ids=[])[4]
+            != self._expected_key(1, "q", 5, document_ids=["d1"])[4]
+        )
