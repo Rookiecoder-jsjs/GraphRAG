@@ -255,6 +255,23 @@ def test_find_duplicate_groups_punct_variant():
     assert groups[0]["members"][0]["name"] in ("Open AI", "Open-AI", "OpenAI")
 
 
+def test_find_duplicate_groups_mixed_case_and_punct():
+    """A case pair PLUS a punctuation variant must be reported as one whole
+    punct group (the case pair collapses to one lower in punct space, so it
+    cannot mask the third member)."""
+    from app.services.entity_alias import find_duplicate_groups
+
+    groups = find_duplicate_groups([
+        _row("OpenAI", "ORGANIZATION", 5),
+        _row("openai", "ORGANIZATION", 3),
+        _row("Open AI", "ORGANIZATION", 2),
+    ])
+    assert len(groups) == 1
+    g = groups[0]
+    assert g["reason"] == "punct"
+    assert {m["name"] for m in g["members"]} == {"OpenAI", "openai", "Open AI"}
+
+
 def test_find_duplicate_groups_singletons_and_sort():
     from app.services.entity_alias import find_duplicate_groups
 

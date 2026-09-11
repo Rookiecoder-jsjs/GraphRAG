@@ -22,7 +22,11 @@ from app.services.neo4j_client import get_neo4j_client
 from app.services.chroma_client import get_chroma_client
 from app.services.bm25 import get_bm25_service
 from app.services.ingest_gate import get_ingest_gate
-from app.services.entity_alias import apply_aliases_to_extraction, load_user_alias_map
+from app.services.entity_alias import (
+    apply_aliases_to_extraction,
+    load_user_alias_map,
+    prune_dangling_aliases,
+)
 from app.services.entity_extractor import canonicalize_extraction_results, get_entity_extractor
 from app.services.progress_tracker import get_progress_emitter
 from app.services.doc_status import (
@@ -290,6 +294,14 @@ async def _cleanup_partial_document(doc_id: str, user_id: int) -> None:
         await neo4j.delete_document(doc_id, user_id)
     except Exception as e:
         logger.warning("cleanup: Neo4j delete failed for doc %s: %s", doc_id, e)
+    # FEAT-025: orphaned entities were deleted INSIDE delete_document,
+    # bypassing the delete-entity handler's alias cleanup — prune aliases
+    # whose canonical no longer exists, or retrievals mentioning them
+    # silently miss the graph channel. Best-effort.
+    try:
+        await prune_dangling_aliases(user_id)
+    except Exception as e:
+        logger.warning("cleanup: dangling-alias prune failed for user %d: %s", user_id, e)
     # SQLite chunks + the matching in-memory BM25 index entries.
     try:
         chunk_ids: set = set()
@@ -1080,6 +1092,12 @@ async def delete_document(
     except Exception as e:
         logger.error("delete_document: Neo4j purge failed for %s: %s", doc_id, e, exc_info=True)
         store_errors.append("neo4j")
+    # FEAT-025: 同 _cleanup_partial_document——孤儿实体在 delete_document
+    # 内部被删，绕过了 handler 的别名清理；best-effort 剪掉悬挂别名。
+    try:
+        await prune_dangling_aliases(user_id)
+    except Exception as e:
+        logger.warning("delete_document: dangling-alias prune failed for user %d: %s", user_id, e)
 
     # Delete from SQLite. Capture the chunk_ids BEFORE deleting them so the
     # in-memory BM25 index can be purged too — otherwise the deleted

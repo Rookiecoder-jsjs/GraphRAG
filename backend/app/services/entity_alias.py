@@ -184,6 +184,32 @@ async def load_user_alias_map(user_id: int) -> Dict[str, str]:
         return {}
 
 
+async def prune_dangling_aliases(user_id: int) -> int:
+    """Delete alias rows whose chain-resolved canonical no longer exists as
+    a graph node.
+
+    Needed because a document deletion can orphan entities INSIDE
+    neo4j.delete_document (bypassing the delete-entity handler's alias
+    cleanup), leaving aliases that resolve to nothing — every retrieval
+    mentioning those names would silently miss the graph channel.
+    Best-effort by construction (delete_alias swallows SQL errors).
+    """
+    from app.services.neo4j_client import get_neo4j_client
+
+    mapping = await load_user_alias_map(user_id)
+    if not mapping:
+        return 0
+    neo4j = await get_neo4j_client()
+    rows = await neo4j.get_user_entities_with_mentions(user_id=user_id, limit=10000)
+    existing = {(r.get("name") or "").strip().lower() for r in rows}
+    removed = 0
+    for alias in list(mapping.keys()):
+        final = _key(_resolve_name(alias, mapping))
+        if final and final not in existing:
+            removed += await delete_alias(user_id, alias)
+    return removed
+
+
 async def resolve_names(names: Sequence[str], user_id: int) -> List[str]:
     """Resolve entity names through the user's alias map.
 
@@ -313,18 +339,32 @@ def find_duplicate_groups(
             "key": key, "reason": "case", "members": [by_name[n] for n in names],
         })
 
-    # Rule 2: punctuation/space variants across distinct spellings.
+    # Rule 2: punctuation/space variants across distinct spellings. A pure
+    # case pair collapses to ONE lower in punct space (set size 1 → skipped),
+    # so no case-group exclusion is needed — and a mixed set (case pair plus
+    # a punct variant, e.g. OpenAI/openai/Open AI) is correctly reported as
+    # one whole group instead of losing the third member.
     by_punct: Dict[str, List[str]] = {}
     for m in members:
-        by_punct.setdefault(_punct_key(m["name"]), []).append(m["name"].lower())
-    for key, lowers in by_punct.items():
-        distinct = [low for low in sorted(set(lowers)) if low not in case_keys]
-        if len(distinct) < 2:
+        by_punct.setdefault(_punct_key(m["name"]), []).append(m["name"])
+    for key, names in by_punct.items():
+        if len({n.lower() for n in names}) < 2:
             continue
-        names = sorted({m["name"] for m in members if m["name"].lower() in distinct})
         groups.append({
-            "key": key, "reason": "punct", "members": [by_name[n] for n in names],
+            "key": key, "reason": "punct",
+            "members": [by_name[n] for n in sorted(set(names))],
         })
+
+    # A case group fully contained in a punct group is redundant — the punct
+    # group already proposes that merge (and more). Keep the larger view.
+    punct_sets = [
+        {m["name"] for m in g["members"]} for g in groups if g["reason"] == "punct"
+    ]
+    groups = [
+        g for g in groups
+        if g["reason"] != "case"
+        or not any({m["name"] for m in g["members"]} <= ps for ps in punct_sets)
+    ]
 
     groups.sort(key=lambda g: -sum(m["mention_count"] for m in g["members"]))
     return groups[:100]

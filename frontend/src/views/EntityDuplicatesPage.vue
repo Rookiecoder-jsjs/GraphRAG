@@ -142,7 +142,12 @@ const mergeGroup = async (g) => {
   const others = g.members.map(m => m.name).filter(n => n !== keep)
   try {
     for (const source of others) {
-      await graphApi.mergeEntities(source, keep)
+      try {
+        await graphApi.mergeEntities(source, keep)
+      } catch (e) {
+        // 部分失败后重试：已被并掉的源再并会 404——视为已完成
+        if (e?.response?.status !== 404) throw e
+      }
     }
     toast.success(`已合并 ${others.length} 个实体到「${keep}」`)
     groups.value = groups.value.filter(x => x.key !== g.key)
