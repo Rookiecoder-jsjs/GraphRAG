@@ -322,7 +322,7 @@ const XIcon = {
 }
 
 const router = useRouter()
-const { toast } = useToast()
+const toast = useToast()
 
 const ENTITY_TYPE_OPTIONS = ['PERSON', 'ORGANIZATION', 'LOCATION', 'CONCEPT', 'EVENT', 'TIME', 'OTHER']
 

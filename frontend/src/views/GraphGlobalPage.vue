@@ -97,7 +97,7 @@ const Share2Icon = {
 }
 
 const router = useRouter()
-const { toast } = useToast()
+const toast = useToast()
 
 const communities = ref([])
 const stale = ref(false)

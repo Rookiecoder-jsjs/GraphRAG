@@ -42,7 +42,8 @@ export const documentApi = {
   // Get progress history. This is a normal axios call, so it already sends
   // the Authorization header via the request interceptor — the token must
   // NOT also be appended to the query string, where it would leak into
-  // server/proxy access logs and the browser's Referer. (The SSE progress
-  // stream keeps ?token= only because native EventSource cannot set headers.)
+  // server/proxy access logs and the browser's Referer. (The live progress
+  // stream in DocumentsPage also sends the token via header now — fetch +
+  // the shared SSE parser, not native EventSource.)
   getProgressHistory: (docId) => service.get(`/progress/${docId}/history`)
 }

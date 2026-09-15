@@ -327,6 +327,7 @@ import UrlIngestForm from '../components/documents/UrlIngestForm.vue'
 import PasteTextForm from '../components/documents/PasteTextForm.vue'
 import { useToast } from '../composables/toast'
 import { useConfirm } from '../composables/confirm'
+import { createSseParser } from '../utils/sse'
 
 const DocumentIcon = {
   render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
@@ -410,7 +411,7 @@ const ClipboardIcon = {
 }
 
 const router = useRouter()
-const { toast } = useToast()
+const toast = useToast()
 const { confirm } = useConfirm()
 
 const documents = ref([])
@@ -470,7 +471,7 @@ const processingDoc = ref(null)
 const processingComplete = ref(false)
 const processingError = ref(null)
 const processingStats = ref({ entityCount: 0, relationCount: 0, duration: '' })
-let eventSource = null
+let progressAbort = null
 
 const stages = reactive([
   { id: 'document_created', name: '创建文档', order: 1, active: false, completed: false, error: false, message: '', percent: 0, entities: [], relations_sample: [] },
@@ -714,18 +715,47 @@ const handleProgressError = () => {
 }
 
 const closeProgressStream = () => {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
+  if (progressAbort) {
+    progressAbort.abort()
+    progressAbort = null
   }
 }
 
 const connectProgressStream = (docId) => {
   closeProgressStream()
+  // Fetch + the shared SSE parser instead of native EventSource: the JWT
+  // goes through the Authorization header, never the query string (which
+  // leaked into proxy access logs and the browser's Referer).
   const token = localStorage.getItem('token')
-  eventSource = new EventSource(`/api/progress/${docId}?token=${token}`)
-  eventSource.onmessage = handleProgressEvent
-  eventSource.onerror = handleProgressError
+  const controller = new AbortController()
+  progressAbort = controller
+  const parser = createSseParser((_event, data) => {
+    // The progress endpoint emits default-message frames (data: {...}).
+    handleProgressEvent({ data: JSON.stringify(data) })
+  })
+  fetch(`/api/progress/${docId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok || !res.body) {
+        handleProgressError()
+        return
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        parser.feed(decoder.decode(value, { stream: true }))
+      }
+      parser.flush()
+    })
+    .catch((err) => {
+      if (err?.name === 'AbortError') return
+      console.error('Progress stream failed:', err)
+      handleProgressError()
+    })
 }
 
 const cancelProcessing = () => {

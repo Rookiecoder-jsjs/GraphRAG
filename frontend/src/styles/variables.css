@@ -59,6 +59,10 @@
   --glass-shadow:    var(--shadow);
   --glass-highlight: none;
 
+  /* 兼容别名：--surface 系列（历史组件引用；曾未定义导致背景透明） */
+  --surface:      var(--bg-secondary);   /* 表单卡片表面 */
+  --surface-2:    var(--bg-tertiary);    /* 输入底 / hover 叠层 */
+
   /* 背景 blob（兼容旧引用，迁移后移除） */
   --blob-1: rgba(37, 99, 235, 0.06);
   --blob-2: rgba(249, 115, 22, 0.05);
@@ -140,6 +144,9 @@
   --glass-shadow:    var(--shadow);
   --glass-highlight: none;
 
+  --surface:      var(--bg-secondary);
+  --surface-2:    var(--bg-tertiary);
+
   --blob-1: rgba(59, 130, 246, 0.08);
   --blob-2: rgba(251, 146, 60, 0.06);
   --blob-3: rgba(52, 211, 153, 0.05);
@@ -181,6 +188,7 @@
   /* 圆角：数据密集偏小 */
   --radius-sm:  6px;
   --radius:     8px;
+  --radius-md:  8px;   /* 兼容别名：历史引用 --radius-md（= --radius） */
   --radius-lg:  10px;
   --radius-xl:  14px;
   --radius-2xl: 20px;

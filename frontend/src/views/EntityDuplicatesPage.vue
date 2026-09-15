@@ -93,7 +93,7 @@ const Share2Icon = {
   ])
 }
 
-const { toast } = useToast()
+const toast = useToast()
 
 const groups = ref([])
 const scanned = ref(0)

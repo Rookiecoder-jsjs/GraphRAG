@@ -423,7 +423,7 @@ const XIcon = {
 
 const route = useRoute()
 const router = useRouter()
-const { toast } = useToast()
+const toast = useToast()
 
 // Deep-link from the history-management page: /chat?conversation=<id> loads
 // that conversation on arrival (and on re-activation, e.g. picking a different
@@ -1109,13 +1109,6 @@ const onCitationClick = (event) => {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-}
-.messages-virtual {
-  width: 100%;
-  contain: strict;
-}
-.message-virtual-item {
-  contain: layout style;
 }
 
 .message {
