@@ -414,6 +414,7 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: int = 2000,
         enable_thinking: Optional[bool] = None,
+        truncation_marker: Optional[str] = None,
     ) -> AsyncGenerator[Tuple[str, str], None]:
         """
         Stream a chat completion.
@@ -471,7 +472,9 @@ class LLMService:
 
         while True:
             try:
-                async for item in self._stream_completions(client, url, headers, payload):
+                async for item in self._stream_completions(
+                    client, url, headers, payload, truncation_marker=truncation_marker
+                ):
                     first_frame_emitted = True
                     yield item
                 break  # stream completed normally
@@ -530,6 +533,7 @@ class LLMService:
         url: str,
         headers: Dict[str, str],
         payload: Dict[str, Any],
+        truncation_marker: Optional[str] = None,
     ) -> AsyncGenerator[Tuple[str, str], None]:
         """Open one SSE stream and yield (kind, text) delta tuples.
 
@@ -540,6 +544,7 @@ class LLMService:
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             response.raise_for_status()
 
+            truncated = False
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
                     data_str = line[6:]
@@ -554,6 +559,14 @@ class LLMService:
                         choices = data.get("choices") or []
                         if not choices:
                             continue
+                        # finish_reason arrives on the final delta: "length"
+                        # means the answer hit the max_tokens ceiling and is
+                        # cut off. Mirrors the non-streaming path's marker —
+                        # without it a truncated streamed answer was saved to
+                        # history as if complete and fed back into later
+                        # prompts.
+                        if choices[0].get("finish_reason") == "length":
+                            truncated = True
                         delta = choices[0].get("delta", {})
                         # Qwen hybrid thinking emits the reasoning stream in
                         # `reasoning_content` BEFORE the answer body starts.
@@ -574,6 +587,8 @@ class LLMService:
                             yield ("content", content)
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
+            if truncated and truncation_marker:
+                yield ("truncated", truncation_marker)
 
     async def extract_entities_and_relations_batch(
         self,

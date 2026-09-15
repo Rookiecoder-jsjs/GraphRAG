@@ -25,6 +25,7 @@ from app.services.history import (
 )
 from app.services.llm import (
     _CITATION_INSTRUCTION,
+    _TRUNCATION_MARKER,
     build_rag_system_prompt,
     get_llm_service,
 )
@@ -79,10 +80,6 @@ _MAX_CITATION_CHUNKS = 8
 # actually read the cited passage. The prompt-side cap is separate and
 # lives in `per_chunk_chars` below.
 _SOURCE_CONTENT_CHARS = 2000
-# Typed refusal for queries the intent router classifies as should_reject
-# (opinions / advice / unsafe / out-of-scope). Without this the classified
-# intent produced no behavioural difference - the model free-generated an
-# answer from an empty context, defeating the point of the classification.
 # Typed refusal for queries the intent router classifies as should_reject
 # (opinions / advice / unsafe / out-of-scope). Without this the classified
 # intent produced no behavioural difference - the model free-generated an
@@ -570,12 +567,16 @@ async def _chat_stream_body(
     (``chat_stream``) BEFORE this generator starts, so a foreign conversation
     yields a clean 404 instead of a half-opened SSE stream.
     """
-    # Save user message
+    # Save user message. The row id is kept so a client that disconnects
+    # before ANY answer streams can drop the dangling user turn — otherwise
+    # the next prompt in this conversation starts with an unanswered user
+    # message (see the GeneratorExit handling around the stream loop).
     async with get_db() as db:
-        await db.execute(
+        async with db.execute(
             "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
             (conversation_id, "user", request.message)
-        )
+        ) as cursor:
+            user_message_id = cursor.lastrowid
         await db.commit()
 
     # Fetch the bounded prior-turns window for rewrite + generation.
@@ -734,34 +735,67 @@ async def _chat_stream_body(
     # own SSE event so the client renders them in a separate collapsible
     # block; the first-byte metric below stays anchored to the first
     # "content" chunk so the two modes are directly comparable.
-    async for kind, text in llm_service.chat_complete_stream(
-        messages,
-        enable_thinking=request.enable_thinking,
-        # Same answer budget as the non-streaming path (config-driven), so
-        # both chat paths truncate at the same length.
-        max_tokens=get_settings().RAG_MAX_TOKENS,
-    ):
-        if not text:
-            continue  # defensive: never forward None/empty deltas downstream
-        if kind == "error":
-            # Provider failure: surface a structured terminal error frame.
-            # The error text is never appended to the answer (it used to be
-            # streamed as content, saved to history, and fed back into the
-            # next turn's prompt).
-            stream_error = text
-            yield f"event: error\ndata: {json.dumps({'error': text})}\n\n"
-            break
-        if kind == "thinking":
-            thinking_parts.append(text)
-            yield f"event: thinking\ndata: {json.dumps({'text': text})}\n\n"
-            continue
-        if t_first_byte is None:
-            t_first_byte = time.perf_counter()
-        full_response.append(text)
-        # JSON-encode the chunk: a raw newline in the model output would
-        # otherwise terminate the SSE `data:` field mid-token and corrupt
-        # the frame (dropping/garbling text on the client).
-        yield f"data: {json.dumps({'chunk': text})}\n\n"
+    try:
+        async for kind, text in llm_service.chat_complete_stream(
+            messages,
+            enable_thinking=request.enable_thinking,
+            # Same answer budget as the non-streaming path (config-driven), so
+            # both chat paths truncate at the same length.
+            max_tokens=get_settings().RAG_MAX_TOKENS,
+            # Same truncation marker the non-streaming path appends: a cut-off
+            # streamed answer must never be persisted or shown as complete.
+            truncation_marker=_TRUNCATION_MARKER,
+        ):
+            if not text:
+                continue  # defensive: never forward None/empty deltas downstream
+            if kind == "error":
+                # Provider failure: surface a structured terminal error frame.
+                # The error text is never appended to the answer (it used to be
+                # streamed as content, saved to history, and fed back into the
+                # next turn's prompt).
+                stream_error = text
+                yield f"event: error\ndata: {json.dumps({'error': text})}\n\n"
+                break
+            if kind == "truncated":
+                # Provider hit the max_tokens ceiling. Append the marker to the
+                # answer body (persisted with it) and stream it to the client so
+                # the UI shows the reply as cut off.
+                full_response.append(text)
+                yield f"data: {json.dumps({'chunk': text})}\n\n"
+                continue
+            if kind == "thinking":
+                thinking_parts.append(text)
+                yield f"event: thinking\ndata: {json.dumps({'text': text})}\n\n"
+                continue
+            if t_first_byte is None:
+                t_first_byte = time.perf_counter()
+            full_response.append(text)
+            # JSON-encode the chunk: a raw newline in the model output would
+            # otherwise terminate the SSE `data:` field mid-token and corrupt
+            # the frame (dropping/garbling text on the client).
+            yield f"data: {json.dumps({'chunk': text})}\n\n"
+    except GeneratorExit:
+        # Client disconnected mid-turn. The user message is already on disk.
+        # Persist whatever actually streamed (same semantics as a provider
+        # failure — real content is kept); if NOTHING streamed and no error
+        # occurred, drop the dangling user row so the next prompt never
+        # starts with an unanswered user turn. Never yield from here.
+        partial = "".join(full_response)
+        try:
+            if partial:
+                await _save_assistant_message(
+                    conversation_id, partial, citation.get("sources") or []
+                )
+            elif stream_error is None:
+                async with get_db() as db:
+                    await db.execute(
+                        "DELETE FROM messages WHERE id = ? AND role = 'user'",
+                        (user_message_id,),
+                    )
+                    await db.commit()
+        except Exception:
+            logger.exception("cleanup after client disconnect failed")
+        raise
 
     t_stream_end = time.perf_counter()
     # Full server-side attribution for one turn, pairing the in-context

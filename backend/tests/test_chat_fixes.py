@@ -113,9 +113,11 @@ class _FakeStreamLLM:
         self.captured_messages = []
 
     async def chat_complete_stream(
-        self, messages, enable_thinking=None, max_tokens=None
+        self, messages, enable_thinking=None, max_tokens=None,
+        truncation_marker=None,
     ):
         self.captured_messages.append(messages)
+        self.captured_truncation_marker = truncation_marker
         for kind, text in self._deltas:
             yield (kind, text)
 

@@ -327,7 +327,8 @@ def test_stream_low_evidence_frames_in_order_without_llm():
 
 def test_stream_normal_evidence_streams_llm_output():
     class _StreamLLM:
-        async def chat_complete_stream(self, messages, enable_thinking=None, max_tokens=None):
+        async def chat_complete_stream(self, messages, enable_thinking=None,
+                                       max_tokens=None, truncation_marker=None):
             yield ("content", "正常回答")
 
     llm_spy = mock.AsyncMock(return_value=_StreamLLM())
