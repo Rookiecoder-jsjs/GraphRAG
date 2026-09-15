@@ -38,6 +38,21 @@ async def _ensure_document_status_columns(db) -> None:
         )
 
 
+async def _ensure_content_hash_column(db) -> None:
+    """Idempotently add the ``content_hash`` column to documents.
+
+    Content deduplication (upload/URL/text) compares sha256(markdown) across
+    rows; databases created before the dedupe feature lack the column and get
+    it via guarded ALTER, matching the pattern used for ``documents.status``.
+    Existing rows stay NULL (unknown hash → never a duplicate match).
+    """
+    async with db.execute("PRAGMA table_info(documents)") as cursor:
+        existing = {row[1] for row in await cursor.fetchall()}
+
+    if "content_hash" not in existing:
+        await db.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT")
+
+
 async def _ensure_progress_payload_column(db) -> None:
     """Idempotently add the ``payload_json`` column to progress_history.
 
@@ -143,6 +158,8 @@ async def init_db():
         """)
         # Migrate databases created before the state machine existed.
         await _ensure_document_status_columns(db)
+        # Content-dedup hash column (upload/URL/text repeat ingestion).
+        await _ensure_content_hash_column(db)
 
         # Create chunks table for tracking
         await db.execute("""

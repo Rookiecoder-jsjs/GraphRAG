@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status,
 from app.config import get_settings
 from app.database import get_db
 from app.api.auth import get_current_user
+from app.auth.rate_limit import enforce_rate_limit, upload_limiter
+from app.services.dedupe import content_hash, find_duplicate_document
 from app.models.document import DocumentResponse, TagCreate
 from app.utils.md_parser import convert_document_to_markdown, clean_markdown, extract_title_from_markdown
 from app.services.chunker import chunk_markdown
@@ -141,6 +143,11 @@ async def upload_document(
     settings = get_settings()
     user_id = current_user["id"]
 
+    # Throttle the billable pipeline (embedding + LLM extraction). This was
+    # the last unthrottled endpoint while URL/text ingests had 10/min — a
+    # scripted loop could burn provider quota without limit.
+    enforce_rate_limit(upload_limiter, f"upload:{user_id}")
+
     # Multipart bodies without a filename (Content-Disposition with no
     # filename=) can't be classified or stored — reject early with a 400
     # rather than a 500 from Path(None).
@@ -225,6 +232,21 @@ async def upload_document(
     # Extract title
     title = extracted_title or extract_title_from_markdown(markdown_content) or file.filename
 
+    # Content-level dedup: same markdown re-uploaded by the same user (any
+    # source — upload/URL/text) collides on the sha256 and is rejected
+    # before it re-burns the billable pipeline or pollutes the graph.
+    markdown_hash = content_hash(markdown_content)
+    existing = await find_duplicate_document(user_id, markdown_hash)
+    if existing:
+        os.remove(file_path)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Duplicate content — 已存在相同内容的文档：{existing['title']} "
+                f"(id: {existing['id']})"
+            ),
+        )
+
     # Save to database. The document starts in 'pending'; the background
     # pipeline advances it through the state machine (services/doc_status.py)
     # as each durable checkpoint completes.
@@ -232,10 +254,10 @@ async def upload_document(
         try:
             await db.execute(
                 """INSERT INTO documents
-                   (id, user_id, title, file_path, original_filename, file_type, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (id, user_id, title, file_path, original_filename, file_type, status, content_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (doc_id, user_id, title, file_path, file.filename, file_ext[1:],
-                 DocStatus.PENDING.value)
+                 DocStatus.PENDING.value, markdown_hash)
             )
             await db.commit()
         except Exception as e:
@@ -564,7 +586,11 @@ async def _run_ingest_pipeline(doc_id: str, user_id: int, markdown: str, title: 
         # resurrects as a fresh node on the next document that mentions it.
         # Runs AFTER canonicalize (which owns within-document case folding;
         # aliases own the cross-document mapping).
-        alias_map = load_user_alias_map(user_id)
+        # load_user_alias_map is async — omitting the await passed a coroutine
+        # (always truthy) into apply_aliases_to_extraction, which then failed
+        # with "argument of type 'coroutine' is not iterable" and failed the
+        # whole document at the alias-rewrite stage.
+        alias_map = await load_user_alias_map(user_id)
         if alias_map:
             extraction_result = apply_aliases_to_extraction(extraction_result, alias_map)
 

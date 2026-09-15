@@ -35,6 +35,7 @@ from app.auth.rate_limit import SlidingWindowLimiter, enforce_rate_limit
 from app.config import get_settings
 from app.database import get_db
 from app.models.document import DocumentResponse
+from app.services.dedupe import content_hash, find_duplicate_document
 from app.services.doc_status import DocStatus
 from app.services.url_fetcher import (
     UrlFetchFailed,
@@ -184,14 +185,28 @@ async def ingest_url(
             detail="Could not extract readable content from the URL",
         )
 
+    # Same content arriving via upload/another URL/text collides on the
+    # markdown sha256 — reject before re-burning the billable pipeline.
+    markdown_hash = content_hash(markdown_content)
+    existing = await find_duplicate_document(user_id, markdown_hash)
+    if existing:
+        _remove_quietly(file_path)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Duplicate content — 已存在相同内容的文档：{existing['title']} "
+                f"(id: {existing['id']})"
+            ),
+        )
+
     async with get_db() as db:
         try:
             await db.execute(
                 """INSERT INTO documents
-                   (id, user_id, title, file_path, original_filename, file_type, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (id, user_id, title, file_path, original_filename, file_type, status, content_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (doc_id, user_id, title, file_path, original_filename, file_type,
-                 DocStatus.PENDING.value),
+                 DocStatus.PENDING.value, markdown_hash),
             )
             await db.commit()
         except Exception as e:
@@ -260,14 +275,28 @@ async def ingest_text(
         f.write(markdown_content)
     original_filename = f"{title}.md"
 
+    # Same dedup gate as upload / ingest-url: identical pasted text (or text
+    # that converts to the same markdown as an existing doc) is rejected.
+    markdown_hash = content_hash(markdown_content)
+    existing = await find_duplicate_document(user_id, markdown_hash)
+    if existing:
+        _remove_quietly(file_path)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Duplicate content — 已存在相同内容的文档：{existing['title']} "
+                f"(id: {existing['id']})"
+            ),
+        )
+
     async with get_db() as db:
         try:
             await db.execute(
                 """INSERT INTO documents
-                   (id, user_id, title, file_path, original_filename, file_type, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (id, user_id, title, file_path, original_filename, file_type, status, content_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (doc_id, user_id, title, file_path, original_filename, "md",
-                 DocStatus.PENDING.value),
+                 DocStatus.PENDING.value, markdown_hash),
             )
             await db.commit()
         except Exception as e:
