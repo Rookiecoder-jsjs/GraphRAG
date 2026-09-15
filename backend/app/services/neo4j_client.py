@@ -208,11 +208,17 @@ class Neo4jClient:
         Order matters: MENTIONS edges first, then RELATES_TO edges, then
         the entity itself. Returns the number of entity nodes deleted
         (0 if the entity didn't exist; 1 on success).
+
+        Runs in ONE write transaction (session.execute_write): the three
+        statements were previously separate auto-commit sessions, so a
+        mid-way failure left a half-detached entity with no re-entrant
+        recovery. execute_write also retries transient failures (e.g.
+        lock conflicts) for us.
         """
-        async with self.session() as session:
+        async def _work(tx):
             # 1. MENTIONS: chunk -> entity. The chunk still exists; we just
             #    stop the chunk "mentioning" this entity.
-            await session.run(
+            await tx.run(
                 """
                 MATCH (:Chunk)-[r:MENTIONS]->(e:Entity {name: $name, user_id: $user_id})
                 DELETE r
@@ -221,7 +227,7 @@ class Neo4jClient:
             )
             # 2. RELATES_TO: any edge touching this entity, both directions.
             #    We detach by deleting the edges, not the other endpoint.
-            await session.run(
+            await tx.run(
                 """
                 MATCH (e:Entity {name: $name, user_id: $user_id})-[r:RELATES_TO]-(:Entity)
                 DELETE r
@@ -229,7 +235,7 @@ class Neo4jClient:
                 name=name, user_id=user_id,
             )
             # 3. Finally the entity itself.
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (e:Entity {name: $name, user_id: $user_id})
                 WITH e, count(e) AS c
@@ -239,7 +245,10 @@ class Neo4jClient:
                 name=name, user_id=user_id,
             )
             record = await result.single()
-        return int(record["deleted"]) if record else 0
+            return int(record["deleted"]) if record else 0
+
+        async with self.session() as session:
+            return await session.execute_write(_work)
 
     async def merge_entities(
         self,
@@ -265,10 +274,11 @@ class Neo4jClient:
         if source_name == target_name:
             raise ValueError("source and target must be different entities")
 
-        async with self.session() as session:
+        async def _work(tx):
             # Verify both exist (and belong to this user) before doing
-            # anything destructive.
-            result = await session.run(
+            # anything destructive. A LookupError here aborts the whole
+            # transaction — nothing is half-merged.
+            result = await tx.run(
                 """
                 MATCH (e:Entity {user_id: $user_id})
                 WHERE e.name IN [$source, $target]
@@ -288,7 +298,7 @@ class Neo4jClient:
             #    MENTIONS edge already exists, so for a chunk that mentions
             #    source but never target, `tgt` is null and `MERGE ... ->(tgt)`
             #    would raise "Cannot merge relationship using null node".
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (c:Chunk)-[r:MENTIONS]->(src:Entity {name: $source, user_id: $user_id})
                 OPTIONAL MATCH (c)-[existing:MENTIONS]->(tgt:Entity {name: $target, user_id: $user_id})
@@ -316,7 +326,7 @@ class Neo4jClient:
             #    DELETE: reading a relationship's properties after deleting
             #    it in the same transaction raises "Relationship ... has
             #    been deleted in this transaction".
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (src:Entity {name: $source, user_id: $user_id})-[r:RELATES_TO]->(other:Entity {user_id: $user_id})
                 WHERE other.name <> $target
@@ -338,7 +348,7 @@ class Neo4jClient:
             # 3. Incoming RELATES_TO: (other)-[r]->(source) becomes
             #    (other)-[new]->(target) with same relation_type + props.
             #    Same tgt-binding + properties-before-DELETE rules as step 2.
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (other:Entity {user_id: $user_id})-[r:RELATES_TO]->(src:Entity {name: $source, user_id: $user_id})
                 WHERE other.name <> $target
@@ -365,7 +375,7 @@ class Neo4jClient:
             #    relationships". After steps 1-3 everything worth keeping
             #    is already re-pointed, so the leftovers here are exactly
             #    those dead edges.
-            result = await session.run(
+            result = await tx.run(
                 """
                 MATCH (e:Entity {name: $source, user_id: $user_id})
                 WITH e, count(e) AS c
@@ -377,14 +387,17 @@ class Neo4jClient:
             record = await result.single()
             nodes_deleted = int(record["deleted"]) if record else 0
 
-        return {
-            "merged_from": source_name,
-            "merged_into": target_name,
-            "mentions_rewritten": mentions_rewritten,
-            "outgoing_relations_rewritten": outgoing_rewritten,
-            "incoming_relations_rewritten": incoming_rewritten,
-            "source_deleted": nodes_deleted,
-        }
+            return {
+                "merged_from": source_name,
+                "merged_into": target_name,
+                "mentions_rewritten": mentions_rewritten,
+                "outgoing_relations_rewritten": outgoing_rewritten,
+                "incoming_relations_rewritten": incoming_rewritten,
+                "source_deleted": nodes_deleted,
+            }
+
+        async with self.session() as session:
+            return await session.execute_write(_work)
 
     async def create_entities_batch(self, entities: List[Dict[str, Any]], user_id: int) -> int:
         """Bulk upsert entities using UNWIND. Returns the number of rows processed.

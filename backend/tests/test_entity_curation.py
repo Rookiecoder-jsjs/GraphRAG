@@ -52,7 +52,7 @@ def check(name: str, cond: bool, detail: str = ""):
     suffix = f" — {detail}" if detail and not cond else ""
     print(f"  [{status}] {name}{suffix}")
     if not cond:
-        _failures.append(name)
+        raise AssertionError(name + suffix)
 
 
 # =========================================================================
@@ -114,9 +114,23 @@ class _FakeSession:
             return _FakeAsyncIter(payload)
         return _FakeResult(payload)
 
+    async def execute_write(self, work):
+        """AsyncSession.execute_write stand-in (a tx is just an object
+        with run() for the Cypher assertions).
+
+        Mirrors the real async driver: execute_write lives on the SESSION,
+        not the driver — AsyncBoltDriver has no driver-level execute_write.
+        """
+        return await work(self)
+
 
 class _FakeDriver:
-    """Driver whose session() returns the same fake instance every call."""
+    """Driver whose session() returns the same fake instance every call.
+
+    Deliberately has NO execute_write: the real AsyncBoltDriver doesn't
+    either. If production code regresses to `driver.execute_write()`, this
+    raises AttributeError just like the live driver.
+    """
 
     def __init__(self, session):
         self._session = session
