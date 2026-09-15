@@ -44,7 +44,7 @@ def check(name: str, cond: bool, detail: str = ""):
     suffix = f" — {detail}" if detail and not cond else ""
     print(f"  [{status}] {name}{suffix}")
     if not cond:
-        _failures.append(name)
+        raise AssertionError(name + suffix)
 
 
 # =========================================================================
@@ -211,7 +211,8 @@ def test_endpoint_returns_one_point_per_doc():
 
     with _mock.patch.object(docs_mod, "get_db", lambda: db_ctx), \
          _mock.patch.object(docs_mod, "_embed_chunks_for_centroid",
-                            _fake_embed_with_identity):
+                            _fake_embed_with_identity), \
+         _mock.patch.object(docs_mod, "_get_cluster_cache", return_value=None):
         app.dependency_overrides[auth_mod.get_current_user] = lambda: {"id": 1}
         try:
             from fastapi.testclient import TestClient
@@ -256,7 +257,8 @@ def test_endpoint_returns_empty_for_no_docs():
 
     db_ctx = _make_db_ctx([[]])
 
-    with _mock.patch.object(docs_mod, "get_db", lambda: db_ctx):
+    with _mock.patch.object(docs_mod, "get_db", lambda: db_ctx), \
+         _mock.patch.object(docs_mod, "_get_cluster_cache", return_value=None):
         app.dependency_overrides[auth_mod.get_current_user] = lambda: {"id": 1}
         try:
             from fastapi.testclient import TestClient
@@ -289,7 +291,8 @@ def test_endpoint_returns_empty_for_one_doc():
 
     with _mock.patch.object(docs_mod, "get_db", lambda: db_ctx), \
          _mock.patch.object(docs_mod, "_embed_chunks_for_centroid",
-                            _fake_embed_with_identity):
+                            _fake_embed_with_identity), \
+         _mock.patch.object(docs_mod, "_get_cluster_cache", return_value=None):
         app.dependency_overrides[auth_mod.get_current_user] = lambda: {"id": 1}
         try:
             from fastapi.testclient import TestClient

@@ -41,7 +41,7 @@ def check(name: str, cond: bool, detail: str = ""):
     status = PASS if cond else FAIL
     print(f"  [{status}] {name}" + (f" — {detail}" if detail and not cond else ""))
     if not cond:
-        _failures.append(name)
+        raise AssertionError(name + (f" — {detail}" if detail else ""))
 
 
 # ---------- format sniffing ---------------------------------------------------

@@ -41,7 +41,7 @@ def check(name: str, cond: bool, detail: str = ""):
     suffix = f" — {detail}" if detail and not cond else ""
     print(f"  [{status}] {name}{suffix}")
     if not cond:
-        _failures.append(name)
+        raise AssertionError(name + suffix)
 
 
 # =========================================================================
