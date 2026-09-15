@@ -17,4 +17,5 @@ TEMPLATE_NAMES = (
     "judge",
     "insufficient_evidence",
     "community_summary",
+    "entity_extraction",
 )
