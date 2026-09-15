@@ -19,6 +19,7 @@ Pipeline (see plans/retrieval-architecture-refactor.md):
 Result is cached by (user, query+history, top_k, graph) for a TTL.
 """
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -56,10 +57,13 @@ _PART_SUFFIX_RE = re.compile(r",\[Part \d+\]$")
 class _RetrievalCache:
     """In-memory TTL + LRU cache for retrieval results.
 
-    Keyed by (user_id, hash(raw_query + history), top_k, use_graph_rag) so
-    the same question in a different conversation context (-> different
-    conversational rewrite) is a distinct entry. Bounded to avoid unbounded
-    growth on a long-running server.
+    Keyed by (user_id, hash(raw_query + history), top_k, use_graph_rag,
+    filter_key, behavior_fingerprint) so the same question in a different
+    conversation context (-> different conversational rewrite) is a distinct
+    entry, AND a config change that alters retrieval behavior (fusion weights,
+    recall depth, variant count, model) does not serve stale results for the
+    rest of the TTL. Bounded to avoid unbounded growth on a long-running
+    server.
     """
 
     def __init__(self, max_entries: int = 256):
@@ -75,7 +79,11 @@ class _RetrievalCache:
             self._store.pop(key, None)
             return None
         self._store.move_to_end(key)
-        return val
+        # Deep-copy on the way out: the caller mutates the result (e.g. the
+        # expansion step setdefaults chunk_id). Returning the shared object
+        # by reference would leak one caller's mutations into every later
+        # cache hit.
+        return copy.deepcopy(val)
 
     def set(self, key: Tuple, val: Dict[str, Any]) -> None:
         self._store[key] = (time.time(), val)
@@ -94,6 +102,25 @@ class _RetrievalCache:
         """
         for key in [k for k in self._store if k[0] == user_id]:
             self._store.pop(key, None)
+
+
+def _behavior_fingerprint(settings) -> str:
+    """sha1 over every config knob that changes WHAT retrieval returns.
+
+    Rides in the cache key so an ops-side tweak (fusion weight, recall
+    depth, variant count, model swap, graph mode) takes effect immediately
+    instead of after the TTL.
+    """
+    behavior = "|".join([
+        str(settings.GRAPH_RRF_WEIGHT),
+        str(settings.COMMUNITY_RRF_WEIGHT),
+        str(settings.RERANK_RECALL_K),
+        str(settings.MULTI_QUERY_NUM_VARIANTS),
+        settings.EMBEDDING_MODEL,
+        settings.RERANK_MODEL,
+        settings.GRAPH_RAG_MODE,
+    ])
+    return hashlib.sha1(behavior.encode("utf-8")).hexdigest()
 
 
 _cache = _RetrievalCache()
@@ -262,6 +289,7 @@ async def retrieve(
         top_k,
         use_graph_rag,
         filter_key,
+        _behavior_fingerprint(settings),
     )
     cached = None if debug else _cache.get(cache_key, settings.RETRIEVAL_CACHE_TTL)
     if cached is not None:

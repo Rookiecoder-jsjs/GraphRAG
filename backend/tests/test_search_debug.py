@@ -283,7 +283,10 @@ def test_debug_bypasses_cache_read(monkeypatch):
         return {"chunks": [{"chunk_id": "fresh"}], "entities": [], "relations": []}
 
     monkeypatch.setattr(r, "_retrieve_uncached", fake_uncached)
-    key = (1, hashlib.sha1(b"q|").hexdigest(), 5, False, None)
+    key = (
+        1, hashlib.sha1(b"q|").hexdigest(), 5, False, None,
+        r._behavior_fingerprint(get_settings()),
+    )
     r._cache.set(key, {"chunks": ["cached"], "entities": [], "relations": []})
 
     res = asyncio.run(r.retrieve("q", 1, top_k=5, debug=True))

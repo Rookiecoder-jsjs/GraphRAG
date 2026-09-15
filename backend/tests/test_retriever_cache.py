@@ -75,8 +75,10 @@ class TestRetrieveWrapperSplit:
                       document_ids=None) -> tuple:
         # Mirror retrieve()'s key derivation: sha1("query|history") with no
         # history, use_graph_rag forced True unless GRAPH_RAG_MODE=off (the
-        # default "auto" mode resolves to True), and the FEAT-026 5th
-        # element — None when unfiltered, else sha1 of the sorted id set.
+        # default "auto" mode resolves to True), the FEAT-026 5th element —
+        # None when unfiltered, else sha1 of the sorted id set — and the
+        # 6th element from the production behavior fingerprint (single
+        # source of truth: retriever._behavior_fingerprint).
         digest = hashlib.sha1(f"{query}|".encode()).hexdigest()
         from app.config import get_settings
         graph = get_settings().GRAPH_RAG_MODE.lower() != "off"
@@ -86,7 +88,11 @@ class TestRetrieveWrapperSplit:
             filt = hashlib.sha1(
                 ",".join(sorted(set(document_ids))).encode("utf-8")
             ).hexdigest()
-        return (user_id, digest, top_k, graph, filt)
+        import app.services.retriever as retriever
+        return (
+            user_id, digest, top_k, graph, filt,
+            retriever._behavior_fingerprint(get_settings()),
+        )
 
     def test_hit_never_reaches_uncached(self, monkeypatch):
         retriever._cache.set(self._expected_key(1, "q", 5), {"chunks": ["hit"]})
