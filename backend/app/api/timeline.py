@@ -227,12 +227,14 @@ async def get_timeline(current_user: dict = Depends(get_current_user)):
         # is kept but the single OLDEST DATED entity is swapped in — a ghost
         # (first_seen=None, sorts last) must never be the anchor.
         if len(items) > _MAX_TIMELINE_ITEMS:
-            head = items[:_MAX_TIMELINE_ITEMS - 1]
+            head = items[:_MAX_TIMELINE_ITEMS]
             anchor = next(
                 (x for x in reversed(items) if x.first_seen is not None), None
             )
             if anchor is not None and not any(x is anchor for x in head):
-                head[-1] = anchor
+                # The oldest DATED entity fell outside the head cut — swap it
+                # in as the span anchor (a ghost must never anchor the range).
+                head = head[:-1] + [anchor]
             items = head
         response.entity_timeline = items
 
