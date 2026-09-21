@@ -117,7 +117,8 @@ const handleSubmit = async () => {
   justify-content: center;
   position: relative;
   overflow: hidden;
-  background: var(--bg-base);
+  /* 瑞士网格层透出：背景由 body 绘制（80px 制图网格） */
+  background: transparent;
 }
 
 .login-container {
@@ -133,7 +134,8 @@ const handleSubmit = async () => {
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  /* 瑞士平面卡：细线定形，不用投影 */
+  box-shadow: none;
 }
 
 .login-header { text-align: center; margin-bottom: 2rem; }

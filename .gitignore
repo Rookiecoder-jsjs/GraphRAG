@@ -60,3 +60,6 @@ codex
 
 # MCP project config carries a plaintext KG_MCP_TOKEN (local scope only)
 .mcp.json
+
+# 设计稿探索产物（skill: design-exploration，默认不入库）
+design-proposals/
