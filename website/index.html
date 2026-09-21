@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS — 知识图谱智能问答平台</title>
+<meta name="description" content="NEXUS 是一个开源的知识图谱智能问答平台：文档入库即完成实体抽取与关系构建，提问时向量与图谱两路并联召回，生成带引用的回答。">
+<style>
+  /* ======================================================================
+     NEXUS 官网 · 瑞士极简网格风
+     与 frontend/src/styles/variables.css 同一 token 体系：
+     白底黑字 · 单一国际蓝 · 80px 制图网格 · 细线分隔 · 2px 圆角 · still 动效
+     ====================================================================== */
+  :root {
+    --bg:        #ffffff;
+    --surface:   #ffffff;
+    --ink:       #0a0a0a;
+    --ink-70:    #595959;
+    --ink-45:    #8f8f8f;
+    --blue:      #0038ff;
+    --blue-dark: #002bc4;
+    --blue-wash: rgba(0, 56, 255, 0.07);
+    --hair:      rgba(10, 10, 10, 0.14);
+    --rule:      #0a0a0a;
+    --grid-line: rgba(10, 10, 10, 0.045);
+    --sans: ui-sans-serif, -apple-system, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", "Menlo", "Consolas", monospace;
+    --r: 2px;
+  }
+  [data-theme="dark"] {
+    --bg:        #0a0a0a;
+    --surface:   #111111;
+    --ink:       #f2f2f0;
+    --ink-70:    #a3a3a3;
+    --ink-45:    #6b6b6b;
+    --blue:      #5c7cff;
+    --blue-dark: #8ea3ff;
+    --blue-wash: rgba(92, 124, 255, 0.14);
+    --hair:      rgba(255, 255, 255, 0.16);
+    --rule:      #f2f2f0;
+    --grid-line: rgba(255, 255, 255, 0.045);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--sans);
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 80px 80px;
+    background-attachment: fixed;
+    color: var(--ink);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+  ::selection { background: var(--blue); color: #fff; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  .frame { max-width: 1200px; margin: 0 auto; padding: 0 40px; position: relative; }
+  section { scroll-margin-top: 96px; }
+
+  /* ---------- 顶栏 ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    background: var(--bg);
+    border-bottom: 2px solid var(--rule);
+    transition: background-color 0.2s ease;
+  }
+  .topbar-in {
+    display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+    padding: 20px 0;
+  }
+  .brand { display: flex; align-items: baseline; gap: 12px; text-decoration: none; }
+  .brand-name { font-size: 21px; font-weight: 900; letter-spacing: 0.04em; }
+  .brand-sub { font-size: 12px; color: var(--ink-45); letter-spacing: 0.3em; }
+  nav.nav { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 26px; font-size: 14px; font-weight: 600; }
+  nav.nav a { text-decoration: none; padding: 4px 0; }
+  nav.nav a:hover { color: var(--blue); }
+  .top-actions { display: flex; align-items: center; gap: 14px; }
+  .theme-btn {
+    border: 1px solid var(--hair); border-radius: var(--r); background: transparent; cursor: pointer;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--ink-70);
+    padding: 7px 12px;
+  }
+  .theme-btn:hover { border-color: var(--rule); color: var(--ink); }
+
+  .btn {
+    display: inline-block; text-decoration: none; cursor: pointer;
+    font-family: var(--sans); font-size: 14px; font-weight: 800; letter-spacing: 0.12em;
+    padding: 13px 30px; border-radius: var(--r); border: 2px solid var(--rule);
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+  .btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .btn-primary:hover { background: var(--blue-dark); border-color: var(--blue-dark); }
+  .btn-ghost { background: transparent; color: var(--ink); }
+  .btn-ghost:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* ---------- Hero ---------- */
+  .hero { text-align: center; padding: 116px 0 84px; }
+  .kicker { font-family: var(--mono); font-size: 13px; letter-spacing: 0.34em; color: var(--blue); font-weight: 500; }
+  h1 {
+    margin: 30px auto 0; max-width: 940px;
+    font-size: clamp(46px, 7.2vw, 86px);
+    font-weight: 900; line-height: 1.12; letter-spacing: -0.015em;
+  }
+  h1 .blue { color: var(--blue); }
+  .hero .lead { margin: 32px auto 0; max-width: 640px; font-size: 17px; color: var(--ink-70); }
+  .hero .lead b { color: var(--ink); }
+  .hero-cta { margin-top: 44px; display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; }
+  .hero-note { margin-top: 26px; font-family: var(--mono); font-size: 11px; color: var(--ink-45); letter-spacing: 0.16em; }
+
+  /* ---------- 数据带 ---------- */
+  .stats {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 2px solid var(--rule); border-bottom: 1px solid var(--rule);
+  }
+  .stat { padding: 38px 32px; }
+  .stat + .stat { border-left: 1px solid var(--rule); }
+  .stat .idx { font-family: var(--mono); font-size: 11px; color: var(--ink-45); letter-spacing: 0.2em; }
+  .stat .num { margin-top: 10px; font-size: 46px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .stat .cap { margin-top: 10px; font-size: 13px; color: var(--ink-70); letter-spacing: 0.14em; }
+  .stats-note { padding: 12px 2px 0; font-family: var(--mono); font-size: 10.5px; color: var(--ink-45); letter-spacing: 0.1em; text-align: right; }
+  .band { margin-bottom: 100px; }
+
+  /* ---------- 区头 ---------- */
+  .sec-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    padding-bottom: 18px; border-bottom: 2px solid var(--rule);
+  }
+  .sec-head h2 { font-size: 24px; font-weight: 900; letter-spacing: 0.02em; }
+  .sec-head h2 sup { font-family: var(--mono); font-size: 11px; color: var(--blue); margin-left: 10px; letter-spacing: 0.14em; }
+  .sec-head .meta { font-family: var(--mono); font-size: 11px; color: var(--ink-45); letter-spacing: 0.12em; }
+
+  /* ---------- 演示：图谱 + 对话 ---------- */
+  .graph-wrap { padding: 40px 0 36px; border-bottom: 1px solid var(--rule); }
+  .graph-svg { width: 100%; height: auto; display: block; }
+  .g-edge { stroke: var(--rule); stroke-width: 1.1; }
+  .g-edge.hot { stroke: var(--blue); stroke-width: 2; }
+  .g-node { fill: var(--surface); stroke: var(--rule); stroke-width: 1.6; }
+  .g-node.focal { fill: var(--blue); stroke: var(--blue); }
+  .g-label { font-size: 13px; font-weight: 700; fill: var(--ink); }
+  .g-label.focal { fill: var(--blue); }
+  .g-idx { font-family: var(--mono); font-size: 9.5px; fill: var(--ink-45); letter-spacing: 0.1em; }
+
+  .chat-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--rule); }
+  .chat-cell { padding: 38px 0 42px; }
+  .chat-cell + .chat-cell { border-left: 1px solid var(--rule); padding-left: 44px; }
+  .q-text { font-size: 19px; font-weight: 900; line-height: 1.5; }
+  .a-text { margin-top: 16px; font-size: 14.5px; color: var(--ink-70); }
+  .a-text b { color: var(--ink); }
+  .a-text sup { color: var(--blue); font-family: var(--mono); font-size: 10px; }
+  .refs { margin-top: 20px; }
+  .ref { display: flex; gap: 14px; font-size: 13px; color: var(--ink-70); padding: 11px 0; border-top: 1px solid var(--grid-line); }
+  .ref i { font-style: normal; font-family: var(--mono); font-size: 10.5px; color: var(--blue); }
+  .kg-path { margin-top: 22px; font-family: var(--mono); font-size: 11px; color: var(--ink-45); letter-spacing: 0.04em; }
+  .kg-path .arrow { color: var(--blue); margin: 0 6px; }
+
+  /* ---------- 摄入流水线（单行 mono 带） ---------- */
+  .flow-strip {
+    margin: 88px 0 100px; border: 1px solid var(--rule); border-radius: var(--r);
+    padding: 22px 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 0;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; color: var(--ink);
+    background: var(--surface);
+  }
+  .flow-strip .tag { color: var(--blue); font-weight: 700; margin-right: 18px; letter-spacing: 0.14em; }
+  .flow-strip .arrow { color: var(--blue); margin: 0 10px; }
+
+  /* ---------- 功能网格 ---------- */
+  .features {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border-left: 1px solid var(--hair); border-top: 1px solid var(--hair);
+    margin-bottom: 100px;
+  }
+  .f-cell { padding: 30px 30px 32px; border-right: 1px solid var(--hair); border-bottom: 1px solid var(--hair); }
+  .f-idx { font-family: var(--mono); font-size: 11px; color: var(--blue); letter-spacing: 0.18em; }
+  .f-title { margin-top: 12px; font-size: 18px; font-weight: 900; letter-spacing: 0.01em; }
+  .f-desc { margin-top: 8px; font-size: 13.5px; color: var(--ink-70); }
+
+  /* ---------- 检索管线 ---------- */
+  .pipe-grid { display: grid; grid-template-columns: 5fr 7fr; gap: 56px; padding: 44px 0 88px; }
+  .pipe-left { align-self: start; position: sticky; top: 110px; }
+  .pipe-left h3 { font-size: 21px; font-weight: 900; line-height: 1.5; }
+  .pipe-left p { margin-top: 14px; font-size: 14px; color: var(--ink-70); }
+  .pipe-left p b { color: var(--ink); }
+  .pipe-left .pipe-foot { margin-top: 22px; font-family: var(--mono); font-size: 11px; color: var(--ink-45); letter-spacing: 0.08em; line-height: 2; }
+  .step { display: flex; gap: 22px; padding: 20px 2px; border-top: 1px solid var(--hair); }
+  .step:last-child { border-bottom: 1px solid var(--hair); }
+  .step-idx { font-family: var(--mono); font-size: 12px; color: var(--blue); width: 40px; flex-shrink: 0; padding-top: 3px; letter-spacing: 0.08em; }
+  .step-main { flex: 1; min-width: 0; }
+  .step-title { font-size: 15.5px; font-weight: 800; }
+  .step-desc { margin-top: 4px; font-size: 13px; color: var(--ink-70); }
+
+  /* ---------- 技术栈表 ---------- */
+  .stack { margin-bottom: 100px; }
+  .stack-row { display: grid; grid-template-columns: 220px 1fr; border-top: 1px solid var(--hair); }
+  .stack-row:last-child { border-bottom: 1px solid var(--hair); }
+  .stack-k { padding: 15px 2px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-45); letter-spacing: 0.16em; }
+  .stack-v { padding: 15px 2px; font-size: 14px; font-weight: 600; }
+  .stack-v i { font-style: normal; font-family: var(--mono); font-size: 12px; color: var(--ink-70); font-weight: 400; }
+
+  /* ---------- 快速开始 ---------- */
+  .quick { margin-bottom: 100px; }
+  .quick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding-top: 36px; }
+  .q-step { border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface); padding: 26px 26px 24px; }
+  .q-idx { font-family: var(--mono); font-size: 11px; color: var(--blue); letter-spacing: 0.18em; }
+  .q-title { margin-top: 10px; font-size: 16.5px; font-weight: 900; }
+  .q-desc { margin-top: 6px; font-size: 13px; color: var(--ink-70); }
+  pre {
+    margin-top: 16px; border: 1px solid var(--hair); border-radius: var(--r);
+    background: var(--bg); padding: 14px 16px; overflow-x: auto;
+    font-family: var(--mono); font-size: 12px; line-height: 1.9; color: var(--ink);
+  }
+  pre .c { color: var(--ink-45); }
+  pre .b { color: var(--blue); font-weight: 700; }
+
+  /* ---------- 页脚 ---------- */
+  footer { border-top: 2px solid var(--rule); padding: 30px 0 46px; }
+  .foot-in { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--ink-45); letter-spacing: 0.1em; }
+  .foot-in b { color: var(--ink); font-weight: 700; }
+
+  /* ---------- 响应式 ---------- */
+  @media (max-width: 900px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stat:nth-child(3) { border-left: 0; }
+    .stat:nth-child(-n+2) { border-top: 0; }
+    .stat:nth-child(n+3) { border-top: 1px solid var(--rule); }
+    .chat-grid { grid-template-columns: 1fr; }
+    .chat-cell + .chat-cell { border-left: 0; border-top: 1px solid var(--rule); padding-left: 0; }
+    .features { grid-template-columns: 1fr; border-right: 1px solid var(--hair); }
+    .f-cell { border-right: 0; }
+    .pipe-grid { grid-template-columns: 1fr; gap: 32px; }
+    .pipe-left { position: static; }
+    .quick-grid { grid-template-columns: 1fr; }
+    .stack-row { grid-template-columns: 140px 1fr; }
+  }
+  @media (max-width: 620px) {
+    .frame { padding: 0 20px; }
+    .hero { padding: 72px 0 56px; }
+    .stat { padding: 24px 18px; }
+    .topbar-in { padding: 16px 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="frame topbar-in">
+      <a class="brand" href="#top" aria-label="NEXUS 首页">
+        <span class="brand-name">NEXUS</span>
+        <span class="brand-sub">智能知识库</span>
+      </a>
+      <nav class="nav" aria-label="页面导航">
+        <a href="#features">功能</a>
+        <a href="#pipeline">检索管线</a>
+        <a href="#stack">技术栈</a>
+        <a href="#quickstart">快速开始</a>
+      </nav>
+      <div class="top-actions">
+        <button type="button" class="theme-btn" id="theme-toggle" aria-label="切换亮暗主题">◐ 主题</button>
+        <a class="btn btn-primary" href="#quickstart" style="padding:9px 20px;font-size:13px;">开始使用</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="frame" id="top">
+
+    <!-- Hero -->
+    <section class="hero">
+      <p class="kicker">NEXUS — KNOWLEDGE GRAPH RAG</p>
+      <h1>知识图谱<br><span class="blue">智能问答</span>平台</h1>
+      <p class="lead">文档入库即完成<b>实体抽取与关系构建</b>；提问时向量与图谱<b>两路并联召回</b>，重排截断后生成带引用的回答。</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="#quickstart">快速开始 ↓</a>
+        <a class="btn btn-ghost" href="#pipeline">了解检索管线 →</a>
+      </div>
+      <p class="hero-note">VUE 3 + FASTAPI + NEO4J + CHROMADB · MIT LICENSE · 自托管</p>
+    </section>
+
+    <!-- 数据带（仓库实测口径） -->
+    <section class="band" aria-label="平台能力指标">
+      <div class="stats">
+        <div class="stat"><div class="idx">A/01</div><div class="num">4</div><div class="cap">文档格式 PDF / DOCX / TXT / MD</div></div>
+        <div class="stat"><div class="idx">A/02</div><div class="num">9</div><div class="cap">检索管线阶段</div></div>
+        <div class="stat"><div class="idx">A/03</div><div class="num">4</div><div class="cap">MCP 只读工具</div></div>
+        <div class="stat"><div class="idx">A/04</div><div class="num">271</div><div class="cap">自动化测试用例</div></div>
+      </div>
+      <p class="stats-note">* 指标取自仓库实测（CI 与 README），非运营数据</p>
+    </section>
+
+    <!-- 演示：图谱 + 对话 -->
+    <section aria-label="产品演示">
+      <div class="sec-head">
+        <h2>图谱视图<sup>FIG.01</sup></h2>
+        <span class="meta">D3 FORCE LAYOUT · 节点可拖拽 / 编辑 / 合并</span>
+      </div>
+      <div class="graph-wrap">
+        <svg class="graph-svg" viewBox="0 0 920 320" role="img" aria-label="知识图谱示意：以知识图谱为中心的实体关系网络">
+          <line class="g-edge" x1="460" y1="160" x2="240" y2="70"/>
+          <line class="g-edge" x1="460" y1="160" x2="215" y2="238"/>
+          <line class="g-edge hot" x1="460" y1="160" x2="680" y2="72"/>
+          <line class="g-edge" x1="460" y1="160" x2="700" y2="244"/>
+          <line class="g-edge" x1="240" y1="70" x2="215" y2="238"/>
+          <line class="g-edge" x1="680" y1="72" x2="700" y2="244"/>
+          <line class="g-edge" x1="240" y1="70" x2="90"  y2="160"/>
+          <line class="g-edge" x1="700" y1="244" x2="845" y2="130"/>
+          <circle class="g-node" cx="90"  cy="160" r="9"/>
+          <circle class="g-node" cx="845" cy="130" r="9"/>
+          <circle class="g-node" cx="240" cy="70"  r="16"/>
+          <circle class="g-node" cx="215" cy="238" r="14"/>
+          <circle class="g-node focal" cx="460" cy="160" r="26"/>
+          <circle class="g-node" cx="680" cy="72"  r="15"/>
+          <circle class="g-node" cx="700" cy="244" r="14"/>
+          <text class="g-idx" x="240" y="42" text-anchor="middle">N-01</text>
+          <text class="g-label" x="240" y="96" text-anchor="middle">实体抽取</text>
+          <text class="g-idx" x="215" y="272" text-anchor="middle">N-02</text>
+          <text class="g-label" x="215" y="212" text-anchor="middle">关系构建</text>
+          <text class="g-idx" x="680" y="44" text-anchor="middle">N-03</text>
+          <text class="g-label" x="680" y="98" text-anchor="middle">向量召回</text>
+          <text class="g-idx" x="700" y="278" text-anchor="middle">N-04</text>
+          <text class="g-label" x="700" y="218" text-anchor="middle">来源引用</text>
+          <text class="g-idx" x="90" y="136" text-anchor="middle">N-05</text>
+          <text class="g-label" x="90" y="188" text-anchor="middle">文档</text>
+          <text class="g-idx" x="845" y="106" text-anchor="middle">N-06</text>
+          <text class="g-label" x="845" y="158" text-anchor="middle">问答</text>
+          <text class="g-label focal" x="460" y="216" text-anchor="middle">知识图谱</text>
+        </svg>
+      </div>
+
+      <div class="chat-grid">
+        <div class="chat-cell">
+          <p class="q-text">图谱检索和向量检索，各自解决什么问题？</p>
+          <p class="kg-path">混合召回<span class="arrow">→</span>图谱扩展<span class="arrow">→</span>重排截断<span class="arrow">→</span>生成引用</p>
+        </div>
+        <div class="chat-cell">
+          <p class="a-text">向量检索负责<b>语义相近</b>的段落召回，图谱检索负责<b>多跳关系</b>的精确联想；两路结果经 RRF 融合与重排后注入提示词，回答自动附上出处<sup>[1]</sup><sup>[2]</sup>。</p>
+          <div class="refs">
+            <div class="ref"><i>[1]</i>《检索架构综述》§3.2 · 分块 88-92</div>
+            <div class="ref"><i>[2]</i>《图谱构建实践》§1.4 · 分块 41-47</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 摄入流水线 -->
+    <div class="flow-strip" role="img" aria-label="文档摄入流水线：上传、格式转换、层级切块、向量化、双库写入、SSE 进度">
+      <span class="tag">INGEST</span>
+      <span>PDF / DOCX / TXT / MD</span><span class="arrow">→</span>
+      <span>markitdown 转 MD</span><span class="arrow">→</span>
+      <span>层级切块</span><span class="arrow">→</span>
+      <span>Qwen3 Embedding</span><span class="arrow">→</span>
+      <span>ChromaDB + Neo4j</span><span class="arrow">→</span>
+      <span>SSE 进度推送</span>
+    </div>
+
+    <!-- 功能 -->
+    <section id="features" aria-label="核心功能">
+      <div class="sec-head">
+        <h2>核心功能<sup>SEC.01</sup></h2>
+        <span class="meta">10 FEATURES · 页面与 API 均已落地</span>
+      </div>
+      <div class="features">
+        <div class="f-cell">
+          <div class="f-idx">F/01</div>
+          <h3 class="f-title">文档知识库</h3>
+          <p class="f-desc">上传 PDF / Word / TXT / MD，自动转 Markdown 并按标题层级切块，切块带前后邻居与父文档指针。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/02</div>
+          <h3 class="f-title">混合检索</h3>
+          <p class="f-desc">多查询变体 + 向量召回 + BM25 关键词 + 图谱通道，RRF 融合后经 Qwen3-Reranker 精排，父文档扩展再重排。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/03</div>
+          <h3 class="f-title">知识图谱可视化</h3>
+          <p class="f-desc">d3 力导向图谱，支持节点拖拽、实体编辑、合并与删除；实体按类型着色，可按名称模糊检索。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/04</div>
+          <h3 class="f-title">RAG 对话</h3>
+          <p class="f-desc">流式输出、深度思考（推理过程独立帧展示）、意图路由（闲聊/拒答绕过检索）、对比模式、引用溯源。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/05</div>
+          <h3 class="f-title">仪表盘与时间线</h3>
+          <p class="f-desc">文档 / 实体 / 标签统计、月度增长曲线、近期活动流、实体首现时间线与动画回放。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/06</div>
+          <h3 class="f-title">文档聚类地图</h3>
+          <p class="f-desc">2D PCA 投影呈现全部文档的语义分布，相近主题自然聚簇，用于发现知识盲区。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/07</div>
+          <h3 class="f-title">MCP Server</h3>
+          <p class="f-desc">标准 MCP (stdio) 暴露四个只读工具，Claude Code / Claude Desktop / codex 零前端投入直接查询知识库。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/08</div>
+          <h3 class="f-title">RAG 测评框架</h3>
+          <p class="f-desc">检索指标（Hit@K / MRR / nDCG）+ LLM-as-judge 生成指标，13 个 gold 用例作为提示词改动的回归门禁。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/09</div>
+          <h3 class="f-title">用户隔离</h3>
+          <p class="f-desc">JWT 账号认证 + bcrypt 哈希；Neo4j / ChromaDB / BM25 全部按 user_id 过滤，删除操作强制带隔离条件。</p>
+        </div>
+        <div class="f-cell">
+          <div class="f-idx">F/10</div>
+          <h3 class="f-title">工程健壮性</h3>
+          <p class="f-desc">请求级 X-Request-ID 追踪、API 限流、上下文注入预算熔断、检索缓存自愈、启动对账、全量备份脚本。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 检索管线 -->
+    <section id="pipeline" aria-label="检索管线">
+      <div class="sec-head">
+        <h2>检索管线<sup>SEC.02</sup></h2>
+        <span class="meta">RETRIEVE() · 9 STAGES · TTL+LRU CACHED</span>
+      </div>
+      <div class="pipe-grid">
+        <div class="pipe-left">
+          <h3>一次提问，<br>经过九个阶段。</h3>
+          <p>查询先做<b>意图分类</b>：闲聊与拒答直接短路，事实类问题才进入检索管线。九个阶段全部有界——每一路召回有候选上限，注入提示词前有<b>token 预算熔断</b>，超限按块裁剪，不炸窗口。</p>
+          <div class="pipe-foot">
+            services/retriever.py<br>
+            GRAPH_RRF_WEIGHT 可配 · 多查询变体 ×3
+          </div>
+        </div>
+        <div>
+          <div class="step">
+            <span class="step-idx">P/01</span>
+            <div class="step-main"><div class="step-title">意图路由</div><p class="step-desc">LLM 判定 fact_retrieval / chitchat / should_reject，分类失败自动回退 RAG。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/02</span>
+            <div class="step-main"><div class="step-title">查询改写 + 多查询变体</div><p class="step-desc">会话改写消除指代，并行生成查询变体扩大召回覆盖面。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/03</span>
+            <div class="step-main"><div class="step-title">向量 + BM25 双路召回</div><p class="step-desc">逐查询并行执行，Embedding 逐文本缓存，BM25 索引启动预热。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/04</span>
+            <div class="step-main"><div class="step-title">图谱通道</div><p class="step-desc">实体邻域展开作为独立召回列表，权重可配（auto / on / off）。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/05</span>
+            <div class="step-main"><div class="step-title">RRF 融合</div><p class="step-desc">多列表倒数排名融合，图谱通道权重独立可调。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/06</span>
+            <div class="step-main"><div class="step-title">Qwen3-Reranker 精排</div><p class="step-desc">融合候选重排序，截断保留头部 seed chunks。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/07</span>
+            <div class="step-main"><div class="step-title">父文档扩展</div><p class="step-desc">补充前后邻居 chunk 与同节兄弟块，恢复被切块打断的上下文。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/08</span>
+            <div class="step-main"><div class="step-title">扩展集再重排</div><p class="step-desc">扩展内容按相关性归位排序，邻居块不被驱逐。</p></div>
+          </div>
+          <div class="step">
+            <span class="step-idx">P/09</span>
+            <div class="step-main"><div class="step-title">上下文预算熔断</div><p class="step-desc">&lt;context&gt; 区硬 token 上限，超限按块裁剪后注入 LLM，流式返回带引用的回答。</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 技术栈 -->
+    <section id="stack" class="stack" aria-label="技术栈">
+      <div class="sec-head">
+        <h2>技术栈<sup>SEC.03</sup></h2>
+        <span class="meta">SELF-HOSTED · DOCKER COMPOSE</span>
+      </div>
+      <div class="stack-row"><div class="stack-k">前端</div><div class="stack-v">Vue 3.5 · Vite 7 · Pinia · d3.js <i>— 双主题设计令牌</i></div></div>
+      <div class="stack-row"><div class="stack-k">后端 API</div><div class="stack-v">FastAPI · Python 3.11 · uvicorn <i>— SSE 流式 + JWT 鉴权</i></div></div>
+      <div class="stack-row"><div class="stack-k">图数据库</div><div class="stack-v">Neo4j 5.14 <i>— APOC 插件 · UNWIND 批量写入</i></div></div>
+      <div class="stack-row"><div class="stack-k">向量数据库</div><div class="stack-v">ChromaDB 0.4.18 <i>— cosine 相似度 · 1024 维</i></div></div>
+      <div class="stack-row"><div class="stack-k">用户数据</div><div class="stack-v">SQLite + SQLAlchemy 2.0 <i>— 单文件 · 增量迁移</i></div></div>
+      <div class="stack-row"><div class="stack-k">嵌入模型</div><div class="stack-v">Qwen3-Embedding-8B <i>— 硅基流动 API · 逐文本缓存</i></div></div>
+      <div class="stack-row"><div class="stack-k">重排序</div><div class="stack-v">Qwen3-Reranker-8B <i>— 硅基流动 API</i></div></div>
+      <div class="stack-row"><div class="stack-k">生成模型</div><div class="stack-v">Kimi k2 · 百炼 qwen · Qwen3-8B <i>— 多供应商可切换</i></div></div>
+      <div class="stack-row"><div class="stack-k">认证与安全</div><div class="stack-v">JWT + bcrypt <i>— 占位符拒绝启动 · CORS 白名单 · 限流</i></div></div>
+    </section>
+
+    <!-- 快速开始 -->
+    <section id="quickstart" class="quick" aria-label="快速开始">
+      <div class="sec-head">
+        <h2>快速开始<sup>SEC.04</sup></h2>
+        <span class="meta">3 STEPS · PYTHON 3.11+ / NODE 18+ / DOCKER</span>
+      </div>
+      <div class="quick-grid">
+        <div class="q-step">
+          <div class="q-idx">S/01</div>
+          <h3 class="q-title">启动基础设施</h3>
+          <p class="q-desc">Docker Compose 拉起 Neo4j 与 ChromaDB。</p>
+          <pre><span class="c"># Neo4j :7687 · Chroma :8000</span>
+<span class="b">docker-compose</span> up -d</pre>
+        </div>
+        <div class="q-step">
+          <div class="q-idx">S/02</div>
+          <h3 class="q-title">配置环境变量</h3>
+          <p class="q-desc">从模板复制，填入 API Key 与 JWT 密钥。</p>
+          <pre><span class="b">cp</span> .env.example .env
+<span class="c"># 必填：Embedding/Rerank/LLM Key</span>
+<span class="c"># JWT_SECRET 用 secrets 生成</span></pre>
+        </div>
+        <div class="q-step">
+          <div class="q-idx">S/03</div>
+          <h3 class="q-title">安装并启动</h3>
+          <p class="q-desc">后端 8001，前端 5173，一键脚本可用。</p>
+          <pre><span class="b">pip</span> install -r requirements.txt
+<span class="b">npm</span> run dev   <span class="c"># 前后端同起</span></pre>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 页脚 -->
+  <footer>
+    <div class="frame foot-in">
+      <span><b>NEXUS</b> · 知识图谱智能问答平台</span>
+      <span>MIT LICENSE · VUE 3 + FASTAPI + NEO4J + CHROMADB</span>
+    </div>
+  </footer>
+
+  <script>
+    // 主题切换：与前端 useTheme 同约定（localStorage key 'theme'，首次跟随系统偏好）
+    (function () {
+      var root = document.documentElement;
+      var btn = document.getElementById('theme-toggle');
+      var stored = null;
+      try { stored = localStorage.getItem('theme'); } catch (e) { /* 隐私模式忽略 */ }
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = stored === 'dark' || stored === 'light' ? stored : (prefersDark ? 'dark' : 'light');
+      apply(theme);
+      btn.addEventListener('click', function () {
+        theme = (theme === 'dark') ? 'light' : 'dark';
+        try { localStorage.setItem('theme', theme); } catch (e) { /* 忽略 */ }
+        apply(theme);
+      });
+      function apply(t) {
+        if (t === 'dark') { root.setAttribute('data-theme', 'dark'); }
+        else { root.removeAttribute('data-theme'); }
+      }
+    })();
+  </script>
+</body>
+</html>
