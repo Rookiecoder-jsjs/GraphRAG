@@ -194,7 +194,8 @@ const handleSearch = async () => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-secondary);
+  /* 瑞士网格层透出 */
+  background-color: transparent;
 }
 
 .page-header {

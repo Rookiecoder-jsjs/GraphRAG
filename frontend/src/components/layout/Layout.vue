@@ -28,7 +28,8 @@ const sidebar = useSidebar()
   width: 100vw;
   position: relative;
   overflow: hidden;
-  background: var(--bg-base);
+  /* 瑞士网格层透出：背景由 body 绘制（80px 制图网格） */
+  background: transparent;
 }
 
 .main-content {

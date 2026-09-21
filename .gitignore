@@ -65,3 +65,6 @@ codex
 
 # E2E smoke temp artifacts (screenshots / ad-hoc verify scripts)
 e2e-tmp/
+
+# 设计稿探索产物（skill: design-exploration，默认不入库）
+design-proposals/

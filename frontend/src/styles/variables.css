@@ -1,54 +1,68 @@
 /* ========================================================================
-   NEXUS 设计令牌 · 专业数据密集风 · 亮暗双主题
-   Data-Dense Dashboard · Flat surfaces · Light & Dark
+   NEXUS 设计令牌 · 瑞士极简网格风 · 亮暗双主题
+   Swiss International Style · Single blue accent · Hairline structure
+   ------------------------------------------------------------------
+   落地说明（design-proposals 第 3 轮方案一，seed 97390140）：
+   · 单一强调色：国际蓝 #0038ff（暗主题按对比度提亮为同族蓝）
+   · 结构靠细线（hairline）与 2px 近直角，不靠投影
+   · 网格线由 body 背景层绘制，容器保持透明即可透出
+   · 系统字体栈，移除 Google Fonts 网络依赖
    ======================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Exo:wght@300;400;500;600;700&family=Roboto+Mono:wght@400;500;600&display=swap');
-
-/* ---------- 亮主题（默认） ---------- */
+/* ---------- 亮主题（默认）· 白底黑字国际蓝 ---------- */
 :root,
 [data-theme='light'] {
-  /* 背景层级：flat 平面，无玻璃 */
-  --bg-base:        #f8fafc;   /* slate-50 page 底 */
+  /* 背景层级：白纸 + 浅灰功能面 */
+  --bg-base:        #ffffff;   /* page 底（网格线画在其上） */
   --bg-primary:     #ffffff;   /* 卡片表面 */
-  --bg-secondary:   #f1f5f9;   /* 次级表面 / 页头 */
-  --bg-tertiary:    #e2e8f0;   /* hover 叠层 / 输入底 */
+  --bg-secondary:   #f6f6f4;   /* 次级表面 / 页头 */
+  --bg-tertiary:    #ececea;   /* hover 叠层 / 输入底 */
   --bg-elevated:    #ffffff;   /* 浮层（下拉/菜单） */
 
+  /* 兼容别名：--surface 系列（远端历史组件引用，缺失曾致背景透明） */
+  --surface:      var(--bg-secondary);   /* 表单卡片表面 */
+  --surface-2:    var(--bg-tertiary);    /* 输入底 / hover 叠层 */
+  --bg:           var(--bg-primary);     /* 内容面（远端 5 文件引用，远端主题亦未定义） */
+
   /* 文字 */
-  --text-primary:   #1e293b;   /* slate-800 */
-  --text-secondary: #475569;   /* slate-600 */
-  --text-tertiary:  #94a3b8;   /* slate-400 */
+  --text-primary:   #0a0a0a;
+  --text-secondary: #595959;
+  --text-tertiary:  #8f8f8f;
 
-  /* 边框 */
-  --border:        #e2e8f0;   /* slate-200 */
-  --border-light:  #f1f5f9;   /* slate-100 */
-  --border-strong: #cbd5e1;   /* slate-300 */
+  /* 边框：hairline 承担结构 */
+  --border:        rgba(10, 10, 10, 0.14);
+  --border-light:  rgba(10, 10, 10, 0.07);
+  --border-strong: rgba(10, 10, 10, 0.40);
+  --border-ink:    #0a0a0a;   /* 强结构线（区头 2px 粗规） */
 
-  /* 主强调：专业蓝 */
-  --primary:        #2563eb;   /* blue-600 */
-  --primary-dark:   #1d4ed8;   /* blue-700 */
-  --primary-light:  rgba(37, 99, 235, 0.08);
+  /* 背景网格线（body 绘制用） */
+  --grid-line:     rgba(10, 10, 10, 0.045);
+
+  /* 主强调：国际蓝（唯一强调色） */
+  --primary:        #0038ff;
+  --primary-dark:   #002bc4;
+  --primary-light:  rgba(0, 56, 255, 0.07);
   --primary-fg:     #ffffff;
 
-  /* 次强调：CTA 橙（用于上传/导入等动作） */
-  --accent:         #f97316;   /* orange-500 */
-  --accent-dark:    #ea580c;   /* orange-600 */
-  --accent-light:   rgba(249, 115, 22, 0.10);
+  /* 次强调：并入主强调（瑞士单色纪律） */
+  --accent:         #0038ff;
+  --accent-dark:    #002bc4;
+  --accent-light:   rgba(0, 56, 255, 0.07);
 
-  /* 状态 */
+  /* 状态（功能性语义色，保留） */
   --success:        #16a34a;
   --success-light:  rgba(22, 163, 74, 0.10);
   --warning:        #d97706;
   --warning-light:  rgba(217, 119, 6, 0.10);
   --error:          #dc2626;
   --error-light:    rgba(220, 38, 38, 0.10);
+  --danger:         var(--error);   /* 兼容别名（远端页面引用） */
 
-  /* 阴影：克制、扁平 */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
-  --shadow:    0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.10);
-  --shadow-lg: 0 12px 32px -8px rgba(15, 23, 42, 0.16);
+  /* 阴影：平面化——结构靠边线不靠投影；仅浮层保留极弱分离 */
+  --shadow-sm:  none;
+  --shadow:    none;
+  --shadow-md: none;
+  --shadow-lg: 0 16px 48px rgba(10, 10, 10, 0.16);
 
   /* 兼容别名：旧 glass 引用 → 平面表面（组件迁移后移除） */
   --glass-bg:        var(--bg-primary);
@@ -59,39 +73,36 @@
   --glass-shadow:    var(--shadow);
   --glass-highlight: none;
 
-  /* 兼容别名：--surface 系列（历史组件引用；曾未定义导致背景透明） */
-  --surface:      var(--bg-secondary);   /* 表单卡片表面 */
-  --surface-2:    var(--bg-tertiary);    /* 输入底 / hover 叠层 */
-
-  /* 背景 blob（兼容旧引用，迁移后移除） */
-  --blob-1: rgba(37, 99, 235, 0.06);
-  --blob-2: rgba(249, 115, 22, 0.05);
-  --blob-3: rgba(22, 163, 74, 0.04);
+  /* 背景 blob（兼容旧引用，已停用） */
+  --blob-1: transparent;
+  --blob-2: transparent;
+  --blob-3: transparent;
 
   /* 遮罩层 */
-  --scrim: rgba(15, 23, 42, 0.50);
+  --scrim: rgba(10, 10, 10, 0.50);
 
-  /* 图表数据调色板（供 JS 图表经 cssVar() 读取） */
-  --chart-1: #2563eb;
-  --chart-2: #f97316;
-  --chart-3: #10b981;
-  --chart-4: #8b5cf6;
-  --chart-5: #06b6d4;
-  --chart-6: #eab308;
+  /* 图表数据调色板：蓝黑灰单族（供 JS 图表经 cssVar() 读取） */
+  --chart-1: #0038ff;
+  --chart-2: #0a0a0a;
+  --chart-3: #7a94ff;
+  --chart-4: #b8c4ff;
+  --chart-5: #595959;
+  --chart-6: #a3a3a3;
 
-  /* 图谱节点配色（保持 --graph-* 名称，d3/utils 继续可用） */
-  --graph-doc:     #2563eb;   /* 蓝 Document */
-  --graph-default: #64748b;   /* 灰 默认 Entity */
-  --graph-person:  #10b981;   /* 绿 人物 */
-  --graph-place:   #f97316;   /* 橙 地点 */
+  /* 图谱节点配色（保持 --graph-* 名称，d3/utils 继续可用）
+     doc/center/related 承担强调语义，其余为中性或类型语义色 */
+  --graph-doc:     #0038ff;   /* 蓝 Document */
+  --graph-default: #8f8f8f;   /* 中性灰 默认 Entity */
+  --graph-person:  #10b981;   /* 绿 人物（类型语义） */
+  --graph-place:   #f97316;   /* 橙 地点（类型语义） */
   --graph-concept: #8b5cf6;   /* 紫 概念（保留兼容） */
   --graph-concept-strong: #8b5cf6;   /* 紫 概念主色 */
-  --graph-other:   #94a3b8;   /* 浅灰 其他 */
-  --graph-chunk:   #e2e8f0;   /* 浅灰白 Chunk */
-  --graph-edge:    rgba(100, 116, 139, 0.35);
-  --graph-center:  #dc2626;   /* 红 中心高亮 */
-  --graph-related: #f97316;   /* 橙 相关高亮 */
-  --graph-grid:    rgba(100, 116, 139, 0.10);
+  --graph-other:   #c4c4c2;   /* 浅灰 其他 */
+  --graph-chunk:   #ececea;   /* 浅灰白 Chunk */
+  --graph-edge:    rgba(10, 10, 10, 0.22);
+  --graph-center:  #dc2626;   /* 红 中心高亮（语义） */
+  --graph-related: #f97316;   /* 橙 相关高亮（语义） */
+  --graph-grid:    rgba(10, 10, 10, 0.05);
   --graph-bg:      var(--bg-base);
 
   /* 焦点环 */
@@ -99,30 +110,37 @@
   --focus-offset: 2px;
 }
 
-/* ---------- 暗主题 ---------- */
+/* ---------- 暗主题 · 墨底白字（同族蓝提亮保对比） ---------- */
 [data-theme='dark'] {
-  --bg-base:        #0b1220;   /* 深蓝黑 page 底 */
-  --bg-primary:     #111a2d;   /* 卡片表面 */
-  --bg-secondary:   #16213a;   /* 次级表面 */
-  --bg-tertiary:    #1e2a44;   /* hover / 输入底 */
-  --bg-elevated:    #1b2740;   /* 浮层 */
+  --bg-base:        #0a0a0a;
+  --bg-primary:     #111111;
+  --bg-secondary:   #171717;
+  --bg-tertiary:    #202020;
+  --bg-elevated:    #141414;
 
-  --text-primary:   #e2e8f0;   /* slate-200 */
-  --text-secondary: #94a3b8;   /* slate-400 */
-  --text-tertiary:  #64748b;   /* slate-500 */
+  --surface:      var(--bg-secondary);
+  --surface-2:    var(--bg-tertiary);
+  --bg:           var(--bg-primary);
 
-  --border:        rgba(148, 163, 184, 0.16);
-  --border-light:  rgba(148, 163, 184, 0.10);
-  --border-strong: rgba(148, 163, 184, 0.28);
+  --text-primary:   #f2f2f0;
+  --text-secondary: #a3a3a3;
+  --text-tertiary:  #6b6b6b;
 
-  --primary:        #3b82f6;   /* blue-500 */
-  --primary-dark:   #60a5fa;   /* blue-400 hover */
-  --primary-light:  rgba(59, 130, 246, 0.14);
+  --border:        rgba(255, 255, 255, 0.16);
+  --border-light:  rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.42);
+  --border-ink:    #f2f2f0;
+
+  --grid-line:     rgba(255, 255, 255, 0.045);
+
+  --primary:        #5c7cff;
+  --primary-dark:   #8ea3ff;
+  --primary-light:  rgba(92, 124, 255, 0.14);
   --primary-fg:     #ffffff;
 
-  --accent:         #fb923c;   /* orange-400 */
-  --accent-dark:    #fdba74;   /* orange-300 */
-  --accent-light:   rgba(251, 146, 60, 0.14);
+  --accent:         #5c7cff;
+  --accent-dark:    #8ea3ff;
+  --accent-light:   rgba(92, 124, 255, 0.14);
 
   --success:        #34d399;
   --success-light:  rgba(52, 211, 153, 0.14);
@@ -130,11 +148,12 @@
   --warning-light:  rgba(251, 191, 36, 0.14);
   --error:          #f87171;
   --error-light:    rgba(248, 113, 113, 0.14);
+  --danger:         var(--error);
 
-  --shadow-sm: 0 1px 2px rgba(2, 6, 23, 0.40);
-  --shadow:    0 1px 3px rgba(2, 6, 23, 0.50), 0 1px 2px rgba(2, 6, 23, 0.30);
-  --shadow-md: 0 4px 12px -2px rgba(2, 6, 23, 0.50);
-  --shadow-lg: 0 12px 32px -8px rgba(2, 6, 23, 0.60);
+  --shadow-sm: none;
+  --shadow:    none;
+  --shadow-md: none;
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.60);
 
   --glass-bg:        var(--bg-primary);
   --glass-bg-strong: var(--bg-primary);
@@ -144,34 +163,31 @@
   --glass-shadow:    var(--shadow);
   --glass-highlight: none;
 
-  --surface:      var(--bg-secondary);
-  --surface-2:    var(--bg-tertiary);
+  --blob-1: transparent;
+  --blob-2: transparent;
+  --blob-3: transparent;
 
-  --blob-1: rgba(59, 130, 246, 0.08);
-  --blob-2: rgba(251, 146, 60, 0.06);
-  --blob-3: rgba(52, 211, 153, 0.05);
+  --scrim: rgba(0, 0, 0, 0.70);
 
-  --scrim: rgba(2, 6, 23, 0.70);
+  --chart-1: #5c7cff;
+  --chart-2: #f2f2f0;
+  --chart-3: #9db1ff;
+  --chart-4: #c9d4ff;
+  --chart-5: #a3a3a3;
+  --chart-6: #6b6b6b;
 
-  --chart-1: #3b82f6;
-  --chart-2: #fb923c;
-  --chart-3: #34d399;
-  --chart-4: #a78bfa;
-  --chart-5: #22d3ee;
-  --chart-6: #facc15;
-
-  --graph-doc:     #3b82f6;
-  --graph-default: #64748b;
+  --graph-doc:     #5c7cff;
+  --graph-default: #6b6b6b;
   --graph-person:  #34d399;
   --graph-place:   #fb923c;
   --graph-concept: #a78bfa;
   --graph-concept-strong: #a78bfa;
-  --graph-other:   #475569;
-  --graph-chunk:   #334155;
-  --graph-edge:    rgba(148, 163, 184, 0.30);
+  --graph-other:   #4a4a48;
+  --graph-chunk:   #202020;
+  --graph-edge:    rgba(255, 255, 255, 0.22);
   --graph-center:  #f87171;
   --graph-related: #fb923c;
-  --graph-grid:    rgba(148, 163, 184, 0.08);
+  --graph-grid:    rgba(255, 255, 255, 0.05);
   --graph-bg:      var(--bg-base);
 
   --focus-ring: 2px solid var(--primary);
@@ -180,23 +196,23 @@
 
 /* ---------- 字体 / 圆角 / 过渡 / 布局 ---------- */
 :root {
-  /* 字体：Exo 数据感标题 + Roboto Mono 数据 */
-  --font-display: 'Exo', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-sans:    'Exo', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono:    'Roboto Mono', 'SF Mono', Consolas, monospace;
+  /* 字体：瑞士单一家族（无衬线黑体）+ 等宽数据字；系统栈，零网络依赖 */
+  --font-display: ui-sans-serif, -apple-system, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans:    ui-sans-serif, -apple-system, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono:    'SFMono-Regular', 'Cascadia Code', 'Roboto Mono', 'Menlo', 'Consolas', monospace;
 
-  /* 圆角：数据密集偏小 */
-  --radius-sm:  6px;
-  --radius:     8px;
-  --radius-md:  8px;   /* 兼容别名：历史引用 --radius-md（= --radius） */
-  --radius-lg:  10px;
-  --radius-xl:  14px;
-  --radius-2xl: 20px;
+  /* 圆角：瑞士近直角 */
+  --radius-sm:  2px;
+  --radius:     2px;
+  --radius-md:  var(--radius);   /* 兼容别名：远端历史引用（= --radius） */
+  --radius-lg:  2px;
+  --radius-xl:  4px;
+  --radius-2xl: 6px;
 
-  /* 过渡 */
-  --transition-fast: 120ms ease;
-  --transition:      160ms ease;
-  --transition-slow: 240ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* 过渡：still 原则，仅保留功能性反馈 */
+  --transition-fast: 100ms ease;
+  --transition:      140ms ease;
+  --transition-slow: 200ms ease;
 
   /* 布局 */
   --sidebar-width: 264px;
@@ -243,9 +259,15 @@ body {
 body {
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text-primary);
   background-color: var(--bg-base);
+  /* 瑞士网格层：80mm 制图网格，随主题换线色 */
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: background-color var(--transition), color var(--transition);
@@ -257,35 +279,49 @@ body {
 }
 
 /* ========================================================================
-   Typography — display 用 Exo
+   Typography — 瑞士重黑无衬线，紧字距大标题
    ======================================================================== */
 
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-display);
-  font-weight: 600;
-  line-height: 1.25;
+  font-weight: 700;
+  line-height: 1.2;
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
-h1 { font-size: 1.75rem; font-weight: 700; }
-h2 { font-size: 1.375rem; font-weight: 600; }
-h3 { font-size: 1.125rem;  font-weight: 600; }
-h4 { font-size: 1rem; font-weight: 600; }
-h5 { font-size: 0.875rem; font-weight: 600; }
+h1 { font-size: 1.9rem;   font-weight: 900; letter-spacing: -0.015em; }
+h2 { font-size: 1.4rem;   font-weight: 800; letter-spacing: -0.01em; }
+h3 { font-size: 1.125rem; font-weight: 700; }
+h4 { font-size: 1rem;     font-weight: 700; }
+h5 { font-size: 0.875rem; font-weight: 700; }
 h6 {
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 0.6875rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   color: var(--text-tertiary);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
 }
 
 /* 等宽元素 */
 code,
 .mono {
   font-family: var(--font-mono);
+}
+
+/* ========================================================================
+   Structure — 强弱规则线（附加结构层，供区头/分隔使用）
+   ======================================================================== */
+
+.rule-strong {
+  border: 0;
+  border-top: 2px solid var(--border-ink);
+}
+
+.hairline {
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 
 /* ========================================================================
@@ -308,7 +344,7 @@ code,
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 4px;
+  border-radius: 0;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 
@@ -359,7 +395,7 @@ a:hover { color: var(--primary-dark); }
 .font-mono       { font-family: var(--font-mono); }
 
 /* ========================================================================
-   Surface Utilities — 平面卡片（旧 glass 别名，行为一致）
+   Surface Utilities — 细线平面卡（旧 glass 别名，行为一致）
    ======================================================================== */
 
 .glass,
@@ -369,7 +405,7 @@ a:hover { color: var(--primary-dark); }
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
   transition:
     border-color var(--transition),
     box-shadow var(--transition);
@@ -378,11 +414,11 @@ a:hover { color: var(--primary-dark); }
 .glass-card:hover,
 .paper-card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 /* ========================================================================
-   Animations — fade / slide / spin / page 过渡
+   Animations — fade / slide / spin / page 过渡（仅功能性反馈）
    ======================================================================== */
 
 @keyframes fadeIn {
@@ -419,11 +455,11 @@ a:hover { color: var(--primary-dark); }
 /* 列表 stagger */
 .stagger-item {
   opacity: 0;
-  animation: slideUp 320ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
-  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+  animation: slideUp 280ms ease forwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 24ms);
 }
 
-.animate-fade-in { animation: fadeIn 0.3s ease-out; }
+.animate-fade-in { animation: fadeIn 0.25s ease-out; }
 .animate-spin    { animation: spin 1s linear infinite; }
 
 /* 无障碍 */
@@ -447,7 +483,7 @@ a:hover { color: var(--primary-dark); }
 }
 
 /* ========================================================================
-   Editorial Primitives — 学术排版原语（保留供 EntityDetail / DocumentDetail）
+   Editorial Primitives — 学术排版原语（供 EntityDetail / DocumentDetail）
    kicker / pull-quote / figure-caption / byline
    ======================================================================== */
 
@@ -462,20 +498,21 @@ a:hover { color: var(--primary-dark); }
   font-size: 0.6875rem;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   color: var(--text-tertiary);
   margin-bottom: 0.5rem;
 }
-.kicker.tone-accent  { color: var(--accent-dark); }
+.kicker.tone-accent  { color: var(--primary); }
 .kicker.tone-primary { color: var(--primary); }
 
 .pull-quote {
   font-family: var(--font-display);
-  font-style: italic;
+  font-style: normal;
   font-size: 1.125rem;
   line-height: 1.55;
+  font-weight: 700;
   color: var(--text-primary);
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--primary);
   padding: 0.25rem 0 0.25rem 1rem;
   margin: 1rem 0;
 }
@@ -499,7 +536,7 @@ a:hover { color: var(--primary-dark); }
   gap: 0.5rem;
   font-family: var(--font-display);
   font-size: 0.875rem;
-  font-style: italic;
+  font-style: normal;
   color: var(--text-secondary);
   margin-top: 0.5rem;
   padding-top: 0.5rem;
@@ -534,8 +571,8 @@ a:hover { color: var(--primary-dark); }
 .byline a { color: inherit; }
 .byline a:hover { color: var(--primary); }
 
-/* 文字选择 */
+/* 文字选择：国际蓝反白 */
 ::selection {
-  background: var(--primary-light);
-  color: var(--text-primary);
+  background: var(--primary);
+  color: var(--primary-fg);
 }
