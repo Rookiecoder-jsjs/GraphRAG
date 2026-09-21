@@ -174,7 +174,8 @@ const formatTime = (ts) => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-secondary);
+  /* 瑞士网格层透出：背景由 body 绘制（80px 制图网格） */
+  background-color: transparent;
 }
 .global-content {
   flex: 1;

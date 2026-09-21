@@ -184,7 +184,8 @@ const typeLabel = (t) => TYPE_LABELS[t] || t || '未知'
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-secondary);
+  /* 瑞士网格层透出：背景由 body 绘制（80px 制图网格） */
+  background-color: transparent;
 }
 .dup-content {
   flex: 1;
